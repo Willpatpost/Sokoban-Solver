@@ -12,8 +12,13 @@ The rules:
 Key:
 
 O = walls/obstacles
+
 R = robot/user
+
 S = generic storage (filled by any X)
+
 X = generic box (goes to any S storage)
+
 {a, b, ..., z} = storage for their corresponding uppercase boxes
+
 {A, B, ..., Z} = boxes for their corresponding lowercase storages.
