@@ -53,9 +53,3 @@
     "O B X X X X A O",
     "O Sc       dS O",
     "OOOOOOOOOOOOOOO"
-
-
-
-    OOOOO
-      X
-    OOOOO
