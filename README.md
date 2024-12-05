@@ -1,24 +1,39 @@
-Solves advanced sokoban puzzles created in txt files using BFS, DFS, Greedy, and A* searches.
+# Sokomind
 
-The rules:
+## Table of Contents
+- [Overview](#overview)
+- [Features](#features)
+- [Requirements](#requirements)
 
-1. One box can be moved at a time.
-2. Boxes can only be pushed by a robot. Boxes cannot be pulled.
-3. Neither the robot nor the box can pass through obstacles, walls, or other boxes.
-4. A robot cannot push more than one box.
-5. The boxes marked in upper cases must be put in the storage with the corresponding lower cases.
-6. The goal is achieved when all boxes are in their storage spots.
+## Overview
 
-Key:
+This project implements a solver capable of solving Sokomind puzzles using a variety of search algorithms, including Depth-First Search (DFS), Breadth-First Search (BFS), Greedy Best-First Search, and A* Search. The solver is designed to handle both generic and dedicated boxes, detect deadlocks, and optimize the path to the goal state using advanced heuristics.
 
-O = walls/obstacles
+## Features
 
-R = robot/user
+- **Multiple Search Algorithms**: Supports DFS, BFS, Greedy Best-First Search, and A* Search to solve puzzles.
+- **Customizable Heuristics**: Utilizes the Hungarian algorithm for optimal box-goal matching, enhancing heuristic accuracy over basic Manhattan distance.
+- **Custom Puzzle Input**: Allows users to input their own puzzles via text files.
+- **Colored Visualization**: Enhances puzzle readability with colored representations of robots, boxes, walls, and storages using the `colorama` library.
+- **Detailed Logging**: Offers selectable logging levels (`DEBUG`, `INFO`, `ERROR`) to monitor the solver's execution and facilitate debugging.
+- **Solution Export**: Enables exporting the solution path to a file for future reference.
+- **Performance Optimizations**: Implements efficient state representation, caching mechanisms, and optimized heuristic calculations to speed up the solving process.
+- **Comprehensive Error Handling**: Provides clear error messages and validates puzzle configurations before attempting to solve them.
+- **Modular Code Structure**: Organized into distinct functions for better readability and maintainability.
 
-S = generic storage (filled by any X)
+## Requirements
 
-X = generic box (goes to any S storage)
+- **Python 3.6 or higher**
 
-{a, b, ..., z} = storage for their corresponding uppercase boxes
+### Python Libraries
 
-{A, B, ..., Z} = boxes for their corresponding lowercase storages.
+- [heapdict](https://pypi.org/project/heapdict/) (`heapdict`)
+- [scipy](https://www.scipy.org/) (`scipy`)
+- [colorama](https://pypi.org/project/colorama/) (`colorama`)
+
+### Installation of Python Libraries
+
+You can install the required Python libraries using `pip`:
+
+```bash
+pip install heapdict scipy colorama
