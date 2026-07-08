@@ -1,39 +1,66 @@
 # Sokomind
 
-## Table of Contents
-- [Overview](#overview)
-- [Features](#features)
-- [Requirements](#requirements)
+A dependency-free Python solver for a Sokoban variant with generic and
+dedicated boxes. It provides A*, greedy best-first, breadth-first, and
+depth-first search.
 
-## Overview
+## Puzzle format
 
-This project implements a solver capable of solving Sokomind puzzles using a variety of search algorithms, including Depth-First Search (DFS), Breadth-First Search (BFS), Greedy Best-First Search, and A* Search. The solver is designed to handle both generic and dedicated boxes, detect deadlocks, and optimize the path to the goal state using advanced heuristics.
+- `O`: wall
+- `R`: robot (exactly one)
+- `X` / `S`: generic box / generic goal
+- `A`–`Z` / `a`–`z`: dedicated box / corresponding goal
+- space: floor
 
-## Features
+Each box type must have exactly as many matching goals as boxes. Short rows are
+padded with walls, so malformed/ragged maps cannot create invisible floor.
 
-- **Multiple Search Algorithms**: Supports DFS, BFS, Greedy Best-First Search, and A* Search to solve puzzles.
-- **Customizable Heuristics**: Utilizes the Hungarian algorithm for optimal box-goal matching, enhancing heuristic accuracy over basic Manhattan distance.
-- **Custom Puzzle Input**: Allows users to input their own puzzles via text files.
-- **Colored Visualization**: Enhances puzzle readability with colored representations of robots, boxes, walls, and storages using the `colorama` library.
-- **Detailed Logging**: Offers selectable logging levels (`DEBUG`, `INFO`, `ERROR`) to monitor the solver's execution and facilitate debugging.
-- **Solution Export**: Enables exporting the solution path to a file for future reference.
-- **Performance Optimizations**: Implements efficient state representation, caching mechanisms, and optimized heuristic calculations to speed up the solving process.
-- **Comprehensive Error Handling**: Provides clear error messages and validates puzzle configurations before attempting to solve them.
-- **Modular Code Structure**: Organized into distinct functions for better readability and maintainability.
+## Usage
 
-## Requirements
+Python 3.10 or newer is required. No third-party packages are needed.
 
-- **Python 3.6 or higher**
+```powershell
+python Searches/Sokomind.py --puzzle medium --algorithm astar
+python Searches/Sokomind.py --file path/to/puzzle.txt --show-steps
+python Searches/Sokomind.py --help
+```
 
-### Python Libraries
+Use `--output solution.txt` to export moves. The legacy `astar.py`, `bfs.py`,
+`dfs.py`, and `greedy.py` files remain as small compatibility entry points.
 
-- [heapdict](https://pypi.org/project/heapdict/) (`heapdict`)
-- [scipy](https://www.scipy.org/) (`scipy`)
-- [colorama](https://pypi.org/project/colorama/) (`colorama`)
+## Desktop application
 
-### Installation of Python Libraries
+Launch the playable Tkinter application with:
 
-You can install the required Python libraries using `pip`:
+```powershell
+python Searches/gui.py
+```
 
-```bash
-pip install heapdict scipy colorama
+Use the arrow keys or WASD to move. The application includes undo and reset,
+built-in and custom puzzles, animated solver playback, and hints from the
+current position. Solver work runs in a background thread so the window remains
+responsive.
+
+## Web application
+
+The dependency-free browser version lives in `docs/` and is ready for GitHub
+Pages. It includes keyboard play, responsive level cards, undo/reset, hints,
+animated solving, and the level-complete flow.
+
+Enable **GitHub Pages → GitHub Actions** in the repository settings, then push
+to `main`. The included workflow deploys the site automatically. To preview it
+locally:
+
+```powershell
+python -m http.server 8000 --directory docs
+```
+
+## Tests
+
+```powershell
+python -m unittest discover -v
+```
+
+The solver validates input, uses immutable search states, detects all static
+dead squares by reverse box reachability, and uses an admissible minimum
+box-to-goal assignment heuristic for A*.

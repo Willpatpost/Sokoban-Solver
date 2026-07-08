@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#111722">
+  <title>Sokomind</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark">S</span>
+        <div><h1>Sokomind</h1><p>Think ahead. Push with purpose.</p></div>
+      </div>
+      <div class="toolbar">
+        <label>Solver
+          <select id="algorithm">
+            <option value="astar">A*</option>
+            <option value="greedy">Greedy</option>
+            <option value="bfs">BFS</option>
+            <option value="dfs">DFS</option>
+          </select>
+        </label>
+        <button id="solve" class="primary">▶ Solve</button>
+        <button id="hint">✦ Hint</button>
+        <button id="stop">■ Stop</button>
+        <span class="divider"></span>
+        <button id="undo">↶ Undo</button>
+        <button id="reset">↻ Reset</button>
+      </div>
+    </header>
+
+    <main>
+      <aside class="levels-panel">
+        <div class="section-heading"><span>Levels</span><small id="level-count"></small></div>
+        <div id="level-list" class="level-list"></div>
+      </aside>
+
+      <section class="game-panel">
+        <div class="game-heading">
+          <div><span class="eyebrow">Now playing</span><h2 id="level-title"></h2></div>
+          <div class="move-pill"><span>Moves</span><strong id="move-count">0</strong></div>
+        </div>
+        <div id="board-wrap" class="board-wrap">
+          <div id="board" class="board" tabindex="0" aria-label="Sokomind puzzle board"></div>
+        </div>
+        <footer>
+          <p id="status">Use arrow keys or WASD to play.</p>
+          <p class="key-help"><kbd>↑</kbd><kbd>↓</kbd><kbd>←</kbd><kbd>→</kbd> or <kbd>WASD</kbd></p>
+        </footer>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="complete-dialog">
+    <div class="celebration">★</div>
+    <p class="eyebrow">Puzzle complete</p>
+    <h2>Congratulations!</h2>
+    <p>You passed <strong id="complete-level"></strong> in
+      <strong id="complete-moves"></strong> moves.</p>
+    <div class="dialog-actions">
+      <button id="replay">Replay</button>
+      <button id="next-level" class="primary">Next level →</button>
+      <button id="close-dialog">Keep looking</button>
+    </div>
+  </dialog>
+
+  <script src="app.js"></script>
+</body>
+</html>
