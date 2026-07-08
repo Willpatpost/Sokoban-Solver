@@ -4,6 +4,10 @@ const LEVELS = {
   medium: ["OOOOOOO", "Oa   bO", "O AXB O", "O XRX O", "OSCXDSO", "OcS SdO", "OOOOOOO"],
   large: ["OOOOOOOOOO", "OOOOOOOSSO", "OOOOO  abO", "OOOOO XSSO", "OOOOOO  OO",
     "OR     OOO", "OO A X X O", "OO BXO O O", "OO   O   O", "OOOOOOOOOO"],
+  huge: ["OOOOOOOOOOOOOOO", "OaSS   S   SSbO", "OSCS       SDSO", "OX X       X XO",
+    "O             O", "OOOO   X   OOOO", "O      O      O", "O G hOOOOOH g O",
+    "O      O      O", "O             O", "O     X X     O", "OOOOOOOROOOOOOO",
+    "O B X X X X A O", "O Sc       dS O", "OOOOOOOOOOOOOOO"],
 };
 const DIRS = {Up: [-1, 0], Down: [1, 0], Left: [0, -1], Right: [0, 1]};
 const KEYS = {ArrowUp: "Up", ArrowDown: "Down", ArrowLeft: "Left", ArrowRight: "Right",
@@ -12,6 +16,7 @@ const $ = (id) => document.getElementById(id);
 
 let levelKey = "ultra-tiny", state, initialState, history = [], moves = 0;
 let worker = null, animation = [], timer = null, solvedShown = false;
+let startedAt = null, elapsed = 0, clock = null;
 
 function parse(rows) {
   const board = {rows, walls: new Set(), goals: new Map(), floor: new Set()};
@@ -97,18 +102,19 @@ function render() {
 }
 function loadLevel(key) {
   stop(); levelKey = key; state = parse(LEVELS[key]); initialState = cloneState(state);
-  history = []; moves = 0; solvedShown = false;
+  history = []; moves = 0; solvedShown = false; resetTimer();
   setStatus("Use arrow keys or WASD to play."); renderLevels(); render();
 }
 function tryMove(direction, fromSolver = false) {
   const next = moveState(state, direction);
   if (!next) { if (!fromSolver) setStatus(`${direction} is blocked.`); return false; }
+  startTimer();
   history.push(cloneState(state)); state = next; moves++; render();
   if (isGoal(state)) complete(); else if (!fromSolver) setStatus("Playing");
   return true;
 }
 function complete() {
-  stop(false); setStatus(`Solved in ${moves} moves!`);
+  stop(false); freezeTimer(); setStatus(`Solved in ${moves} moves!`);
   if (solvedShown) return; solvedShown = true;
   $("complete-level").textContent = title(levelKey);
   $("complete-moves").textContent = moves;
@@ -122,12 +128,39 @@ function undo() {
 }
 function reset() {
   stop(); state = cloneState(initialState); history = []; moves = 0; solvedShown = false;
+  resetTimer();
   render(); setStatus("Level reset.");
 }
 function stop(message = true) {
   if (worker) worker.terminate(); worker = null;
   animation = []; clearTimeout(timer); timer = null;
   if (message && state) setStatus("Stopped.");
+}
+function formatTime(seconds) {
+  const whole = Math.floor(seconds), minutes = Math.floor(whole / 60);
+  return `${String(minutes).padStart(2, "0")}:${String(whole % 60).padStart(2, "0")}`;
+}
+function startTimer() {
+  if (startedAt !== null) return;
+  startedAt = Date.now() - elapsed * 1000;
+  clock = setInterval(updateTimer, 250); updateTimer();
+}
+function updateTimer() {
+  if (startedAt !== null) elapsed = (Date.now() - startedAt) / 1000;
+  $("timer").textContent = formatTime(elapsed);
+}
+function freezeTimer() {
+  updateTimer(); startedAt = null; clearInterval(clock); clock = null;
+}
+function resetTimer() {
+  startedAt = null; elapsed = 0; clearInterval(clock); clock = null;
+  $("timer").textContent = "00:00";
+}
+function showHome() {
+  stop(false); freezeTimer(); $("home-screen").classList.remove("hidden");
+}
+function hideHome() {
+  $("home-screen").classList.add("hidden"); $("board").focus();
 }
 function serializeState(s) {
   return {rows: s.board.rows, robot: s.robot, boxes: [...s.boxes]};
@@ -158,6 +191,8 @@ function animate() {
 }
 
 $("solve").onclick = () => startSolver("solve");
+$("home-button").onclick = showHome;
+$("start-game").onclick = hideHome;
 $("hint").onclick = () => startSolver("hint");
 $("stop").onclick = () => stop();
 $("undo").onclick = undo; $("reset").onclick = reset;
@@ -168,7 +203,8 @@ $("next-level").onclick = () => {
 };
 $("close-dialog").onclick = () => $("complete-dialog").close();
 document.addEventListener("keydown", (event) => {
-  if ($("complete-dialog").open || event.target.matches("select, button")) return;
+  if (!$("home-screen").classList.contains("hidden") ||
+      $("complete-dialog").open || event.target.matches("select, button")) return;
   const direction = KEYS[event.key];
   if (direction) { event.preventDefault(); stop(false); tryMove(direction); }
   else if (event.key === "Backspace" || event.key.toLowerCase() === "u") undo();

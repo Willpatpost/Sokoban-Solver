@@ -15,6 +15,7 @@
         <div><h1>Sokomind</h1><p>Think ahead. Push with purpose.</p></div>
       </div>
       <div class="toolbar">
+        <button id="home-button">⌂ Home</button>
         <label>Solver
           <select id="algorithm">
             <option value="astar">A*</option>
@@ -41,7 +42,10 @@
       <section class="game-panel">
         <div class="game-heading">
           <div><span class="eyebrow">Now playing</span><h2 id="level-title"></h2></div>
-          <div class="move-pill"><span>Moves</span><strong id="move-count">0</strong></div>
+          <div class="stats">
+            <div class="move-pill"><span>Time</span><strong id="timer">00:00</strong></div>
+            <div class="move-pill"><span>Moves</span><strong id="move-count">0</strong></div>
+          </div>
         </div>
         <div id="board-wrap" class="board-wrap">
           <div id="board" class="board" tabindex="0" aria-label="Sokomind puzzle board"></div>
@@ -53,6 +57,25 @@
       </section>
     </main>
   </div>
+
+  <section id="home-screen" class="home-screen">
+    <div class="home-card">
+      <span class="home-mark">S</span>
+      <p class="eyebrow">Welcome to</p>
+      <h2>Sokomind</h2>
+      <p class="tagline">Think ahead. Push with purpose.</p>
+      <div class="how-to">
+        <h3>How to play</h3>
+        <p>Push every box onto its matching goal. Boxes can be pushed, but never pulled—so plan your route carefully.</p>
+        <div class="rules">
+          <span><b>X</b> Generic box</span><span><b>S</b> Generic goal</span>
+          <span><b>A</b> Lettered box</span><span><b>a</b> Matching goal</span>
+        </div>
+        <p><kbd>↑</kbd><kbd>↓</kbd><kbd>←</kbd><kbd>→</kbd> or <kbd>WASD</kbd> to move · <kbd>U</kbd> undo · <kbd>R</kbd> reset</p>
+      </div>
+      <button id="start-game" class="primary start-button">Play Sokomind →</button>
+    </div>
+  </section>
 
   <dialog id="complete-dialog">
     <div class="celebration">★</div>

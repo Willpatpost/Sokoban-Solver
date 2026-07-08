@@ -5,6 +5,7 @@ from __future__ import annotations
 import queue
 import sys
 import threading
+import time
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
@@ -76,14 +77,19 @@ class SokomindApp(tk.Tk):
         self._level_cards: dict[str, tk.Frame] = {}
         self._completion_window: tk.Toplevel | None = None
         self._completion_shown = False
+        self._timer_started_at: float | None = None
+        self._timer_elapsed = 0.0
+        self._timer_job: str | None = None
 
         self.puzzle_name = tk.StringVar(value="ultra-tiny")
         self.algorithm = tk.StringVar(value="A*")
         self.status = tk.StringVar(value="Ready")
         self.move_text = tk.StringVar(value="Moves: 0")
+        self.timer_text = tk.StringVar(value="Time: 00:00")
 
         self._build_ui()
         self.load_selected_puzzle()
+        self._show_home()
         self.bind_all("<KeyPress>", self._on_key)
         self.protocol("WM_DELETE_WINDOW", self._close)
         self.after(50, self._poll_results)
@@ -104,6 +110,7 @@ class SokomindApp(tk.Tk):
         ttk.Separator(toolbar, orient="vertical").pack(side="left", fill="y", padx=10)
         ttk.Button(toolbar, text="Undo", command=self.undo).pack(side="left", padx=2)
         ttk.Button(toolbar, text="Reset", command=self.reset).pack(side="left", padx=2)
+        ttk.Button(toolbar, text="Home", command=self._show_home).pack(side="left", padx=2)
         ttk.Button(toolbar, text="Open custom…", command=self.open_puzzle).pack(
             side="right", padx=2
         )
@@ -131,6 +138,38 @@ class SokomindApp(tk.Tk):
         ttk.Label(footer, textvariable=self.status).pack(side="left")
         ttk.Label(footer, text="Arrow keys or WASD to play").pack(side="left", padx=24)
         ttk.Label(footer, textvariable=self.move_text).pack(side="right")
+        ttk.Label(footer, textvariable=self.timer_text).pack(side="right", padx=18)
+
+        self.home = tk.Frame(self, background="#111722")
+        hero = tk.Frame(self.home, background="#111722")
+        hero.place(relx=.5, rely=.48, anchor="center")
+        tk.Label(
+            hero, text="S", width=3, background="#397fc3", foreground="white",
+            font=("Segoe UI", 30, "bold"),
+        ).pack(pady=(0, 12))
+        tk.Label(
+            hero, text="Sokomind", background="#111722", foreground="white",
+            font=("Segoe UI", 30, "bold"),
+        ).pack()
+        tk.Label(
+            hero, text="Think ahead. Push with purpose.", background="#111722",
+            foreground="#91a0b3", font=("Segoe UI", 12),
+        ).pack(pady=(3, 22))
+        directions = (
+            "Push every box onto its matching goal.\n\n"
+            "Arrow keys / WASD   Move\n"
+            "Backspace / U       Undo\n"
+            "R                   Reset\n\n"
+            "X boxes belong on S goals. Lettered boxes belong on\n"
+            "the matching lowercase goal. Boxes can be pushed—not pulled."
+        )
+        tk.Label(
+            hero, text=directions, justify="left", background="#1d2633",
+            foreground="#dbe6f2", font=("Segoe UI", 11), padx=24, pady=18,
+        ).pack()
+        ttk.Button(hero, text="Play Sokomind", command=self._hide_home).pack(
+            pady=(22, 0), ipadx=24, ipady=6
+        )
 
     def _add_level_card(self, name: str, puzzle: list[str]) -> None:
         card = tk.Frame(
@@ -191,11 +230,13 @@ class SokomindApp(tk.Tk):
         if record:
             self.history.append(self.state)
         self.state = state
+        self._start_timer()
         self.moves += 1
         self.move_text.set(f"Moves: {self.moves}")
         self.draw()
         if state.is_goal():
             self.stop(keep_status=True)
+            self._freeze_timer()
             self.status.set(f"Solved in {self.moves} moves!")
             if not self._completion_shown:
                 self._completion_shown = True
@@ -234,6 +275,7 @@ class SokomindApp(tk.Tk):
         self.state = state
         self.history.clear()
         self.moves = 0
+        self._reset_timer()
         self._completion_shown = False
         self.move_text.set("Moves: 0")
         self.status.set("Ready — use arrow keys or WASD")
@@ -244,10 +286,47 @@ class SokomindApp(tk.Tk):
         self.state = self.initial_state
         self.history.clear()
         self.moves = 0
+        self._reset_timer()
         self._completion_shown = False
         self.move_text.set("Moves: 0")
         self.status.set("Reset")
         self.draw()
+
+    def _show_home(self) -> None:
+        self.stop(keep_status=True)
+        self._freeze_timer()
+        self.home.place(x=0, y=0, relwidth=1, relheight=1)
+        self.home.lift()
+
+    def _hide_home(self) -> None:
+        self.home.place_forget()
+        self.canvas.focus_set()
+
+    def _start_timer(self) -> None:
+        if self._timer_started_at is None:
+            self._timer_started_at = time.perf_counter() - self._timer_elapsed
+            self._tick_timer()
+
+    def _tick_timer(self) -> None:
+        if self._timer_started_at is None:
+            return
+        self._timer_elapsed = time.perf_counter() - self._timer_started_at
+        minutes, seconds = divmod(int(self._timer_elapsed), 60)
+        self.timer_text.set(f"Time: {minutes:02d}:{seconds:02d}")
+        self._timer_job = self.after(250, self._tick_timer)
+
+    def _freeze_timer(self) -> None:
+        if self._timer_started_at is not None:
+            self._timer_elapsed = time.perf_counter() - self._timer_started_at
+            self._timer_started_at = None
+        if self._timer_job is not None:
+            self.after_cancel(self._timer_job)
+            self._timer_job = None
+
+    def _reset_timer(self) -> None:
+        self._freeze_timer()
+        self._timer_elapsed = 0.0
+        self.timer_text.set("Time: 00:00")
 
     def _show_completion(self) -> None:
         if self._completion_window is not None and self._completion_window.winfo_exists():
@@ -320,6 +399,8 @@ class SokomindApp(tk.Tk):
         self.draw()
 
     def _on_key(self, event: tk.Event) -> None:
+        if self.home.winfo_ismapped():
+            return
         if isinstance(self.focus_get(), ttk.Combobox):
             return
         move = KEY_MOVES.get(event.keysym) or KEY_MOVES.get(event.char)
@@ -481,6 +562,7 @@ class SokomindApp(tk.Tk):
 
     def _close(self) -> None:
         self._job_id += 1
+        self._freeze_timer()
         self.destroy()
 
 

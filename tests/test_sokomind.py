@@ -2,6 +2,7 @@ import unittest
 from threading import Event
 
 from Searches.Sokomind import (
+    BUILTIN_PUZZLES,
     PuzzleError,
     apply_move,
     a_star_search,
@@ -13,6 +14,15 @@ from Searches.Sokomind import (
 
 
 class SokomindTests(unittest.TestCase):
+    def test_every_builtin_puzzle_is_valid(self):
+        self.assertEqual(
+            {"ultra-tiny", "tiny", "medium", "large", "huge"},
+            set(BUILTIN_PUZZLES),
+        )
+        for name, puzzle in BUILTIN_PUZZLES.items():
+            with self.subTest(name=name):
+                parse_puzzle(puzzle)
+
     def test_all_searches_solve_simple_puzzle(self):
         puzzle = ["OOOOO", "O R O", "O A O", "O a O", "OOOOO"]
         for algorithm in ("astar", "greedy", "bfs", "dfs"):
