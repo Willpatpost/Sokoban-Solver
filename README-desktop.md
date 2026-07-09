@@ -59,10 +59,25 @@ The timer begins only after the first legal move.
 ## Command-line solver
 
 ```powershell
+python Searches/Sokomind.py --puzzle medium --algorithm fast
+python Searches/Sokomind.py --puzzle large --algorithm push-greedy
 python Searches/Sokomind.py --puzzle medium --algorithm astar
 python Searches/Sokomind.py --file path/to/puzzle.txt --show-steps
 python Searches/Sokomind.py --help
 ```
+
+Recommended algorithms:
+
+- `fast`: portfolio mode; tries complementary push solvers.
+- `push-greedy`: usually the quickest way to find a playable solution on big
+  levels, though it may not be shortest.
+- `push-astar`: searches at the box-push level instead of every walking step.
+- `astar`, `greedy`, `bfs`, `dfs`: classic step-by-step searches, mostly useful
+  for comparison and small puzzles.
+
+`fast` is bounded so the app stays responsive. If it cannot solve a very large
+board, try `push-greedy` directly or expect to add stronger Sokoban-specific
+deadlock/pattern-database logic for that level.
 
 Puzzle symbols are `O` wall, `R` robot, `X` generic box, `S` generic goal,
 uppercase letters for dedicated boxes, lowercase letters for their goals, and

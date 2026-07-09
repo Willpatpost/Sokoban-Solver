@@ -174,11 +174,16 @@ function startSolver(purpose) {
       return;
     }
     worker.terminate(); worker = null;
-    if (!data.path) { setStatus(`No solution found (${data.visited.toLocaleString()} states).`); return; }
+    if (!data.path) {
+      const suffix = data.budgetHit ? " in the current search budget" : "";
+      setStatus(`No solution found${suffix} (${data.visited.toLocaleString()} states).`);
+      return;
+    }
     if (purpose === "hint") {
       setStatus(`Hint: ${data.path[0]} · ${data.path.length} moves remain`);
     } else {
-      setStatus(`Found ${data.path.length} moves after ${data.visited.toLocaleString()} states.`);
+      const strategy = data.strategy ? ` with ${data.strategy}` : "";
+      setStatus(`Found ${data.path.length} moves${strategy} after ${data.visited.toLocaleString()} states.`);
       animation = data.path; animate();
     }
   };

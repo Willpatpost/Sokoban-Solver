@@ -6,8 +6,10 @@ from Searches.Sokomind import (
     PuzzleError,
     apply_move,
     a_star_search,
+    get_push_neighbors,
     get_neighbors,
     parse_puzzle,
+    push_a_star_search,
     render_puzzle,
     solve,
 )
@@ -25,7 +27,7 @@ class SokomindTests(unittest.TestCase):
 
     def test_all_searches_solve_simple_puzzle(self):
         puzzle = ["OOOOO", "O R O", "O A O", "O a O", "OOOOO"]
-        for algorithm in ("astar", "greedy", "bfs", "dfs"):
+        for algorithm in ("astar", "greedy", "bfs", "dfs", "push-astar", "fast"):
             with self.subTest(algorithm=algorithm):
                 path, final, _, _ = solve(puzzle, algorithm)
                 self.assertEqual(["Down"], [move for move, _ in path])
@@ -105,6 +107,29 @@ class SokomindTests(unittest.TestCase):
         self.assertIsNone(path)
         self.assertIsNone(final)
         self.assertEqual(0, visited)
+
+    def test_push_neighbors_include_walk_to_push(self):
+        state = parse_puzzle([
+            "OOOOOOO",
+            "O  R  O",
+            "O     O",
+            "O  X SO",
+            "OOOOOOO",
+        ])
+        segments = [segment for _next_state, segment in get_push_neighbors(state)]
+        self.assertIn(["Down", "Left", "Down", "Right"], segments)
+
+    def test_push_astar_returns_replayable_step_path(self):
+        state = parse_puzzle([
+            "OOOOOOO",
+            "O  R  O",
+            "O     O",
+            "O  X SO",
+            "OOOOOOO",
+        ])
+        path, final, _, _ = push_a_star_search(state)
+        self.assertEqual(["Down", "Left", "Down", "Right", "Right"], [move for move, _ in path])
+        self.assertTrue(final.is_goal())
 
 
 if __name__ == "__main__":

@@ -23,6 +23,10 @@ try:
         greedy_search,
         load_custom_puzzle,
         parse_puzzle,
+        portfolio_search,
+        push_a_star_search,
+        push_greedy_search,
+        weighted_push_a_star_search,
     )
 except ImportError:
     from Sokomind import (  # type: ignore
@@ -37,10 +41,18 @@ except ImportError:
         greedy_search,
         load_custom_puzzle,
         parse_puzzle,
+        portfolio_search,
+        push_a_star_search,
+        push_greedy_search,
+        weighted_push_a_star_search,
     )
 
 
 SEARCHES = {
+    "Fast Portfolio": portfolio_search,
+    "Fast Push A*": weighted_push_a_star_search,
+    "Push A*": push_a_star_search,
+    "Push Greedy": push_greedy_search,
     "A*": a_star_search,
     "Greedy": greedy_search,
     "BFS": bfs_search,
@@ -82,7 +94,7 @@ class SokomindApp(tk.Tk):
         self._timer_job: str | None = None
 
         self.puzzle_name = tk.StringVar(value="ultra-tiny")
-        self.algorithm = tk.StringVar(value="A*")
+        self.algorithm = tk.StringVar(value="Fast Portfolio")
         self.status = tk.StringVar(value="Ready")
         self.move_text = tk.StringVar(value="Moves: 0")
         self.timer_text = tk.StringVar(value="Time: 00:00")
@@ -101,7 +113,7 @@ class SokomindApp(tk.Tk):
         ttk.Label(toolbar, text="Solver").pack(side="left")
         ttk.Combobox(
             toolbar, textvariable=self.algorithm,
-            values=list(SEARCHES), state="readonly", width=9,
+            values=list(SEARCHES), state="readonly", width=14,
         ).pack(side="left", padx=5)
         ttk.Button(toolbar, text="Solve", command=self.solve_animated).pack(side="left", padx=2)
         ttk.Button(toolbar, text="Hint", command=self.hint).pack(side="left", padx=2)
@@ -462,7 +474,8 @@ class SokomindApp(tk.Tk):
                     continue
                 path, _final, elapsed, visited = result
                 if path is None:
-                    self.status.set(f"{algorithm}: no solution ({visited:,} states)")
+                    suffix = " in current search budget" if algorithm == "Fast Portfolio" else ""
+                    self.status.set(f"{algorithm}: no solution{suffix} ({visited:,} states)")
                     continue
                 moves = [move for move, _position in path]
                 self.status.set(

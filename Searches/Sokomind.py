@@ -187,17 +187,66 @@ def parse_puzzle(puzzle: Sequence[str]) -> State:
     return State(robots[0], tuple(sorted(boxes)), board)
 
 
-def _matching_cost(positions: tuple[Position, ...], goals: tuple[Position, ...]) -> float:
-    """Minimum assignment cost via the O(n^3) Hungarian algorithm."""
+@lru_cache(maxsize=2_000)
+def _reverse_push_distances(rows: tuple[str, ...], goal: Position) -> tuple[tuple[Position, int], ...]:
+    """Empty-board push distances from every reachable box cell to one goal."""
+    floor = frozenset(
+        (y, x)
+        for y, row in enumerate(rows)
+        for x, char in enumerate(row)
+        if char != "O"
+    )
+    distances = {goal: 0}
+    queue = deque([goal])
+    while queue:
+        box = queue.popleft()
+        for dy, dx in DIRECTIONS.values():
+            previous = (box[0] - dy, box[1] - dx)
+            robot_support = (previous[0] - dy, previous[1] - dx)
+            if previous in floor and robot_support in floor and previous not in distances:
+                distances[previous] = distances[box] + 1
+                queue.append(previous)
+    return tuple(sorted(distances.items()))
+
+
+def _push_distance(rows: tuple[str, ...], position: Position, goal: Position) -> float:
+    return dict(_reverse_push_distances(rows, goal)).get(position, math.inf)
+
+
+def _matching_cost(
+    positions: tuple[Position, ...],
+    goals: tuple[Position, ...],
+    rows: tuple[str, ...] | None = None,
+) -> float:
+    """Minimum assignment cost, using Sokoban push distances when a board is supplied."""
     if len(positions) != len(goals):
         return math.inf
     size = len(positions)
     if size == 0:
         return 0
     costs = [
-        [abs(pos[0] - goal[0]) + abs(pos[1] - goal[1]) for goal in goals]
+        [
+            _push_distance(rows, pos, goal)
+            if rows is not None
+            else abs(pos[0] - goal[0]) + abs(pos[1] - goal[1])
+            for goal in goals
+        ]
         for pos in positions
     ]
+    if rows is not None:
+        @lru_cache(maxsize=None)
+        def assign(index: int, used_mask: int) -> float:
+            if index == size:
+                return 0
+            best = math.inf
+            for goal_index, cost in enumerate(costs[index]):
+                if used_mask & (1 << goal_index) or math.isinf(cost):
+                    continue
+                best = min(best, cost + assign(index + 1, used_mask | (1 << goal_index)))
+            return best
+
+        return assign(0, 0)
+
     row_potential: list[float] = [0.0] * (size + 1)
     col_potential: list[float] = [0.0] * (size + 1)
     matching: list[int] = [0] * (size + 1)
@@ -252,7 +301,7 @@ def heuristic(state: State) -> float:
         by_label.setdefault(label, []).append(pos)
     return sum(
         _matching_cost(tuple(sorted(positions)), tuple(
-            sorted(state.board.goals_for(label))))
+            sorted(state.board.goals_for(label))), state.board.rows)
         for label, positions in by_label.items()
     )
 
@@ -312,20 +361,104 @@ def get_neighbors(
     return neighbors
 
 
-def reconstruct_path(came_from: dict[State, tuple[State, str]], end_state: State):
-    path = []
+def _reachable_paths(state: State) -> dict[Position, list[str]]:
+    """Shortest walking paths the robot can take without moving boxes."""
+    occupied = {pos for _label, pos in state.boxes}
+    paths: dict[Position, list[str]] = {state.robot_pos: []}
+    queue = deque([state.robot_pos])
+    while queue:
+        y, x = queue.popleft()
+        for move, (dy, dx) in DIRECTIONS.items():
+            next_pos = (y + dy, x + dx)
+            if (
+                next_pos in paths
+                or next_pos not in state.board.floor
+                or next_pos in occupied
+            ):
+                continue
+            paths[next_pos] = [*paths[(y, x)], move]
+            queue.append(next_pos)
+    return paths
+
+
+def get_push_neighbors(state: State) -> list[tuple[State, list[str]]]:
+    """Return states after one box push, including the walking path to perform it.
+
+    Classic Sokoban solvers search primarily over pushes instead of every robot
+    step. This collapses many equivalent "walk around the room" states into one
+    expansion while still returning a normal step-by-step move list for the GUI.
+    """
+    occupied = {pos: label for label, pos in state.boxes}
+    reachable = _reachable_paths(state)
+    neighbors: list[tuple[State, list[str]]] = []
+
+    for label, box in state.boxes:
+        for push_move, (dy, dx) in DIRECTIONS.items():
+            robot_support = (box[0] - dy, box[1] - dx)
+            box_destination = (box[0] + dy, box[1] + dx)
+            if robot_support not in reachable:
+                continue
+            if box_destination not in state.board.floor or box_destination in occupied:
+                continue
+            if is_deadlock(box_destination, state.board, box_label=label):
+                continue
+
+            moved = list(state.boxes)
+            moved.remove((label, box))
+            moved.append((label, box_destination))
+            segment = [*reachable[robot_support], push_move]
+            neighbors.append(
+                (
+                    State(
+                        box,
+                        tuple(sorted(moved)),
+                        state.board,
+                        state.cost + len(segment),
+                    ),
+                    segment,
+                )
+            )
+    return neighbors
+
+
+def _push_signature(state: State) -> tuple[Position, tuple[Box, ...]]:
+    reachable = _reachable_paths(state)
+    return min(reachable), state.boxes
+
+
+def reconstruct_path(
+    came_from: dict[State, tuple[State, list[str]]],
+    end_state: State,
+    initial_state: State,
+):
+    moves: list[str] = []
     current = end_state
     while current in came_from:
-        parent, move = came_from[current]
-        path.append((move, current.robot_pos))
+        parent, segment = came_from[current]
+        moves[:0] = segment
         current = parent
-    return list(reversed(path))
+
+    path = []
+    replay = initial_state
+    for move in moves:
+        replay = apply_move(replay, move)
+        path.append((move, replay.robot_pos))
+    return path
 
 
-def _search(initial: State, algorithm: str, cancel_event: Event | None = None):
+def _search(
+    initial: State,
+    algorithm: str,
+    cancel_event: Event | None = None,
+    *,
+    push_macro: bool = False,
+    heuristic_weight: float = 1.0,
+    max_seconds: float | None = None,
+):
     started = time.perf_counter()
-    came_from: dict[State, tuple[State, str]] = {}
-    best_cost = {initial: 0}
+    came_from: dict[State, tuple[State, list[str]]] = {}
+    initial_key = _push_signature(initial) if push_macro else initial
+    best_cost: dict[object, int] = {initial_key: 0}
     counter = 0
     pop: Callable[[], State]
     push: Callable[[State], None]
@@ -343,7 +476,11 @@ def _search(initial: State, algorithm: str, cancel_event: Event | None = None):
         has_items = lambda: bool(stack)
     else:
         priority_queue: list[tuple[float, int, State]] = []
-        score = initial.heuristic if algorithm == "greedy" else initial.priority
+        score = (
+            initial.heuristic
+            if algorithm == "greedy"
+            else initial.cost + heuristic_weight * initial.heuristic
+        )
         heapq.heappush(priority_queue, (score, counter, initial))
 
         def pop_priority() -> State:
@@ -352,37 +489,47 @@ def _search(initial: State, algorithm: str, cancel_event: Event | None = None):
         def push_priority(item: State) -> None:
             nonlocal counter
             counter += 1
-            score = item.heuristic if algorithm == "greedy" else item.priority
+            score = (
+                item.heuristic
+                if algorithm == "greedy"
+                else item.cost + heuristic_weight * item.heuristic
+            )
             heapq.heappush(priority_queue, (score, counter, item))
 
         pop = pop_priority
         push = push_priority
         has_items = lambda: bool(priority_queue)
 
-    expanded: set[State] = set()
+    expanded: set[object] = set()
     while has_items():
         if cancel_event is not None and cancel_event.is_set():
             return None, None, time.perf_counter() - started, len(expanded)
+        if max_seconds is not None and time.perf_counter() - started >= max_seconds:
+            return None, None, time.perf_counter() - started, len(expanded)
         current = pop()
-        if current in expanded:
+        current_key = _push_signature(current) if push_macro else current
+        if current_key in expanded:
             continue
-        expanded.add(current)
+        expanded.add(current_key)
         if current.is_goal():
             elapsed = time.perf_counter() - started
-            return reconstruct_path(came_from, current), current, elapsed, len(expanded)
+            return reconstruct_path(came_from, current, initial), current, elapsed, len(expanded)
 
-        children = get_neighbors(current)
+        children = get_push_neighbors(current) if push_macro else [
+            (neighbor, [move]) for neighbor, move in get_neighbors(current)
+        ]
         if algorithm == "dfs":
             children.reverse()
-        for neighbor, move in children:
-            new_cost = current.cost + 1
-            if algorithm in {"astar", "bfs"} and new_cost >= best_cost.get(neighbor, math.inf):
+        for neighbor, segment in children:
+            new_cost = neighbor.cost
+            neighbor_key = _push_signature(neighbor) if push_macro else neighbor
+            if algorithm in {"astar", "bfs"} and new_cost >= best_cost.get(neighbor_key, math.inf):
                 continue
-            if neighbor in expanded:
+            if neighbor_key in expanded:
                 continue
-            if algorithm in {"astar", "bfs"} or neighbor not in came_from:
-                best_cost[neighbor] = new_cost
-                came_from[neighbor] = (current, move)
+            if algorithm in {"astar", "bfs"} or neighbor_key not in best_cost:
+                best_cost[neighbor_key] = new_cost
+                came_from[neighbor] = (current, segment)
                 push(neighbor)
 
     return None, None, time.perf_counter() - started, len(expanded)
@@ -402,6 +549,55 @@ def greedy_search(initial_state: State, cancel_event: Event | None = None):
 
 def a_star_search(initial_state: State, cancel_event: Event | None = None):
     return _search(initial_state, "astar", cancel_event)
+
+
+def push_a_star_search(
+    initial_state: State,
+    cancel_event: Event | None = None,
+    max_seconds: float | None = None,
+):
+    return _search(initial_state, "astar", cancel_event, push_macro=True, max_seconds=max_seconds)
+
+
+def weighted_push_a_star_search(
+    initial_state: State,
+    cancel_event: Event | None = None,
+    weight: float = 1.6,
+    max_seconds: float | None = None,
+):
+    return _search(
+        initial_state,
+        "astar",
+        cancel_event,
+        push_macro=True,
+        heuristic_weight=weight,
+        max_seconds=max_seconds,
+    )
+
+
+def push_greedy_search(
+    initial_state: State,
+    cancel_event: Event | None = None,
+    max_seconds: float | None = None,
+):
+    return _search(initial_state, "greedy", cancel_event, push_macro=True, max_seconds=max_seconds)
+
+
+def portfolio_search(initial_state: State, cancel_event: Event | None = None):
+    """Try complementary solvers in an order tuned for finding a solution quickly."""
+    started = time.perf_counter()
+    total_visited = 0
+    attempts = (
+        lambda: push_greedy_search(initial_state, cancel_event, max_seconds=8),
+        lambda: weighted_push_a_star_search(initial_state, cancel_event, max_seconds=20),
+        lambda: push_a_star_search(initial_state, cancel_event, max_seconds=30),
+    )
+    for attempt in attempts:
+        path, final, _elapsed, visited = attempt()
+        total_visited += visited
+        if path is not None or (cancel_event is not None and cancel_event.is_set()):
+            return path, final, time.perf_counter() - started, total_visited
+    return None, None, time.perf_counter() - started, total_visited
 
 
 def apply_move(state: State, move: str) -> State:
@@ -441,8 +637,19 @@ def load_custom_puzzle(file_path: str | Path) -> list[str]:
 
 
 def solve(puzzle: Sequence[str], algorithm: str = "astar"):
-    searches = {"dfs": dfs_search, "bfs": bfs_search, "greedy": greedy_search,
-                "astar": a_star_search, "a*": a_star_search}
+    searches = {
+        "dfs": dfs_search,
+        "bfs": bfs_search,
+        "greedy": greedy_search,
+        "astar": a_star_search,
+        "a*": a_star_search,
+        "push-astar": push_a_star_search,
+        "push-a*": push_a_star_search,
+        "push-greedy": push_greedy_search,
+        "weighted-push-astar": weighted_push_a_star_search,
+        "portfolio": portfolio_search,
+        "fast": portfolio_search,
+    }
     key = algorithm.lower()
     if key not in searches:
         raise ValueError(f"Unknown algorithm {algorithm!r}.")
@@ -456,8 +663,14 @@ def build_parser() -> argparse.ArgumentParser:
                         default="ultra-tiny")
     source.add_argument("--file", type=Path,
                         help="load a puzzle from a UTF-8 text file")
-    parser.add_argument("--algorithm", choices=("astar",
-                        "greedy", "bfs", "dfs"), default="astar")
+    parser.add_argument(
+        "--algorithm",
+        choices=(
+            "astar", "greedy", "bfs", "dfs", "push-astar",
+            "push-greedy", "weighted-push-astar", "portfolio", "fast",
+        ),
+        default="fast",
+    )
     parser.add_argument("--show-steps", action="store_true")
     parser.add_argument("--output", type=Path,
                         help="write the move list to this file")
@@ -480,7 +693,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
 
     if path is None:
-        print(f"No solution found ({visited} states, {elapsed:.3f}s).")
+        budget = " in current search budget" if args.algorithm in {"fast", "portfolio"} else ""
+        print(f"No solution found{budget} ({visited} states, {elapsed:.3f}s).")
         return 1
     print(f"Solved in {len(path)} moves ({visited} states, {elapsed:.3f}s).")
     print(" ".join(move for move, _ in path))
