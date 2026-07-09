@@ -5,11 +5,22 @@ Pages. It includes five levels from Ultra Tiny through Huge, keyboard play,
 undo/reset, a first-move timer, hints, and animated solving in a background Web
 Worker.
 
-The default solver is **Ultimate Search**, a Sokoban-aware portfolio that uses
-push-level search, dead-square pruning, robot-reachability canonicalization, and
-push-distance heuristics. This is much more appropriate for large Sokoban boards
-than expanding every single walking step. It is intentionally bounded so the
-browser stays responsive on extremely large or unsolved boards.
+The default solver is **Ultimate Bidirectional**, an experimental Sokoban-aware
+search. It starts one forward Web Worker from the current board and several
+reverse Web Workers from different solved robot regions. The reverse workers
+"unsolve" the puzzle with legal reverse pulls; when the forward search and any
+reverse search reach the same canonical box layout and robot-reachability
+region, the browser stitches both halves into a playable solution.
+
+The regular **Ultimate Search** mode is still available. It uses a multi-worker
+portfolio that races complementary strategies such as Push Greedy, Weighted Push
+A*, and Push A*. All advanced workers use push-level search, dead-square
+pruning, robot-reachability canonicalization, and wall-aware push-distance
+heuristics. This is much more appropriate for large Sokoban boards than
+expanding every single walking step.
+
+The search budgets are intentionally bounded so the browser stays responsive on
+extremely large or unsolved boards.
 
 ## How to play
 

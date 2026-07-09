@@ -1,4 +1,5 @@
 const DIRS = {Up: [-1, 0], Down: [1, 0], Left: [0, -1], Right: [0, 1]};
+const OPPOSITE = {Up: "Down", Down: "Up", Left: "Right", Right: "Left"};
 const key = (robot, boxes) => `${robot.join(",")}|${[...boxes].sort().join(";")}`;
 const pkey = (y, x) => `${y},${x}`;
 
@@ -31,9 +32,25 @@ function parse(data) {
     if (ch === "O") walls.add(p); else floor.add(p);
     if (ch === "S") goals.set(p, "X"); else if (/[a-z]/.test(ch)) goals.set(p, ch.toUpperCase());
   }));
-  return {rows: data.rows, floor, walls, goals};
+  const pushDistances = new Map([...goals.keys()].map(goal => [goal, reversePushDistances(floor, goal)]));
+  return {rows: data.rows, floor, walls, goals, pushDistances};
 }
-function heuristic(boxes, goals) {
+function reversePushDistances(floor, goalKey) {
+  const [gy, gx] = goalKey.split(",").map(Number);
+  const distances = new Map([[goalKey, 0]]), queue = [[gy, gx]];
+  for (let head = 0; head < queue.length; head++) {
+    const [y, x] = queue[head], distance = distances.get(pkey(y, x));
+    for (const [dy, dx] of Object.values(DIRS)) {
+      const previous = pkey(y - dy, x - dx);
+      const support = pkey(y - 2 * dy, x - 2 * dx);
+      if (!floor.has(previous) || !floor.has(support) || distances.has(previous)) continue;
+      distances.set(previous, distance + 1);
+      queue.push([y - dy, x - dx]);
+    }
+  }
+  return distances;
+}
+function heuristic(boxes, board) {
   const byLabel = new Map();
   boxes.forEach(([y, x, label]) => {
     if (!byLabel.has(label)) byLabel.set(label, []);
@@ -41,16 +58,17 @@ function heuristic(boxes, goals) {
   });
   let total = 0;
   for (const [label, positions] of byLabel) {
-    const targets = [...goals].filter(([, l]) => l === label).map(([p]) => p.split(",").map(Number));
+    const targets = [...board.goals].filter(([, l]) => l === label).map(([p]) => p);
     const memo = new Map();
     const assign = (i, mask) => {
       if (i === positions.length) return 0;
       const mk = `${i},${mask}`; if (memo.has(mk)) return memo.get(mk);
       let best = Infinity;
-      targets.forEach(([gy, gx], j) => {
+      targets.forEach((target, j) => {
         if (!(mask & (1 << j))) {
           const [y, x] = positions[i];
-          best = Math.min(best, Math.abs(y - gy) + Math.abs(x - gx) + assign(i + 1, mask | (1 << j)));
+          const distance = board.pushDistances.get(target)?.get(pkey(y, x)) ?? Infinity;
+          best = Math.min(best, distance + assign(i + 1, mask | (1 << j)));
         }
       });
       memo.set(mk, best); return best;
@@ -67,6 +85,12 @@ function corner(y, x, board, label) {
   const wall = (dy, dx) => board.walls.has(pkey(y + dy, x + dx));
   return (wall(-1, 0) && wall(0, -1)) || (wall(-1, 0) && wall(0, 1)) ||
     (wall(1, 0) && wall(0, -1)) || (wall(1, 0) && wall(0, 1));
+}
+function staticDead(y, x, board, label) {
+  if (board.goals.get(pkey(y, x)) === label) return false;
+  return ![...board.goals]
+    .filter(([, goalLabel]) => goalLabel === label)
+    .some(([goal]) => board.pushDistances.get(goal)?.has(pkey(y, x)));
 }
 function neighbors(state, board) {
   const occupied = new Map(state.boxes.map((b, i) => [pkey(b[0], b[1]), i])), result = [];
@@ -103,9 +127,9 @@ function reachablePaths(state, board) {
   return paths;
 }
 
-function pushNeighbors(state, board) {
+function pushNeighbors(state, board, reachable = reachablePaths(state, board)) {
   const occupied = new Map(state.boxes.map((b, i) => [pkey(b[0], b[1]), i]));
-  const reachable = reachablePaths(state, board), result = [];
+  const result = [];
   state.boxes.forEach(([y, x, label], index) => {
     for (const [move, [dy, dx]] of Object.entries(DIRS)) {
       const support = pkey(y - dy, x - dx), dest = pkey(y + dy, x + dx);
@@ -118,9 +142,123 @@ function pushNeighbors(state, board) {
   return result;
 }
 
-function pushKey(state, board) {
-  const robotRegion = [...reachablePaths(state, board).keys()].sort()[0];
+function pushKey(state, reachable) {
+  const robotRegion = [...reachable.keys()].sort()[0];
   return `${robotRegion}|${[...state.boxes.map(b => b.join(","))].sort().join(";")}`;
+}
+
+function invertWalk(path) {
+  return [...path].reverse().map(move => OPPOSITE[move]);
+}
+
+function reversePullNeighbors(state, board, reachable = reachablePaths(state, board)) {
+  const occupied = new Map(state.boxes.map((b, i) => [pkey(b[0], b[1]), i]));
+  const result = [];
+  state.boxes.forEach(([y, x, label], index) => {
+    for (const [move, [dy, dx]] of Object.entries(DIRS)) {
+      const boxBefore = pkey(y - dy, x - dx);
+      const robotAfterPull = pkey(y - 2 * dy, x - 2 * dx);
+      if (!reachable.has(boxBefore) || !board.floor.has(robotAfterPull)) continue;
+      if (occupied.has(boxBefore) || occupied.has(robotAfterPull)) continue;
+      if (staticDead(y - dy, x - dx, board, label)) continue;
+      const boxes = state.boxes.map((b, i) => i === index ? [y - dy, x - dx, label] : b);
+      const walkToPullSpot = reachable.get(boxBefore);
+      const walkFromPushLanding = invertWalk(walkToPullSpot);
+      result.push({
+        robot: [y - 2 * dy, x - 2 * dx],
+        boxes,
+        cost: state.cost + 1 + walkFromPushLanding.length,
+        suffix: [move, ...walkFromPushLanding, ...state.suffix],
+      });
+    }
+  });
+  return result;
+}
+
+function solvedBoxes(board, initialBoxes) {
+  const byLabel = new Map();
+  initialBoxes.forEach(([, , label]) => byLabel.set(label, (byLabel.get(label) || 0) + 1));
+  const boxes = [];
+  for (const [label, count] of byLabel) {
+    const goals = [...board.goals]
+      .filter(([, goalLabel]) => goalLabel === label)
+      .map(([position]) => position.split(",").map(Number))
+      .slice(0, count);
+    goals.forEach(([y, x]) => boxes.push([y, x, label]));
+  }
+  return boxes.sort((a, b) => a.join(",").localeCompare(b.join(",")));
+}
+
+function reverseStartStates(board, initialBoxes, shard) {
+  const boxes = solvedBoxes(board, initialBoxes);
+  const occupied = new Set(boxes.map(([y, x]) => pkey(y, x)));
+  const unique = new Map();
+  for (const position of board.floor) {
+    if (occupied.has(position)) continue;
+    const robot = position.split(",").map(Number);
+    const state = {robot, boxes, cost: 0, suffix: []};
+    const reachable = reachablePaths(state, board);
+    const signature = pushKey(state, reachable);
+    if (!unique.has(signature)) unique.set(signature, state);
+  }
+  return [...unique.values()].filter((_state, index) => index % shard.count === shard.index);
+}
+
+function flushVisits(visits) {
+  if (visits.length) postMessage({type: "visits", visits: visits.splice(0, visits.length)});
+}
+
+function bidirectionalSide(payload) {
+  const board = parse(payload.state);
+  const initialBoxes = payload.state.boxes.map(([p, label]) => [...p.split(",").map(Number), label]);
+  const forward = payload.mode === "bidir-forward";
+  const frontier = new Heap(), seen = new Map(), visits = [];
+  let order = 0, visited = 0, reported = 0;
+  const starts = forward
+    ? [{robot: payload.state.robot, boxes: initialBoxes, cost: 0, path: []}]
+    : reverseStartStates(board, initialBoxes, payload.reverseShard || {index: 0, count: 1});
+  starts.forEach(state => frontier.push([state.cost + heuristic(state.boxes, board), order++, state]));
+
+  while (frontier.length) {
+    const current = frontier.pop()[2];
+    const reachable = reachablePaths(current, board);
+    const signature = pushKey(current, reachable);
+    if (seen.has(signature) && seen.get(signature) <= current.cost) continue;
+    seen.set(signature, current.cost); visited++;
+    visits.push(forward
+      ? {side: "forward", key: signature, robot: current.robot, boxes: current.boxes, path: current.path}
+      : {side: "reverse", key: signature, robot: current.robot, boxes: current.boxes, suffix: current.suffix});
+
+    if (visits.length >= 150) flushVisits(visits);
+    if (payload.maxVisited && visited >= payload.maxVisited) {
+      flushVisits(visits);
+      postMessage({type: "progress", visited, delta: visited - reported});
+      postMessage({type: "done", visited, budgetHit: true});
+      return;
+    }
+
+    const nextStates = forward
+      ? pushNeighbors(current, board, reachable).map(next => ({
+          robot: next.robot,
+          boxes: next.boxes,
+          cost: current.cost + next.path.length,
+          path: [...current.path, ...next.path],
+        }))
+      : reversePullNeighbors(current, board, reachable);
+    for (const next of nextStates) {
+      const score = forward
+        ? next.cost + 1.4 * heuristic(next.boxes, board)
+        : next.cost;
+      frontier.push([score, order++, next]);
+    }
+    if (visited % 1000 === 0) {
+      postMessage({type: "progress", visited, delta: visited - reported});
+      reported = visited;
+    }
+  }
+  flushVisits(visits);
+  postMessage({type: "progress", visited, delta: visited - reported});
+  postMessage({type: "done", visited});
 }
 
 function search(payload) {
@@ -142,18 +280,19 @@ function search(payload) {
   let order = 0, visited = 0;
   const score = (s) => algorithm === "bfs" ? s.cost :
     algorithm === "dfs" ? -s.cost :
-    ["greedy", "push-greedy"].includes(algorithm) ? heuristic(s.boxes, board.goals) :
-    s.cost + weight * heuristic(s.boxes, board.goals);
+    ["greedy", "push-greedy"].includes(algorithm) ? heuristic(s.boxes, board) :
+    s.cost + weight * heuristic(s.boxes, board);
   frontier.push([score(initial), order++, initial]);
   while (frontier.length) {
     const current = frontier.pop()[2];
-    const signature = pushMacro ? pushKey(current, board) :
+    const reachable = pushMacro ? reachablePaths(current, board) : null;
+    const signature = pushMacro ? pushKey(current, reachable) :
       key(current.robot, current.boxes.map(b => b.join(",")));
     if (seen.has(signature) && seen.get(signature) <= current.cost) continue;
     seen.set(signature, current.cost); visited++;
     if (goal(current.boxes, board.goals)) return {path: current.path, visited};
     if (payload.maxVisited && visited >= payload.maxVisited) return {path: null, visited, budgetHit: true};
-    const nextStates = pushMacro ? pushNeighbors(current, board) :
+    const nextStates = pushMacro ? pushNeighbors(current, board, reachable) :
       neighbors(current, board).map(n => ({robot: n.robot, boxes: n.boxes, path: [n.move]}));
     for (const next of nextStates) {
       const child = {robot: next.robot, boxes: next.boxes, cost: current.cost + next.path.length,
@@ -164,4 +303,10 @@ function search(payload) {
   }
   return {path: null, visited};
 }
-onmessage = ({data}) => postMessage({type: "done", ...search(data)});
+onmessage = ({data}) => {
+  if (data.mode === "bidir-forward" || data.mode === "bidir-reverse") {
+    bidirectionalSide(data);
+  } else {
+    postMessage({type: "done", ...search(data)});
+  }
+};

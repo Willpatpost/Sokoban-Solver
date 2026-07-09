@@ -15,7 +15,7 @@ const KEYS = {ArrowUp: "Up", ArrowDown: "Down", ArrowLeft: "Left", ArrowRight: "
 const $ = (id) => document.getElementById(id);
 
 let levelKey = "ultra-tiny", state, initialState, history = [], moves = 0;
-let worker = null, animation = [], timer = null, solvedShown = false;
+let workers = [], animation = [], timer = null, solvedShown = false;
 let startedAt = null, elapsed = 0, clock = null;
 
 function parse(rows) {
@@ -132,7 +132,7 @@ function reset() {
   render(); setStatus("Level reset.");
 }
 function stop(message = true) {
-  if (worker) worker.terminate(); worker = null;
+  workers.forEach(worker => worker.terminate()); workers = [];
   animation = []; clearTimeout(timer); timer = null;
   if (message && state) setStatus("Stopped.");
 }
@@ -165,29 +165,181 @@ function hideHome() {
 function serializeState(s) {
   return {rows: s.board.rows, robot: s.robot, boxes: [...s.boxes]};
 }
-function startSolver(purpose) {
-  stop(false); setStatus(`${$("algorithm").selectedOptions[0].text} is searching…`);
-  worker = new Worker("solver-worker.js");
-  worker.onmessage = ({data}) => {
-    if (data.type === "progress") {
-      setStatus(`Searching… ${data.visited.toLocaleString()} states`);
-      return;
+function trimPathToGoal(path) {
+  const replay = cloneState(state), trimmed = [];
+  for (const move of path) {
+    const next = moveState(replay, move);
+    if (!next) break;
+    replay.robot = next.robot; replay.boxes = next.boxes;
+    trimmed.push(move);
+    if (isGoal(replay)) break;
+  }
+  return trimmed;
+}
+function walkBetween(board, boxes, start, target) {
+  const blocked = new Set(boxes.map(([y, x]) => pos(y, x)));
+  const startKey = pos(start[0], start[1]), targetKey = pos(target[0], target[1]);
+  const paths = new Map([[startKey, []]]), queue = [start];
+  for (let head = 0; head < queue.length; head++) {
+    const [y, x] = queue[head], path = paths.get(pos(y, x));
+    if (pos(y, x) === targetKey) return path;
+    for (const [move, [dy, dx]] of Object.entries(DIRS)) {
+      const next = pos(y + dy, x + dx);
+      if (paths.has(next) || !board.floor.has(next) || blocked.has(next)) continue;
+      paths.set(next, [...path, move]);
+      queue.push([y + dy, x + dx]);
     }
-    worker.terminate(); worker = null;
-    if (!data.path) {
-      const suffix = data.budgetHit ? " in the current search budget" : "";
-      setStatus(`No solution found${suffix} (${data.visited.toLocaleString()} states).`);
-      return;
-    }
+  }
+  return null;
+}
+function solverPlans(algorithm) {
+  if (!["ultimate", "portfolio", "fast"].includes(algorithm)) {
+    return [{algorithm, label: $("algorithm").selectedOptions[0].text}];
+  }
+  return [
+    {algorithm: "push-greedy", label: "Push Greedy", maxVisited: 80000},
+    {algorithm: "weighted-push-astar", label: "Weighted Push A*", maxVisited: 120000},
+    {algorithm: "push-astar", label: "Push A*", maxVisited: 180000},
+  ];
+}
+function startBidirectionalSolver(purpose) {
+  stop(false); setStatus("Ultimate Bidirectional is searching…");
+  const hardware = navigator.hardwareConcurrency || 2;
+  const reverseWorkers = Math.max(1, Math.min(hardware - 1, 6));
+  const forwardSeen = new Map(), reverseSeen = new Map();
+  let settled = false, totalVisited = 0, doneWorkers = 0;
+
+  const finish = (forward, reverse, label) => {
+    const bridge = walkBetween(state.board, forward.boxes, forward.robot, reverse.robot);
+    if (!bridge) return false;
+    const path = trimPathToGoal([...forward.path, ...bridge, ...reverse.suffix]);
+    settled = true;
+    workers.forEach(worker => worker.terminate()); workers = [];
     if (purpose === "hint") {
-      setStatus(`Hint: ${data.path[0]} · ${data.path.length} moves remain`);
+      setStatus(`Hint: ${path[0]} · ${path.length} moves remain (${label})`);
     } else {
-      const strategy = data.strategy ? ` with ${data.strategy}` : "";
-      setStatus(`Found ${data.path.length} moves${strategy} after ${data.visited.toLocaleString()} states.`);
-      animation = data.path; animate();
+      setStatus(`Met in the middle: ${path.length} moves after ${totalVisited.toLocaleString()} states.`);
+      animation = path; animate();
+    }
+    return true;
+  };
+
+  const inspectVisits = (visits, workerLabel) => {
+    for (const visit of visits) {
+      if (visit.side === "forward") {
+        forwardSeen.set(visit.key, visit);
+        const reverse = reverseSeen.get(visit.key);
+        if (reverse && finish(visit, reverse, workerLabel)) return;
+      } else {
+        reverseSeen.set(visit.key, visit);
+        const forward = forwardSeen.get(visit.key);
+        if (forward && finish(forward, visit, workerLabel)) return;
+      }
     }
   };
-  worker.postMessage({state: serializeState(state), algorithm: $("algorithm").value});
+
+  const launch = (plan) => {
+    const worker = new Worker("solver-worker.js");
+    workers.push(worker);
+    worker.onmessage = ({data}) => {
+      if (settled) return;
+      if (data.type === "visits") {
+        inspectVisits(data.visits, plan.label);
+        return;
+      }
+      if (data.type === "progress") {
+        totalVisited += data.delta || 0;
+        setStatus(`${workers.length} bidirectional workers searching… ${totalVisited.toLocaleString()} states`);
+        return;
+      }
+      if (data.type === "done") {
+        doneWorkers++;
+        worker.terminate();
+        workers = workers.filter(item => item !== worker);
+        if (!settled && doneWorkers === reverseWorkers + 1) {
+          const suffix = data.budgetHit ? " in the current search budget" : "";
+          setStatus(`No bidirectional meeting found${suffix} (${totalVisited.toLocaleString()} states).`);
+        }
+      }
+    };
+    worker.onerror = () => {
+      if (settled) return;
+      doneWorkers++;
+      worker.terminate();
+      workers = workers.filter(item => item !== worker);
+      if (doneWorkers === reverseWorkers + 1) setStatus("Bidirectional worker failed.");
+    };
+    worker.postMessage({state: serializeState(state), ...plan});
+  };
+
+  launch({mode: "bidir-forward", label: "Forward Push Search", maxVisited: 90000});
+  for (let index = 0; index < reverseWorkers; index++) {
+    launch({
+      mode: "bidir-reverse",
+      label: `Reverse Unsolver ${index + 1}`,
+      reverseShard: {index, count: reverseWorkers},
+      maxVisited: Math.floor(180000 / reverseWorkers),
+    });
+  }
+}
+function startSolver(purpose) {
+  if ($("algorithm").value === "ultimate-bidirectional") {
+    startBidirectionalSolver(purpose);
+    return;
+  }
+  stop(false); setStatus(`${$("algorithm").selectedOptions[0].text} is searching…`);
+  const plans = solverPlans($("algorithm").value);
+  const maxWorkers = Math.max(1, Math.min(plans.length, navigator.hardwareConcurrency || 2));
+  const queue = plans.slice(), active = new Map(), finished = [];
+  let settled = false, totalVisited = 0;
+  const launchNext = () => {
+    if (settled || !queue.length || active.size >= maxWorkers) return;
+    const plan = queue.shift(), worker = new Worker("solver-worker.js");
+    workers.push(worker); active.set(worker, plan);
+    worker.onmessage = ({data}) => {
+      if (settled) return;
+      if (data.type === "progress") {
+        setStatus(`${active.size} worker${active.size === 1 ? "" : "s"} searching… ${plan.label}: ${data.visited.toLocaleString()} states`);
+        return;
+      }
+      worker.terminate();
+      workers = workers.filter(item => item !== worker);
+      active.delete(worker);
+      totalVisited += data.visited || 0;
+      if (data.path) {
+        settled = true;
+        workers.forEach(item => item.terminate()); workers = [];
+        const path = trimPathToGoal(data.path);
+        if (purpose === "hint") {
+          setStatus(`Hint: ${path[0]} · ${path.length} moves remain (${plan.label})`);
+        } else {
+          setStatus(`Found ${path.length} moves with ${plan.label} after ${totalVisited.toLocaleString()} states.`);
+          animation = path; animate();
+        }
+        return;
+      }
+      finished.push(data);
+      if (!queue.length && active.size === 0) {
+        const budgetHit = finished.some(result => result.budgetHit);
+        const suffix = budgetHit ? " in the current search budget" : "";
+        setStatus(`No solution found${suffix} (${totalVisited.toLocaleString()} states across ${finished.length} worker${finished.length === 1 ? "" : "s"}).`);
+        return;
+      }
+      launchNext();
+    };
+    worker.onerror = () => {
+      if (settled) return;
+      worker.terminate();
+      workers = workers.filter(item => item !== worker);
+      active.delete(worker);
+      finished.push({visited: 0});
+      launchNext();
+      if (!queue.length && active.size === 0) setStatus("Solver worker failed.");
+    };
+    worker.postMessage({state: serializeState(state), ...plan});
+    launchNext();
+  };
+  launchNext();
 }
 function animate() {
   if (!animation.length || isGoal(state)) return;
