@@ -583,8 +583,15 @@ def push_greedy_search(
     return _search(initial_state, "greedy", cancel_event, push_macro=True, max_seconds=max_seconds)
 
 
-def portfolio_search(initial_state: State, cancel_event: Event | None = None):
-    """Try complementary solvers in an order tuned for finding a solution quickly."""
+def ultimate_search(initial_state: State, cancel_event: Event | None = None):
+    """Best-effort Sokoban-aware solver portfolio.
+
+    This combines the project's current Sokoban-specific mechanics:
+    push-level search, robot reachability canonicalization, static dead-square
+    pruning, label-aware goal matching, and push-distance heuristics. The first
+    two attempts are bounded so the GUI/browser stay responsive before falling
+    back to a bounded exact push A* attempt.
+    """
     started = time.perf_counter()
     total_visited = 0
     attempts = (
@@ -598,6 +605,11 @@ def portfolio_search(initial_state: State, cancel_event: Event | None = None):
         if path is not None or (cancel_event is not None and cancel_event.is_set()):
             return path, final, time.perf_counter() - started, total_visited
     return None, None, time.perf_counter() - started, total_visited
+
+
+def portfolio_search(initial_state: State, cancel_event: Event | None = None):
+    """Backward-compatible name for the ultimate Sokoban-aware search."""
+    return ultimate_search(initial_state, cancel_event)
 
 
 def apply_move(state: State, move: str) -> State:
@@ -647,8 +659,9 @@ def solve(puzzle: Sequence[str], algorithm: str = "astar"):
         "push-a*": push_a_star_search,
         "push-greedy": push_greedy_search,
         "weighted-push-astar": weighted_push_a_star_search,
+        "ultimate": ultimate_search,
         "portfolio": portfolio_search,
-        "fast": portfolio_search,
+        "fast": ultimate_search,
     }
     key = algorithm.lower()
     if key not in searches:
@@ -667,9 +680,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--algorithm",
         choices=(
             "astar", "greedy", "bfs", "dfs", "push-astar",
-            "push-greedy", "weighted-push-astar", "portfolio", "fast",
+            "push-greedy", "weighted-push-astar", "ultimate", "portfolio", "fast",
         ),
-        default="fast",
+        default="ultimate",
     )
     parser.add_argument("--show-steps", action="store_true")
     parser.add_argument("--output", type=Path,
@@ -693,7 +706,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
 
     if path is None:
-        budget = " in current search budget" if args.algorithm in {"fast", "portfolio"} else ""
+        budget = (
+            " in current search budget"
+            if args.algorithm in {"fast", "portfolio", "ultimate"}
+            else ""
+        )
         print(f"No solution found{budget} ({visited} states, {elapsed:.3f}s).")
         return 1
     print(f"Solved in {len(path)} moves ({visited} states, {elapsed:.3f}s).")

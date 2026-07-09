@@ -5,11 +5,11 @@ Pages. It includes five levels from Ultra Tiny through Huge, keyboard play,
 undo/reset, a first-move timer, hints, and animated solving in a background Web
 Worker.
 
-The default solver is **Fast Portfolio**, which tries faster push-level search
-strategies before falling back to a more exhaustive push A*. This is much more
-appropriate for large Sokoban boards than expanding every single walking step.
-It is intentionally bounded so the browser stays responsive on extremely large
-or unsolved boards.
+The default solver is **Ultimate Search**, a Sokoban-aware portfolio that uses
+push-level search, dead-square pruning, robot-reachability canonicalization, and
+push-distance heuristics. This is much more appropriate for large Sokoban boards
+than expanding every single walking step. It is intentionally bounded so the
+browser stays responsive on extremely large or unsolved boards.
 
 ## How to play
 

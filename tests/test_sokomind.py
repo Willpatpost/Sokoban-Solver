@@ -27,7 +27,15 @@ class SokomindTests(unittest.TestCase):
 
     def test_all_searches_solve_simple_puzzle(self):
         puzzle = ["OOOOO", "O R O", "O A O", "O a O", "OOOOO"]
-        for algorithm in ("astar", "greedy", "bfs", "dfs", "push-astar", "fast"):
+        for algorithm in (
+            "astar",
+            "greedy",
+            "bfs",
+            "dfs",
+            "push-astar",
+            "fast",
+            "ultimate",
+        ):
             with self.subTest(algorithm=algorithm):
                 path, final, _, _ = solve(puzzle, algorithm)
                 self.assertEqual(["Down"], [move for move, _ in path])

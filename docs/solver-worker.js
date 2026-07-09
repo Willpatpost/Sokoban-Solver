@@ -124,7 +124,7 @@ function pushKey(state, board) {
 }
 
 function search(payload) {
-  if (payload.algorithm === "portfolio" || payload.algorithm === "fast") {
+  if (["ultimate", "portfolio", "fast"].includes(payload.algorithm)) {
     const greedy = search({...payload, algorithm: "push-greedy", maxVisited: 50000});
     if (greedy.path) return {...greedy, strategy: "Push Greedy"};
     const weighted = search({...payload, algorithm: "weighted-push-astar", maxVisited: 100000});

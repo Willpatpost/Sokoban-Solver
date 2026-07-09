@@ -26,6 +26,7 @@ try:
         portfolio_search,
         push_a_star_search,
         push_greedy_search,
+        ultimate_search,
         weighted_push_a_star_search,
     )
 except ImportError:
@@ -44,11 +45,13 @@ except ImportError:
         portfolio_search,
         push_a_star_search,
         push_greedy_search,
+        ultimate_search,
         weighted_push_a_star_search,
     )
 
 
 SEARCHES = {
+    "Ultimate Search": ultimate_search,
     "Fast Portfolio": portfolio_search,
     "Fast Push A*": weighted_push_a_star_search,
     "Push A*": push_a_star_search,
@@ -94,7 +97,7 @@ class SokomindApp(tk.Tk):
         self._timer_job: str | None = None
 
         self.puzzle_name = tk.StringVar(value="ultra-tiny")
-        self.algorithm = tk.StringVar(value="Fast Portfolio")
+        self.algorithm = tk.StringVar(value="Ultimate Search")
         self.status = tk.StringVar(value="Ready")
         self.move_text = tk.StringVar(value="Moves: 0")
         self.timer_text = tk.StringVar(value="Time: 00:00")
@@ -113,7 +116,7 @@ class SokomindApp(tk.Tk):
         ttk.Label(toolbar, text="Solver").pack(side="left")
         ttk.Combobox(
             toolbar, textvariable=self.algorithm,
-            values=list(SEARCHES), state="readonly", width=14,
+            values=list(SEARCHES), state="readonly", width=16,
         ).pack(side="left", padx=5)
         ttk.Button(toolbar, text="Solve", command=self.solve_animated).pack(side="left", padx=2)
         ttk.Button(toolbar, text="Hint", command=self.hint).pack(side="left", padx=2)
@@ -474,7 +477,11 @@ class SokomindApp(tk.Tk):
                     continue
                 path, _final, elapsed, visited = result
                 if path is None:
-                    suffix = " in current search budget" if algorithm == "Fast Portfolio" else ""
+                    suffix = (
+                        " in current search budget"
+                        if algorithm in {"Ultimate Search", "Fast Portfolio"}
+                        else ""
+                    )
                     self.status.set(f"{algorithm}: no solution{suffix} ({visited:,} states)")
                     continue
                 moves = [move for move, _position in path]
