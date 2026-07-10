@@ -126,7 +126,7 @@ class SokomindApp(tk.Tk):
         ttk.Button(toolbar, text="Undo", command=self.undo).pack(side="left", padx=2)
         ttk.Button(toolbar, text="Reset", command=self.reset).pack(side="left", padx=2)
         ttk.Button(toolbar, text="Home", command=self._show_home).pack(side="left", padx=2)
-        ttk.Button(toolbar, text="Open custom…", command=self.open_puzzle).pack(
+        ttk.Button(toolbar, text="Open custom...", command=self.open_puzzle).pack(
             side="right", padx=2
         )
 
@@ -176,7 +176,7 @@ class SokomindApp(tk.Tk):
             "Backspace / U       Undo\n"
             "R                   Reset\n\n"
             "X boxes belong on S goals. Lettered boxes belong on\n"
-            "the matching lowercase goal. Boxes can be pushed—not pulled."
+            "the matching lowercase goal. Boxes can be pushed, not pulled."
         )
         tk.Label(
             hero, text=directions, justify="left", background="#1d2633",
@@ -293,7 +293,7 @@ class SokomindApp(tk.Tk):
         self._reset_timer()
         self._completion_shown = False
         self.move_text.set("Moves: 0")
-        self.status.set("Ready — use arrow keys or WASD")
+        self.status.set("Ready - use arrow keys or WASD")
         self.draw()
 
     def reset(self) -> None:
@@ -355,7 +355,7 @@ class SokomindApp(tk.Tk):
         dialog.grab_set()
 
         tk.Label(
-            dialog, text="★", background="#202631", foreground="#f4c761",
+            dialog, text="\u2605", background="#202631", foreground="#f4c761",
             font=("Segoe UI Symbol", 42),
         ).pack(pady=(18, 0))
         tk.Label(
@@ -446,7 +446,7 @@ class SokomindApp(tk.Tk):
         job_id = self._job_id
         cancel_event = threading.Event()
         self._cancel_event = cancel_event
-        self.status.set(f"{algorithm} is searching…")
+        self.status.set(f"{algorithm} is searching...")
 
         def run() -> None:
             result = SEARCHES[algorithm](snapshot, cancel_event)
@@ -490,7 +490,7 @@ class SokomindApp(tk.Tk):
                 )
                 if purpose == "hint":
                     if moves:
-                        self.status.set(f"Hint: {moves[0]}  ·  {len(moves)} moves remain")
+                        self.status.set(f"Hint: {moves[0]}  -  {len(moves)} moves remain")
                 else:
                     self._animation = moves
                     self.after(self.ANIMATION_MS, self._animate_next)

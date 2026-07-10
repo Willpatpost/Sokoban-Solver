@@ -15,7 +15,7 @@
         <div><h1>Sokomind</h1><p>Think ahead. Push with purpose.</p></div>
       </div>
       <div class="toolbar">
-        <button id="home-button">⌂ Home</button>
+        <button id="home-button" aria-label="Home">&#8962; Home</button>
         <label>Solver
           <select id="algorithm">
             <option value="ultimate-bidirectional">Ultimate Bidirectional</option>
@@ -30,12 +30,12 @@
             <option value="dfs">DFS</option>
           </select>
         </label>
-        <button id="solve" class="primary">▶ Solve</button>
-        <button id="hint">✦ Hint</button>
-        <button id="stop">■ Stop</button>
+        <button id="solve" class="primary">&#9654; Solve</button>
+        <button id="hint">&#10022; Hint</button>
+        <button id="stop">&#9632; Stop</button>
         <span class="divider"></span>
-        <button id="undo">↶ Undo</button>
-        <button id="reset">↻ Reset</button>
+        <button id="undo">&#8630; Undo</button>
+        <button id="reset">&#8635; Reset</button>
       </div>
     </header>
 
@@ -54,17 +54,17 @@
           </div>
         </div>
         <div class="touch-controls" aria-label="Mobile movement controls">
-          <button class="touch-button up" data-move="Up" aria-label="Move up">↑</button>
-          <button class="touch-button left" data-move="Left" aria-label="Move left">←</button>
-          <button class="touch-button down" data-move="Down" aria-label="Move down">↓</button>
-          <button class="touch-button right" data-move="Right" aria-label="Move right">→</button>
+          <button class="touch-button up" data-move="Up" aria-label="Move up">&#8593;</button>
+          <button class="touch-button left" data-move="Left" aria-label="Move left">&#8592;</button>
+          <button class="touch-button down" data-move="Down" aria-label="Move down">&#8595;</button>
+          <button class="touch-button right" data-move="Right" aria-label="Move right">&#8594;</button>
         </div>
         <div id="board-wrap" class="board-wrap">
           <div id="board" class="board" tabindex="0" aria-label="Sokomind puzzle board"></div>
         </div>
         <footer>
           <p id="status">Use arrow keys or WASD to play.</p>
-          <p class="key-help"><kbd>↑</kbd><kbd>↓</kbd><kbd>←</kbd><kbd>→</kbd> or <kbd>WASD</kbd></p>
+          <p class="key-help"><kbd>&uarr;</kbd><kbd>&darr;</kbd><kbd>&larr;</kbd><kbd>&rarr;</kbd> or <kbd>WASD</kbd></p>
         </footer>
       </section>
     </main>
@@ -78,26 +78,26 @@
       <p class="tagline">Think ahead. Push with purpose.</p>
       <div class="how-to">
         <h3>How to play</h3>
-        <p>Push every box onto its matching goal. Boxes can be pushed, but never pulled—so plan your route carefully.</p>
+        <p>Push every box onto its matching goal. Boxes can be pushed, but never pulled, so plan your route carefully.</p>
         <div class="rules">
           <span><b>X</b> Generic box</span><span><b>S</b> Generic goal</span>
           <span><b>A</b> Lettered box</span><span><b>a</b> Matching goal</span>
         </div>
-        <p><kbd>↑</kbd><kbd>↓</kbd><kbd>←</kbd><kbd>→</kbd> or <kbd>WASD</kbd> to move · <kbd>U</kbd> undo · <kbd>R</kbd> reset</p>
+        <p><kbd>&uarr;</kbd><kbd>&darr;</kbd><kbd>&larr;</kbd><kbd>&rarr;</kbd> or <kbd>WASD</kbd> to move &middot; <kbd>U</kbd> undo &middot; <kbd>R</kbd> reset</p>
       </div>
-      <button id="start-game" class="primary start-button">Play Sokomind →</button>
+      <button id="start-game" class="primary start-button">Play Sokomind &rarr;</button>
     </div>
   </section>
 
   <dialog id="complete-dialog">
-    <div class="celebration">★</div>
+    <div class="celebration">&#9733;</div>
     <p class="eyebrow">Puzzle complete</p>
     <h2>Congratulations!</h2>
     <p>You passed <strong id="complete-level"></strong> in
       <strong id="complete-moves"></strong> moves.</p>
     <div class="dialog-actions">
       <button id="replay">Replay</button>
-      <button id="next-level" class="primary">Next level →</button>
+      <button id="next-level" class="primary">Next level &rarr;</button>
       <button id="close-dialog">Keep looking</button>
     </div>
   </dialog>

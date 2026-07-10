@@ -69,7 +69,11 @@ function renderLevels() {
     }));
     thumb.append(grid);
     const copy = document.createElement("span");
-    copy.innerHTML = `<strong>${title(key)}</strong><small>${rows[0].length} × ${rows.length}</small>`;
+    const name = document.createElement("strong");
+    const size = document.createElement("small");
+    name.textContent = title(key);
+    size.textContent = `${rows[0].length} x ${rows.length}`;
+    copy.append(name, size);
     button.append(thumb, copy); button.onclick = () => loadLevel(key);
     return button;
   }));
@@ -125,6 +129,11 @@ function loadLevel(key) {
   history = []; moves = 0; solvedShown = false; resetTimer();
   setStatus("Use arrow keys or WASD to play."); renderLevels(); render();
 }
+function setControlsBusy(active) {
+  $("solve").disabled = active;
+  $("hint").disabled = active;
+  $("algorithm").disabled = active;
+}
 function tryMove(direction, fromSolver = false) {
   const next = moveState(state, direction);
   if (!next) { if (!fromSolver) setStatus(`${direction} is blocked.`); return false; }
@@ -134,7 +143,7 @@ function tryMove(direction, fromSolver = false) {
   return true;
 }
 function complete() {
-  stop(false); freezeTimer(); setStatus(`Solved in ${moves} moves!`);
+  stop(false); setControlsBusy(false); freezeTimer(); setStatus(`Solved in ${moves} moves!`);
   if (solvedShown) return; solvedShown = true;
   $("complete-level").textContent = title(levelKey);
   $("complete-moves").textContent = moves;
@@ -154,6 +163,7 @@ function reset() {
 function stop(message = true) {
   workers.forEach(worker => worker.terminate()); workers = [];
   animation = []; clearTimeout(timer); timer = null;
+  setControlsBusy(false);
   if (message && state) setStatus("Stopped.");
 }
 function formatTime(seconds) {
@@ -254,7 +264,7 @@ function solverPlans(algorithm) {
   ];
 }
 function startBidirectionalSolver(purpose) {
-  stop(false); setStatus("Ultimate Bidirectional is searching…");
+  stop(false); setControlsBusy(true); setStatus("Ultimate Bidirectional is searching...");
   const hardware = navigator.hardwareConcurrency || 2;
   const reverseWorkers = Math.max(1, Math.min(hardware - 1, 3));
   const forwardRecords = new Map(), reverseRecords = new Map();
@@ -264,9 +274,10 @@ function startBidirectionalSolver(purpose) {
   const finish = (path) => {
     settled = true;
     workers.forEach(worker => worker.terminate()); workers = [];
+    setControlsBusy(false);
     const trimmed = trimPathToGoal(path);
     if (purpose === "hint") {
-      setStatus(`Hint: ${trimmed[0]} · ${trimmed.length} moves remain (Bidirectional)`);
+      setStatus(`Hint: ${trimmed[0]} - ${trimmed.length} moves remain (Bidirectional)`);
     } else {
       setStatus(`Met in the middle: ${trimmed.length} moves after ${totalVisited.toLocaleString()} states.`);
       animation = trimmed; animate();
@@ -308,7 +319,7 @@ function startBidirectionalSolver(purpose) {
       }
       if (data.type === "progress") {
         totalVisited += data.delta || 0;
-        setStatus(`${workers.length} bidirectional workers searching… ${totalVisited.toLocaleString()} states`);
+        setStatus(`${workers.length} bidirectional workers searching... ${totalVisited.toLocaleString()} states`);
         return;
       }
       if (settled) return;
@@ -318,6 +329,7 @@ function startBidirectionalSolver(purpose) {
         workers = workers.filter(item => item !== worker);
         workerSides.delete(worker);
         if (!settled && doneWorkers === reverseWorkers + 1) {
+          setControlsBusy(false);
           setStatus(`No bidirectional meeting found (${totalVisited.toLocaleString()} states).`);
         }
       }
@@ -328,7 +340,10 @@ function startBidirectionalSolver(purpose) {
       worker.terminate();
       workers = workers.filter(item => item !== worker);
       workerSides.delete(worker);
-      if (doneWorkers === reverseWorkers + 1) setStatus("Bidirectional worker failed.");
+      if (doneWorkers === reverseWorkers + 1) {
+        setControlsBusy(false);
+        setStatus("Bidirectional worker failed.");
+      }
     };
     worker.postMessage({state: serializeState(state), ...plan});
   };
@@ -348,7 +363,7 @@ function startSolver(purpose) {
     startBidirectionalSolver(purpose);
     return;
   }
-  stop(false); setStatus(`${$("algorithm").selectedOptions[0].text} is searching…`);
+  stop(false); setControlsBusy(true); setStatus(`${$("algorithm").selectedOptions[0].text} is searching...`);
   const plans = solverPlans($("algorithm").value);
   const maxWorkers = Math.max(1, Math.min(plans.length, navigator.hardwareConcurrency || 2));
   const queue = plans.slice(), active = new Map(), finished = [];
@@ -360,7 +375,7 @@ function startSolver(purpose) {
     worker.onmessage = ({data}) => {
       if (settled) return;
       if (data.type === "progress") {
-        setStatus(`${active.size} worker${active.size === 1 ? "" : "s"} searching… ${plan.label}: ${data.visited.toLocaleString()} states`);
+        setStatus(`${active.size} worker${active.size === 1 ? "" : "s"} searching... ${plan.label}: ${data.visited.toLocaleString()} states`);
         return;
       }
       worker.terminate();
@@ -370,9 +385,10 @@ function startSolver(purpose) {
       if (data.path) {
         settled = true;
         workers.forEach(item => item.terminate()); workers = [];
+        setControlsBusy(false);
         const path = trimPathToGoal(data.path);
         if (purpose === "hint") {
-          setStatus(`Hint: ${path[0]} · ${path.length} moves remain (${plan.label})`);
+          setStatus(`Hint: ${path[0]} - ${path.length} moves remain (${plan.label})`);
         } else {
           setStatus(`Found ${path.length} moves with ${plan.label} after ${totalVisited.toLocaleString()} states.`);
           animation = path; animate();
@@ -381,6 +397,7 @@ function startSolver(purpose) {
       }
       finished.push(data);
       if (!queue.length && active.size === 0) {
+        setControlsBusy(false);
         setStatus(`No solution found (${totalVisited.toLocaleString()} states across ${finished.length} worker${finished.length === 1 ? "" : "s"}).`);
         return;
       }
@@ -393,7 +410,10 @@ function startSolver(purpose) {
       active.delete(worker);
       finished.push({visited: 0});
       launchNext();
-      if (!queue.length && active.size === 0) setStatus("Solver worker failed.");
+      if (!queue.length && active.size === 0) {
+        setControlsBusy(false);
+        setStatus("Solver worker failed.");
+      }
     };
     worker.postMessage({state: serializeState(state), ...plan});
     launchNext();
@@ -436,3 +456,4 @@ document.addEventListener("keydown", (event) => {
 });
 window.addEventListener("resize", () => { fitBoardToScreen(); });
 loadLevel(levelKey);
+

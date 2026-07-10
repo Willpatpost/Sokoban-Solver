@@ -63,14 +63,24 @@ class Board:
     generic_goals: frozenset[Position]
     dedicated_goals: tuple[tuple[str, frozenset[Position]], ...]
     dead_squares: tuple[tuple[str, frozenset[Position]], ...]
+    _dedicated_goal_map: dict[str, frozenset[Position]] = field(
+        init=False, repr=False, compare=False, hash=False
+    )
+    _dead_square_map: dict[str, frozenset[Position]] = field(
+        init=False, repr=False, compare=False, hash=False
+    )
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "_dedicated_goal_map", dict(self.dedicated_goals))
+        object.__setattr__(self, "_dead_square_map", dict(self.dead_squares))
 
     def goals_for(self, label: str) -> frozenset[Position]:
         if label == "X":
             return self.generic_goals
-        return dict(self.dedicated_goals).get(label, frozenset())
+        return self._dedicated_goal_map.get(label, frozenset())
 
     def dead_for(self, label: str) -> frozenset[Position]:
-        return dict(self.dead_squares).get(label, frozenset())
+        return self._dead_square_map.get(label, frozenset())
 
 
 @dataclass(frozen=True)
@@ -210,7 +220,12 @@ def _reverse_push_distances(rows: tuple[str, ...], goal: Position) -> tuple[tupl
 
 
 def _push_distance(rows: tuple[str, ...], position: Position, goal: Position) -> float:
-    return dict(_reverse_push_distances(rows, goal)).get(position, math.inf)
+    return _push_distance_map(rows, goal).get(position, math.inf)
+
+
+@lru_cache(maxsize=2_000)
+def _push_distance_map(rows: tuple[str, ...], goal: Position) -> dict[Position, int]:
+    return dict(_reverse_push_distances(rows, goal))
 
 
 def _matching_cost(

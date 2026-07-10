@@ -48,10 +48,18 @@ python -m http.server 8000 --directory docs
 
 Then open `http://localhost:8000`.
 
+## Tests
+
+From the repository root:
+
+```powershell
+node --test docs/solver-worker.test.js
+```
+
 ## GitHub Pages deployment
 
 1. Push the repository to GitHub.
-2. Open **Settings → Pages**.
+2. Open **Settings -> Pages**.
 3. Choose **GitHub Actions** as the source.
 4. Push to `main` or manually run the included Pages workflow.
 

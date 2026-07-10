@@ -113,7 +113,7 @@ function neighbors(state, board) {
       const by = ny + dy, bx = nx + dx, beyond = pkey(by, bx);
       if (!board.floor.has(beyond) || occupied.has(beyond)) continue;
       const index = occupied.get(next), label = boxes[index][2];
-      if (corner(by, bx, board, label)) continue;
+      if (staticDead(by, bx, board, label)) continue;
       boxes = boxes.map((b, i) => i === index ? [by, bx, label] : b);
     }
     result.push({robot: [ny, nx], boxes, move});
@@ -145,7 +145,7 @@ function pushNeighbors(state, board, reachable = reachablePaths(state, board)) {
     for (const [move, [dy, dx]] of Object.entries(DIRS)) {
       const support = pkey(y - dy, x - dx), dest = pkey(y + dy, x + dx);
       if (!reachable.has(support) || !board.floor.has(dest) || occupied.has(dest)) continue;
-      if (corner(y + dy, x + dx, board, label)) continue;
+      if (staticDead(y + dy, x + dx, board, label)) continue;
       const boxes = state.boxes.map((b, i) => i === index ? [y + dy, x + dx, label] : b);
       result.push({robot: [y, x], boxes, path: [...reachable.get(support), move]});
     }
@@ -219,6 +219,17 @@ function flushRecords(records) {
   if (records.length) postMessage({type: "records", records: records.splice(0, records.length)});
 }
 
+function reconstructPath(cameFrom, signature) {
+  const path = [];
+  let current = signature;
+  while (cameFrom.has(current)) {
+    const {parent, segment} = cameFrom.get(current);
+    path.unshift(...segment);
+    current = parent;
+  }
+  return path;
+}
+
 function bidirectionalSide(payload) {
   const board = parse(payload.state);
   const initialBoxes = payload.state.boxes.map(([p, label]) => [...p.split(",").map(Number), label]);
@@ -285,9 +296,11 @@ function search(payload) {
   const board = parse(payload.state), initial = {
     robot: payload.state.robot,
     boxes: payload.state.boxes.map(([p, label]) => [...p.split(",").map(Number), label]),
-    cost: 0, path: [],
+    cost: 0,
+    parent: null,
+    segment: [],
   };
-  const algorithm = payload.algorithm, frontier = new Heap(), seen = new Map();
+  const algorithm = payload.algorithm, frontier = new Heap(), seen = new Map(), cameFrom = new Map();
   const pushMacro = ["push-astar", "push-greedy", "weighted-push-astar"].includes(algorithm);
   const weight = algorithm === "weighted-push-astar" ? 1.6 : 1;
   let order = 0, visited = 0;
@@ -303,12 +316,15 @@ function search(payload) {
       key(current.robot, current.boxes.map(b => b.join(",")));
     if (seen.has(signature) && seen.get(signature) <= current.cost) continue;
     seen.set(signature, current.cost); visited++;
-    if (goal(current.boxes, board.goals)) return {path: current.path, visited};
+    if (current.parent !== null) {
+      cameFrom.set(signature, {parent: current.parent, segment: current.segment});
+    }
+    if (goal(current.boxes, board.goals)) return {path: reconstructPath(cameFrom, signature), visited};
     const nextStates = pushMacro ? pushNeighbors(current, board, reachable) :
       neighbors(current, board).map(n => ({robot: n.robot, boxes: n.boxes, path: [n.move]}));
     for (const next of nextStates) {
       const child = {robot: next.robot, boxes: next.boxes, cost: current.cost + next.path.length,
-        path: [...current.path, ...next.path]};
+        parent: signature, segment: next.path};
       frontier.push([score(child), order++, child]);
     }
     if (visited % 10000 === 0) postMessage({type: "progress", visited});
