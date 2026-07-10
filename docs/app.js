@@ -79,6 +79,9 @@ function render() {
   $("move-count").textContent = moves;
   const board = $("board"), rows = state.board.rows;
   board.style.gridTemplateColumns = `repeat(${rows[0].length}, 1fr)`;
+  board.style.setProperty("--cols", rows[0].length);
+  board.style.setProperty("--rows", rows.length);
+  fitBoardToScreen();
   const cells = [];
   rows.forEach((row, y) => [...row].forEach((_ch, x) => {
     const p = pos(y, x), cell = document.createElement("div");
@@ -99,6 +102,23 @@ function render() {
     cells.push(cell);
   }));
   board.replaceChildren(...cells);
+}
+function fitBoardToScreen() {
+  if (!state) return;
+  const board = $("board"), wrap = $("board-wrap"), rows = state.board.rows;
+  if (!board || !wrap || !window.matchMedia("(max-width: 700px)").matches) {
+    board?.style.removeProperty("--tile-size");
+    return;
+  }
+  const cols = rows[0].length, rowCount = rows.length;
+  const wrapWidth = Math.max(240, wrap.clientWidth || window.innerWidth);
+  const maxBoardHeight = Math.max(260, window.innerHeight * 0.48);
+  const boardPadding = 16;
+  const gap = 1;
+  const byWidth = (wrapWidth - boardPadding * 2 - gap * (cols - 1)) / cols;
+  const byHeight = (maxBoardHeight - boardPadding * 2 - gap * (rowCount - 1)) / rowCount;
+  const size = Math.floor(Math.max(15, Math.min(34, byWidth, byHeight)));
+  board.style.setProperty("--tile-size", `${size}px`);
 }
 function loadLevel(key) {
   stop(); levelKey = key; state = parse(LEVELS[key]); initialState = cloneState(state);
@@ -371,4 +391,5 @@ document.addEventListener("keydown", (event) => {
   else if (event.key === "Backspace" || event.key.toLowerCase() === "u") undo();
   else if (event.key.toLowerCase() === "r") reset();
 });
+window.addEventListener("resize", () => { fitBoardToScreen(); });
 loadLevel(levelKey);
