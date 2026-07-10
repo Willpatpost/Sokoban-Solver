@@ -92,7 +92,7 @@ main { flex: 1; min-height: 0; display: grid; grid-template-columns: 245px 1fr; 
 }
 .move-pill strong { color: var(--text); font-size: 1.1rem; }
 .board-wrap {
-  flex: 1; min-height: 380px; display: grid; place-items: center; overflow: hidden;
+  order: 3; flex: 1; min-height: 380px; display: grid; place-items: center; overflow: hidden;
   border: 1px solid var(--line); border-radius: 16px;
   background: radial-gradient(circle, #1d2734, #111720 70%);
   box-shadow: inset 0 0 80px #0005;
@@ -131,15 +131,15 @@ main { flex: 1; min-height: 0; display: grid; grid-template-columns: 245px 1fr; 
 footer { display: flex; justify-content: space-between; gap: 1rem; padding-top: .8rem; color: var(--muted); font-size: .83rem; }
 kbd { border: 1px solid #435166; border-bottom-width: 2px; border-radius: 5px; background: #1d2633; padding: .15rem .35rem; margin-left: .2rem; }
 .touch-controls {
-  display: grid; grid-template-columns: repeat(3, minmax(58px, 76px));
+  order: 2; display: grid; grid-template-columns: repeat(3, minmax(46px, 58px));
   grid-template-areas:
     ". up ."
     "left down right";
-  justify-content: center; gap: .6rem; padding-top: .9rem;
+  justify-content: center; gap: .38rem; padding: 0 0 .85rem;
   touch-action: manipulation; user-select: none;
 }
 .touch-button {
-  min-height: 56px; border-radius: 16px; font-size: 1.55rem; font-weight: 900;
+  min-height: 42px; border-radius: 13px; font-size: 1.25rem; font-weight: 900;
   background: linear-gradient(145deg, #263449, #192231);
   border-color: #40546f; box-shadow: 0 7px 16px #0005;
 }
@@ -221,6 +221,7 @@ dialog > p:not(.eyebrow) { color: var(--muted); line-height: 1.55; }
   .stats { flex-direction: column; gap: .35rem; }
   .move-pill { padding: .35rem .55rem; font-size: .78rem; }
   .board-wrap {
+    order: 2;
     width: 100%; min-height: 0; max-height: 50vh; padding: .35rem;
     align-self: center;
   }
@@ -230,8 +231,9 @@ dialog > p:not(.eyebrow) { color: var(--muted); line-height: 1.55; }
   .piece.box { border-width: 1px; border-radius: 5px; box-shadow: inset 0 -3px 0 #9c5724, 0 3px 6px #0006; }
   .piece.robot { border-width: 1px; box-shadow: inset 0 -3px 0 #256da6, 0 3px 6px #0006; }
   .touch-controls {
+    order: 3;
     grid-template-columns: repeat(3, minmax(58px, 72px));
-    gap: .5rem; padding-top: .7rem;
+    gap: .5rem; padding: .7rem 0 0;
   }
   .touch-button { min-height: 54px; border-radius: 15px; font-size: 1.45rem; }
   footer { display: block; text-align: center; padding-top: .65rem; }

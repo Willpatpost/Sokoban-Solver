@@ -2,6 +2,17 @@ const DIRS = {Up: [-1, 0], Down: [1, 0], Left: [0, -1], Right: [0, 1]};
 const OPPOSITE = {Up: "Down", Down: "Up", Left: "Right", Right: "Left"};
 const key = (robot, boxes) => `${robot.join(",")}|${[...boxes].sort().join(";")}`;
 const pkey = (y, x) => `${y},${x}`;
+function hashKey(text) {
+  let h1 = 0xdeadbeef ^ text.length, h2 = 0x41c6ce57 ^ text.length;
+  for (let i = 0, ch; i < text.length; i++) {
+    ch = text.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return 4294967296 * (2097151 & h2) + (h1 >>> 0);
+}
 
 class Heap {
   constructor() { this.items = []; }
@@ -168,7 +179,7 @@ function reversePullNeighbors(state, board, reachable = reachablePaths(state, bo
         robot: [y - 2 * dy, x - 2 * dx],
         boxes,
         cost: state.cost + 1 + walkFromPushLanding.length,
-        suffix: [move, ...walkFromPushLanding, ...state.suffix],
+        segment: [move, ...walkFromPushLanding],
       });
     }
   });
@@ -196,7 +207,7 @@ function reverseStartStates(board, initialBoxes, shard) {
   for (const position of board.floor) {
     if (occupied.has(position)) continue;
     const robot = position.split(",").map(Number);
-    const state = {robot, boxes, cost: 0, suffix: []};
+    const state = {robot, boxes, cost: 0};
     const reachable = reachablePaths(state, board);
     const signature = pushKey(state, reachable);
     if (!unique.has(signature)) unique.set(signature, state);
@@ -204,15 +215,15 @@ function reverseStartStates(board, initialBoxes, shard) {
   return [...unique.values()].filter((_state, index) => index % shard.count === shard.index);
 }
 
-function flushVisits(visits) {
-  if (visits.length) postMessage({type: "visits", visits: visits.splice(0, visits.length)});
+function flushRecords(records) {
+  if (records.length) postMessage({type: "records", records: records.splice(0, records.length)});
 }
 
 function bidirectionalSide(payload) {
   const board = parse(payload.state);
   const initialBoxes = payload.state.boxes.map(([p, label]) => [...p.split(",").map(Number), label]);
   const forward = payload.mode === "bidir-forward";
-  const frontier = new Heap(), seen = new Map(), visits = [];
+  const frontier = new Heap(), seen = new Map(), records = [];
   let order = 0, visited = 0, reported = 0;
   const starts = forward
     ? [{robot: payload.state.robot, boxes: initialBoxes, cost: 0, path: []}]
@@ -223,21 +234,30 @@ function bidirectionalSide(payload) {
     const current = frontier.pop()[2];
     const reachable = reachablePaths(current, board);
     const signature = pushKey(current, reachable);
+    const hashed = hashKey(signature);
     if (seen.has(signature) && seen.get(signature) <= current.cost) continue;
     seen.set(signature, current.cost); visited++;
-    visits.push(forward
-      ? {side: "forward", key: signature, robot: current.robot, boxes: current.boxes, path: current.path}
-      : {side: "reverse", key: signature, robot: current.robot, boxes: current.boxes, suffix: current.suffix});
+    records.push({
+      h: hashed,
+      key: signature,
+      parent: current.parent ?? null,
+      segment: current.segment || [],
+      robot: current.robot,
+    });
 
-    if (visits.length >= 150) flushVisits(visits);
+    if (records.length >= 500) flushRecords(records);
     const nextStates = forward
       ? pushNeighbors(current, board, reachable).map(next => ({
           robot: next.robot,
           boxes: next.boxes,
           cost: current.cost + next.path.length,
-          path: [...current.path, ...next.path],
+          parent: hashed,
+          segment: next.path,
         }))
-      : reversePullNeighbors(current, board, reachable);
+      : reversePullNeighbors(current, board, reachable).map(next => ({
+          ...next,
+          parent: hashed,
+        }));
     for (const next of nextStates) {
       const score = forward
         ? next.cost + 1.4 * heuristic(next.boxes, board)
@@ -249,7 +269,7 @@ function bidirectionalSide(payload) {
       reported = visited;
     }
   }
-  flushVisits(visits);
+  flushRecords(records);
   postMessage({type: "progress", visited, delta: visited - reported});
   postMessage({type: "done", visited});
 }

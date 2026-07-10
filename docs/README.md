@@ -22,6 +22,11 @@ expanding every single walking step.
 Searches are uncapped. They keep running until they find a solution, exhaust
 every reachable state, or you press **Stop**.
 
+Very large puzzles can still hit browser memory limits before the search space
+is exhausted. Ultimate Bidirectional uses compact parent records and fewer
+reverse workers to reduce memory pressure, but Chrome can still terminate a tab
+if the puzzle requires millions of retained states.
+
 ## How to play
 
 Push every box onto its matching goal:

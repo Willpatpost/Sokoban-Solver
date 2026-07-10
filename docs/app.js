@@ -212,6 +212,34 @@ function walkBetween(board, boxes, start, target) {
   }
   return null;
 }
+function boxesFromMeetKey(key) {
+  const boxPart = key.split("|")[1] || "";
+  if (!boxPart) return [];
+  return boxPart.split(";").filter(Boolean).map(item => {
+    const [y, x, label] = item.split(",");
+    return [Number(y), Number(x), label];
+  });
+}
+function reconstructMeetPath(meetKey, forwardSeen, reverseSeen) {
+  const forwardSegments = [];
+  let current = forwardSeen.get(meetKey);
+  while (current?.parent) {
+    forwardSegments.unshift(...current.segment);
+    current = forwardSeen.get(current.parent);
+  }
+
+  const reverseSegments = [];
+  current = reverseSeen.get(meetKey);
+  while (current?.parent) {
+    reverseSegments.push(...current.segment);
+    current = reverseSeen.get(current.parent);
+  }
+
+  const forward = forwardSeen.get(meetKey), reverse = reverseSeen.get(meetKey);
+  const bridge = walkBetween(state.board, boxesFromMeetKey(forward.key), forward.robot, reverse.robot);
+  if (!bridge) return null;
+  return [...forwardSegments, ...bridge, ...reverseSegments];
+}
 function solverPlans(algorithm) {
   if (!["ultimate", "portfolio", "fast"].includes(algorithm)) {
     return [{algorithm, label: $("algorithm").selectedOptions[0].text}];
@@ -225,35 +253,38 @@ function solverPlans(algorithm) {
 function startBidirectionalSolver(purpose) {
   stop(false); setStatus("Ultimate Bidirectional is searching…");
   const hardware = navigator.hardwareConcurrency || 2;
-  const reverseWorkers = Math.max(1, Math.min(hardware - 1, 6));
-  const forwardSeen = new Map(), reverseSeen = new Map();
+  const reverseWorkers = Math.max(1, Math.min(hardware - 1, 3));
+  const forwardRecords = new Map(), reverseRecords = new Map();
+  const workerSides = new Map();
   let settled = false, totalVisited = 0, doneWorkers = 0;
 
-  const finish = (forward, reverse, label) => {
-    const bridge = walkBetween(state.board, forward.boxes, forward.robot, reverse.robot);
-    if (!bridge) return false;
-    const path = trimPathToGoal([...forward.path, ...bridge, ...reverse.suffix]);
+  const finish = (path) => {
     settled = true;
     workers.forEach(worker => worker.terminate()); workers = [];
+    const trimmed = trimPathToGoal(path);
     if (purpose === "hint") {
-      setStatus(`Hint: ${path[0]} · ${path.length} moves remain (${label})`);
+      setStatus(`Hint: ${trimmed[0]} · ${trimmed.length} moves remain (Bidirectional)`);
     } else {
-      setStatus(`Met in the middle: ${path.length} moves after ${totalVisited.toLocaleString()} states.`);
-      animation = path; animate();
+      setStatus(`Met in the middle: ${trimmed.length} moves after ${totalVisited.toLocaleString()} states.`);
+      animation = trimmed; animate();
     }
-    return true;
   };
 
-  const inspectVisits = (visits, workerLabel) => {
-    for (const visit of visits) {
-      if (visit.side === "forward") {
-        forwardSeen.set(visit.key, visit);
-        const reverse = reverseSeen.get(visit.key);
-        if (reverse && finish(visit, reverse, workerLabel)) return;
-      } else {
-        reverseSeen.set(visit.key, visit);
-        const forward = forwardSeen.get(visit.key);
-        if (forward && finish(forward, visit, workerLabel)) return;
+  const requestSolve = (meetKey) => {
+    if (settled) return;
+    const path = reconstructMeetPath(meetKey, forwardRecords, reverseRecords);
+    if (path) finish(path);
+  };
+
+  const inspectRecords = (records, worker) => {
+    const side = workerSides.get(worker);
+    const recordMap = side === "forward" ? forwardRecords : reverseRecords;
+    const otherMap = side === "forward" ? reverseRecords : forwardRecords;
+    for (const record of records) {
+      recordMap.set(record.h, record);
+      if (otherMap.has(record.h) && otherMap.get(record.h).key === record.key) {
+        requestSolve(record.h);
+        return;
       }
     }
   };
@@ -261,10 +292,10 @@ function startBidirectionalSolver(purpose) {
   const launch = (plan) => {
     const worker = new Worker("solver-worker.js");
     workers.push(worker);
+    workerSides.set(worker, plan.side);
     worker.onmessage = ({data}) => {
-      if (settled) return;
-      if (data.type === "visits") {
-        inspectVisits(data.visits, plan.label);
+      if (data.type === "records") {
+        inspectRecords(data.records, worker);
         return;
       }
       if (data.type === "progress") {
@@ -272,10 +303,12 @@ function startBidirectionalSolver(purpose) {
         setStatus(`${workers.length} bidirectional workers searching… ${totalVisited.toLocaleString()} states`);
         return;
       }
+      if (settled) return;
       if (data.type === "done") {
         doneWorkers++;
         worker.terminate();
         workers = workers.filter(item => item !== worker);
+        workerSides.delete(worker);
         if (!settled && doneWorkers === reverseWorkers + 1) {
           setStatus(`No bidirectional meeting found (${totalVisited.toLocaleString()} states).`);
         }
@@ -286,15 +319,17 @@ function startBidirectionalSolver(purpose) {
       doneWorkers++;
       worker.terminate();
       workers = workers.filter(item => item !== worker);
+      workerSides.delete(worker);
       if (doneWorkers === reverseWorkers + 1) setStatus("Bidirectional worker failed.");
     };
     worker.postMessage({state: serializeState(state), ...plan});
   };
 
-  launch({mode: "bidir-forward", label: "Forward Push Search"});
+  launch({mode: "bidir-forward", side: "forward", label: "Forward Push Search"});
   for (let index = 0; index < reverseWorkers; index++) {
     launch({
       mode: "bidir-reverse",
+      side: "reverse",
       label: `Reverse Unsolver ${index + 1}`,
       reverseShard: {index, count: reverseWorkers},
     });
