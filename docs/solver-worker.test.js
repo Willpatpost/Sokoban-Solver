@@ -59,3 +59,20 @@ test("browser worker prunes static dead-square pushes", () => {
   assert.equal(worker.staticDead(2, 4, board, "X"), true);
   assert.equal(moves.includes("Right"), false);
 });
+
+test("browser worker prunes 2x2 box deadlocks", () => {
+  const worker = loadWorker();
+  const board = worker.parse({
+    rows: [
+      "OOOOOO",
+      "O    O",
+      "O RXXO",
+      "O  XOO",
+      "O  SSO",
+      "OOOOOO",
+    ],
+  });
+  const boxes = [[2, 3, "X"], [2, 4, "X"], [3, 3, "X"]];
+
+  assert.equal(worker.creates2x2Deadlock(boxes, board, [3, 3]), true);
+});

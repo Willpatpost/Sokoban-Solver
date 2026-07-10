@@ -90,6 +90,18 @@ class SokomindTests(unittest.TestCase):
         pushed = apply_move(state, "Right")
         self.assertIn(("X", (2, 4)), pushed.boxes)
 
+    def test_static_2x2_box_deadlock_push_is_pruned(self):
+        state = parse_puzzle([
+            "OOOOOO",
+            "O    O",
+            "O  XXO",
+            "ORX OO",
+            "O SSSO",
+            "OOOOOO",
+        ])
+        moves = [move for _, move in get_neighbors(state)]
+        self.assertNotIn("Right", moves)
+
     def test_apply_move_and_render_preserve_goals(self):
         state = parse_puzzle(["OOOOO", "O R O", "O A O", "O a O", "OOOOO"])
         final = apply_move(state, "Down")

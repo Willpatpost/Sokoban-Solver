@@ -2,17 +2,7 @@ const DIRS = {Up: [-1, 0], Down: [1, 0], Left: [0, -1], Right: [0, 1]};
 const OPPOSITE = {Up: "Down", Down: "Up", Left: "Right", Right: "Left"};
 const key = (robot, boxes) => `${robot.join(",")}|${[...boxes].sort().join(";")}`;
 const pkey = (y, x) => `${y},${x}`;
-function hashKey(text) {
-  let h1 = 0xdeadbeef ^ text.length, h2 = 0x41c6ce57 ^ text.length;
-  for (let i = 0, ch; i < text.length; i++) {
-    ch = text.charCodeAt(i);
-    h1 = Math.imul(h1 ^ ch, 2654435761);
-    h2 = Math.imul(h2 ^ ch, 1597334677);
-  }
-  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
-  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
-  return 4294967296 * (2097151 & h2) + (h1 >>> 0);
-}
+const boxSignature = (boxes) => boxes.map(box => box.join(",")).sort().join(";");
 
 class Heap {
   constructor() { this.items = []; }
@@ -37,14 +27,19 @@ class Heap {
   get length() { return this.items.length; }
 }
 function parse(data) {
-  const floor = new Set(), walls = new Set(), goals = new Map();
+  const floor = new Set(), walls = new Set(), goals = new Map(), goalsByLabel = new Map();
   data.rows.forEach((row, y) => [...row].forEach((ch, x) => {
     const p = pkey(y, x);
     if (ch === "O") walls.add(p); else floor.add(p);
-    if (ch === "S") goals.set(p, "X"); else if (/[a-z]/.test(ch)) goals.set(p, ch.toUpperCase());
+    const label = ch === "S" ? "X" : /[a-z]/.test(ch) ? ch.toUpperCase() : null;
+    if (label) {
+      goals.set(p, label);
+      if (!goalsByLabel.has(label)) goalsByLabel.set(label, []);
+      goalsByLabel.get(label).push(p);
+    }
   }));
   const pushDistances = new Map([...goals.keys()].map(goal => [goal, reversePushDistances(floor, goal)]));
-  return {rows: data.rows, floor, walls, goals, pushDistances};
+  return {rows: data.rows, floor, walls, goals, goalsByLabel, pushDistances, heuristicMemo: new Map()};
 }
 function reversePushDistances(floor, goalKey) {
   const [gy, gx] = goalKey.split(",").map(Number);
@@ -62,6 +57,8 @@ function reversePushDistances(floor, goalKey) {
   return distances;
 }
 function heuristic(boxes, board) {
+  const signature = boxSignature(boxes);
+  if (board.heuristicMemo.has(signature)) return board.heuristicMemo.get(signature);
   const byLabel = new Map();
   boxes.forEach(([y, x, label]) => {
     if (!byLabel.has(label)) byLabel.set(label, []);
@@ -69,7 +66,14 @@ function heuristic(boxes, board) {
   });
   let total = 0;
   for (const [label, positions] of byLabel) {
-    const targets = [...board.goals].filter(([, l]) => l === label).map(([p]) => p);
+    const targets = board.goalsByLabel.get(label) || [];
+    if (positions.length > 8) {
+      total += positions.reduce((sum, [y, x]) => {
+        const best = Math.min(...targets.map(target => board.pushDistances.get(target)?.get(pkey(y, x)) ?? Infinity));
+        return sum + best;
+      }, 0);
+      continue;
+    }
     const memo = new Map();
     const assign = (i, mask) => {
       if (i === positions.length) return 0;
@@ -86,6 +90,55 @@ function heuristic(boxes, board) {
     };
     total += assign(0, 0);
   }
+  board.heuristicMemo.set(signature, total);
+  return total;
+}
+function targetMapFromBoxes(boxes) {
+  const targets = new Map();
+  boxes.forEach(([y, x, label]) => {
+    if (!targets.has(label)) targets.set(label, []);
+    targets.get(label).push([y, x]);
+  });
+  return targets;
+}
+function matchingManhattan(positions, targets) {
+  const memo = new Map();
+  const assign = (index, mask) => {
+    if (index === positions.length) return 0;
+    const key = `${index},${mask}`;
+    if (memo.has(key)) return memo.get(key);
+    let best = Infinity;
+    for (let targetIndex = 0; targetIndex < targets.length; targetIndex++) {
+      if (mask & (1 << targetIndex)) continue;
+      const [y, x] = positions[index], [ty, tx] = targets[targetIndex];
+      best = Math.min(best, Math.abs(y - ty) + Math.abs(x - tx) + assign(index + 1, mask | (1 << targetIndex)));
+    }
+    memo.set(key, best);
+    return best;
+  };
+  return assign(0, 0);
+}
+function homeHeuristic(boxes, targetsByLabel) {
+  const signature = boxSignature(boxes);
+  if (!targetsByLabel.memo) targetsByLabel.memo = new Map();
+  if (targetsByLabel.memo.has(signature)) return targetsByLabel.memo.get(signature);
+  const byLabel = new Map();
+  boxes.forEach(([y, x, label]) => {
+    if (!byLabel.has(label)) byLabel.set(label, []);
+    byLabel.get(label).push([y, x]);
+  });
+  let total = 0;
+  for (const [label, positions] of byLabel) {
+    const targets = targetsByLabel.get(label) || [];
+    if (positions.length > 8) {
+      total += positions.reduce((sum, [y, x]) => (
+        sum + Math.min(...targets.map(([ty, tx]) => Math.abs(y - ty) + Math.abs(x - tx)))
+      ), 0);
+      continue;
+    }
+    total += matchingManhattan(positions, targets);
+  }
+  targetsByLabel.memo.set(signature, total);
   return total;
 }
 function goal(boxes, goals) {
@@ -99,9 +152,26 @@ function corner(y, x, board, label) {
 }
 function staticDead(y, x, board, label) {
   if (board.goals.get(pkey(y, x)) === label) return false;
-  return ![...board.goals]
-    .filter(([, goalLabel]) => goalLabel === label)
-    .some(([goal]) => board.pushDistances.get(goal)?.has(pkey(y, x)));
+  return !(board.goalsByLabel.get(label) || [])
+    .some(goal => board.pushDistances.get(goal)?.has(pkey(y, x)));
+}
+function creates2x2Deadlock(boxes, board, movedBox) {
+  const occupied = new Map(boxes.map(([y, x, label]) => [pkey(y, x), label]));
+  const [boxY, boxX] = movedBox;
+  for (const originY of [boxY - 1, boxY]) {
+    for (const originX of [boxX - 1, boxX]) {
+      const cells = [
+        [originY, originX], [originY + 1, originX],
+        [originY, originX + 1], [originY + 1, originX + 1],
+      ];
+      if (!cells.every(([y, x]) => board.walls.has(pkey(y, x)) || occupied.has(pkey(y, x)))) continue;
+      if (cells.some(([y, x]) => {
+        const label = occupied.get(pkey(y, x));
+        return label && board.goals.get(pkey(y, x)) !== label;
+      })) return true;
+    }
+  }
+  return false;
 }
 function neighbors(state, board) {
   const occupied = new Map(state.boxes.map((b, i) => [pkey(b[0], b[1]), i])), result = [];
@@ -113,8 +183,8 @@ function neighbors(state, board) {
       const by = ny + dy, bx = nx + dx, beyond = pkey(by, bx);
       if (!board.floor.has(beyond) || occupied.has(beyond)) continue;
       const index = occupied.get(next), label = boxes[index][2];
-      if (staticDead(by, bx, board, label)) continue;
       boxes = boxes.map((b, i) => i === index ? [by, bx, label] : b);
+      if (staticDead(by, bx, board, label) || creates2x2Deadlock(boxes, board, [by, bx])) continue;
     }
     result.push({robot: [ny, nx], boxes, move});
   }
@@ -124,18 +194,31 @@ function neighbors(state, board) {
 function reachablePaths(state, board) {
   const occupied = new Set(state.boxes.map(b => pkey(b[0], b[1])));
   const start = pkey(state.robot[0], state.robot[1]);
-  const paths = new Map([[start, []]]);
+  const parents = new Map([[start, {parent: null, move: null}]]);
   const queue = [state.robot];
   for (let head = 0; head < queue.length; head++) {
-    const [y, x] = queue[head], path = paths.get(pkey(y, x));
+    const [y, x] = queue[head], current = pkey(y, x);
     for (const [move, [dy, dx]] of Object.entries(DIRS)) {
       const ny = y + dy, nx = x + dx, next = pkey(ny, nx);
-      if (paths.has(next) || !board.floor.has(next) || occupied.has(next)) continue;
-      paths.set(next, [...path, move]);
+      if (parents.has(next) || !board.floor.has(next) || occupied.has(next)) continue;
+      parents.set(next, {parent: current, move});
       queue.push([ny, nx]);
     }
   }
-  return paths;
+  return {
+    has: (position) => parents.has(position),
+    get: (position) => {
+      const path = [];
+      let current = position;
+      while (parents.has(current) && parents.get(current).parent !== null) {
+        const record = parents.get(current);
+        path.unshift(record.move);
+        current = record.parent;
+      }
+      return path;
+    },
+    keys: () => parents.keys(),
+  };
 }
 
 function pushNeighbors(state, board, reachable = reachablePaths(state, board)) {
@@ -145,8 +228,8 @@ function pushNeighbors(state, board, reachable = reachablePaths(state, board)) {
     for (const [move, [dy, dx]] of Object.entries(DIRS)) {
       const support = pkey(y - dy, x - dx), dest = pkey(y + dy, x + dx);
       if (!reachable.has(support) || !board.floor.has(dest) || occupied.has(dest)) continue;
-      if (staticDead(y + dy, x + dx, board, label)) continue;
       const boxes = state.boxes.map((b, i) => i === index ? [y + dy, x + dx, label] : b);
+      if (staticDead(y + dy, x + dx, board, label) || creates2x2Deadlock(boxes, board, [y + dy, x + dx])) continue;
       result.push({robot: [y, x], boxes, path: [...reachable.get(support), move]});
     }
   });
@@ -154,7 +237,10 @@ function pushNeighbors(state, board, reachable = reachablePaths(state, board)) {
 }
 
 function pushKey(state, reachable) {
-  const robotRegion = [...reachable.keys()].sort()[0];
+  let robotRegion = null;
+  for (const position of reachable.keys()) {
+    if (robotRegion === null || position < robotRegion) robotRegion = position;
+  }
   return `${robotRegion}|${[...state.boxes.map(b => b.join(","))].sort().join(";")}`;
 }
 
@@ -233,6 +319,7 @@ function reconstructPath(cameFrom, signature) {
 function bidirectionalSide(payload) {
   const board = parse(payload.state);
   const initialBoxes = payload.state.boxes.map(([p, label]) => [...p.split(",").map(Number), label]);
+  const initialTargets = targetMapFromBoxes(initialBoxes);
   const forward = payload.mode === "bidir-forward";
   const frontier = new Heap(), seen = new Map(), records = [];
   let order = 0, visited = 0, reported = 0;
@@ -245,11 +332,10 @@ function bidirectionalSide(payload) {
     const current = frontier.pop()[2];
     const reachable = reachablePaths(current, board);
     const signature = pushKey(current, reachable);
-    const hashed = hashKey(signature);
     if (seen.has(signature) && seen.get(signature) <= current.cost) continue;
     seen.set(signature, current.cost); visited++;
     records.push({
-      h: hashed,
+      id: signature,
       key: signature,
       parent: current.parent ?? null,
       segment: current.segment || [],
@@ -257,22 +343,28 @@ function bidirectionalSide(payload) {
     });
 
     if (records.length >= 500) flushRecords(records);
+    if (payload.maxVisited && visited >= payload.maxVisited) {
+      flushRecords(records);
+      postMessage({type: "progress", visited, delta: visited - reported});
+      postMessage({type: "done", visited, cutoff: true});
+      return;
+    }
     const nextStates = forward
       ? pushNeighbors(current, board, reachable).map(next => ({
           robot: next.robot,
           boxes: next.boxes,
           cost: current.cost + next.path.length,
-          parent: hashed,
+          parent: signature,
           segment: next.path,
         }))
       : reversePullNeighbors(current, board, reachable).map(next => ({
           ...next,
-          parent: hashed,
+          parent: signature,
         }));
     for (const next of nextStates) {
       const score = forward
         ? next.cost + 1.4 * heuristic(next.boxes, board)
-        : next.cost;
+        : next.cost + 1.2 * homeHeuristic(next.boxes, initialTargets);
       frontier.push([score, order++, next]);
     }
     if (visited % 1000 === 0) {
@@ -320,6 +412,9 @@ function search(payload) {
       cameFrom.set(signature, {parent: current.parent, segment: current.segment});
     }
     if (goal(current.boxes, board.goals)) return {path: reconstructPath(cameFrom, signature), visited};
+    if (payload.maxVisited && visited >= payload.maxVisited) {
+      return {path: null, visited, cutoff: true};
+    }
     const nextStates = pushMacro ? pushNeighbors(current, board, reachable) :
       neighbors(current, board).map(n => ({robot: n.robot, boxes: n.boxes, path: [n.move]}));
     for (const next of nextStates) {

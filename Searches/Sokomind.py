@@ -248,6 +248,8 @@ def _matching_cost(
         ]
         for pos in positions
     ]
+    if rows is not None and size > 8:
+        return sum(min(row) for row in costs)
     if rows is not None:
         @lru_cache(maxsize=None)
         def assign(index: int, used_mask: int) -> float:
@@ -339,6 +341,35 @@ def is_deadlock(box_pos: Position, walls_or_board, goals=None, box_label: str = 
     )
 
 
+def creates_2x2_deadlock(
+    boxes: Iterable[Box],
+    board: Board,
+    moved_box: Position,
+) -> bool:
+    """Return True when a push creates an immovable 2x2 block.
+
+    A 2x2 square filled entirely by walls and boxes cannot be opened by legal
+    pushes. If any box in that block is not already on a matching goal, the
+    branch cannot lead to a solved board.
+    """
+    occupied = {pos: label for label, pos in boxes}
+    box_y, box_x = moved_box
+    for origin_y in (box_y - 1, box_y):
+        for origin_x in (box_x - 1, box_x):
+            cells = (
+                (origin_y, origin_x), (origin_y + 1, origin_x),
+                (origin_y, origin_x + 1), (origin_y + 1, origin_x + 1),
+            )
+            if not all(cell in board.walls or cell in occupied for cell in cells):
+                continue
+            if any(
+                cell in occupied and cell not in board.goals_for(occupied[cell])
+                for cell in cells
+            ):
+                return True
+    return False
+
+
 def get_neighbors(
     state: State,
     algorithm: str = "astar",
@@ -371,6 +402,10 @@ def get_neighbors(
             moved.remove((label, destination))
             moved.append((label, box_destination))
             boxes = tuple(sorted(moved))
+            if prune_deadlocks and creates_2x2_deadlock(
+                boxes, state.board, box_destination
+            ):
+                continue
         neighbors.append(
             (State(destination, boxes, state.board, state.cost + 1), move))
     return neighbors
@@ -421,12 +456,15 @@ def get_push_neighbors(state: State) -> list[tuple[State, list[str]]]:
             moved = list(state.boxes)
             moved.remove((label, box))
             moved.append((label, box_destination))
+            boxes = tuple(sorted(moved))
+            if creates_2x2_deadlock(boxes, state.board, box_destination):
+                continue
             segment = [*reachable[robot_support], push_move]
             neighbors.append(
                 (
                     State(
                         box,
-                        tuple(sorted(moved)),
+                        boxes,
                         state.board,
                         state.cost + len(segment),
                     ),

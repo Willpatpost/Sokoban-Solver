@@ -298,9 +298,9 @@ function startBidirectionalSolver(purpose) {
     const otherMap = side === "forward" ? reverseRecords : forwardRecords;
     const meetings = [];
     for (const record of records) {
-      recordMap.set(record.h, record);
-      if (otherMap.has(record.h) && otherMap.get(record.h).key === record.key) {
-        meetings.push(record.h);
+      recordMap.set(record.id, record);
+      if (otherMap.has(record.id)) {
+        meetings.push(record.id);
       }
     }
     for (const meetKey of meetings) {
