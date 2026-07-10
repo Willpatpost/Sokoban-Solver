@@ -6,7 +6,7 @@ const LEVELS = {
     "OR     OOO", "OO A X X O", "OO BXO O O", "OO   O   O", "OOOOOOOOOO"],
   huge: ["OOOOOOOOOOOOOOO", "OaSS   S   SSbO", "OSCS       SDSO", "OX X       X XO",
     "O             O", "OOOO   X   OOOO", "O      O      O", "O G hOOOOOH g O",
-    "O      O      O", "OO           OO", "OO    X X    OO", "OOOOOOOROOOOOOO",
+    "O      O      O", "O             O", "O     X X     O", "OOOOOOOROOOOOOO",
     "O B X X X X A O", "O Sc       dS O", "OOOOOOOOOOOOOOO"],
 };
 const DIRS = {Up: [-1, 0], Down: [1, 0], Left: [0, -1], Right: [0, 1]};

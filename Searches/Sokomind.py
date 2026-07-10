@@ -42,7 +42,7 @@ BUILTIN_PUZZLES = {
         "OOOOOOOOOOOOOOO", "OaSS   S   SSbO", "OSCS       SDSO",
         "OX X       X XO", "O             O", "OOOO   X   OOOO",
         "O      O      O", "O G hOOOOOH g O", "O      O      O",
-        "OO           OO", "OO    X X    OO", "OOOOOOOROOOOOOO",
+        "O             O", "O     X X     O", "OOOOOOOROOOOOOO",
         "O B X X X X A O", "O Sc       dS O", "OOOOOOOOOOOOOOO",
     ],
 }
