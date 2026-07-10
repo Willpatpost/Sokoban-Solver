@@ -4,9 +4,9 @@ const LEVELS = {
   medium: ["OOOOOOO", "Oa   bO", "O AXB O", "O XRX O", "OSCXDSO", "OcS SdO", "OOOOOOO"],
   large: ["OOOOOOOOOO", "OOOOOOOSSO", "OOOOO  abO", "OOOOO XSSO", "OOOOOO  OO",
     "OR     OOO", "OO A X X O", "OO BXO O O", "OO   O   O", "OOOOOOOOOO"],
-  huge: ["OOOOOOOOOOOOOOO", "OaSS   S   SSbO", "OSCS       SDSO", "OX X       X XO",
-    "O             O", "OOOO   X   OOOO", "O      O      O", "O G hOOOOOH g O",
-    "O      O      O", "O             O", "O     X X     O", "OOOOOOOROOOOOOO",
+  huge: ["OOOOOOOOOOOOOOO", "OaSS   S   SSbO", "OSCS  OOO  SDSO", "OX X  OOO  X XO",
+    "O     OOO     O", "OOOO   X   OOOO", "O      O      O", "O G hOOOOOH g O",
+    "O      O      O", "OOO         OOO", "OOO   X X   OOO", "OOOOOOOROOOOOOO",
     "O B X X X X A O", "O Sc       dS O", "OOOOOOOOOOOOOOO"],
 };
 const DIRS = {Up: [-1, 0], Down: [1, 0], Left: [0, -1], Right: [0, 1]};

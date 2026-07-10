@@ -39,10 +39,10 @@ BUILTIN_PUZZLES = {
         "OO   O   O", "OOOOOOOOOO",
     ],
     "huge": [
-        "OOOOOOOOOOOOOOO", "OaSS   S   SSbO", "OSCS       SDSO",
-        "OX X       X XO", "O             O", "OOOO   X   OOOO",
+        "OOOOOOOOOOOOOOO", "OaSS   S   SSbO", "OSCS  OOO  SDSO",
+        "OX X  OOO  X XO", "O     OOO     O", "OOOO   X   OOOO",
         "O      O      O", "O G hOOOOOH g O", "O      O      O",
-        "O             O", "O     X X     O", "OOOOOOOROOOOOOO",
+        "OOO         OOO", "OOO   X X   OOO", "OOOOOOOROOOOOOO",
         "O B X X X X A O", "O Sc       dS O", "OOOOOOOOOOOOOOO",
     ],
 }
