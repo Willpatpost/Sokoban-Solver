@@ -197,9 +197,9 @@ function solverPlans(algorithm) {
     return [{algorithm, label: $("algorithm").selectedOptions[0].text}];
   }
   return [
-    {algorithm: "push-greedy", label: "Push Greedy", maxVisited: 80000},
-    {algorithm: "weighted-push-astar", label: "Weighted Push A*", maxVisited: 120000},
-    {algorithm: "push-astar", label: "Push A*", maxVisited: 180000},
+    {algorithm: "push-greedy", label: "Push Greedy"},
+    {algorithm: "weighted-push-astar", label: "Weighted Push A*"},
+    {algorithm: "push-astar", label: "Push A*"},
   ];
 }
 function startBidirectionalSolver(purpose) {
@@ -257,8 +257,7 @@ function startBidirectionalSolver(purpose) {
         worker.terminate();
         workers = workers.filter(item => item !== worker);
         if (!settled && doneWorkers === reverseWorkers + 1) {
-          const suffix = data.budgetHit ? " in the current search budget" : "";
-          setStatus(`No bidirectional meeting found${suffix} (${totalVisited.toLocaleString()} states).`);
+          setStatus(`No bidirectional meeting found (${totalVisited.toLocaleString()} states).`);
         }
       }
     };
@@ -272,13 +271,12 @@ function startBidirectionalSolver(purpose) {
     worker.postMessage({state: serializeState(state), ...plan});
   };
 
-  launch({mode: "bidir-forward", label: "Forward Push Search", maxVisited: 90000});
+  launch({mode: "bidir-forward", label: "Forward Push Search"});
   for (let index = 0; index < reverseWorkers; index++) {
     launch({
       mode: "bidir-reverse",
       label: `Reverse Unsolver ${index + 1}`,
       reverseShard: {index, count: reverseWorkers},
-      maxVisited: Math.floor(180000 / reverseWorkers),
     });
   }
 }
@@ -320,9 +318,7 @@ function startSolver(purpose) {
       }
       finished.push(data);
       if (!queue.length && active.size === 0) {
-        const budgetHit = finished.some(result => result.budgetHit);
-        const suffix = budgetHit ? " in the current search budget" : "";
-        setStatus(`No solution found${suffix} (${totalVisited.toLocaleString()} states across ${finished.length} worker${finished.length === 1 ? "" : "s"}).`);
+        setStatus(`No solution found (${totalVisited.toLocaleString()} states across ${finished.length} worker${finished.length === 1 ? "" : "s"}).`);
         return;
       }
       launchNext();
@@ -359,6 +355,14 @@ $("next-level").onclick = () => {
   const keys = Object.keys(LEVELS); loadLevel(keys[keys.indexOf(levelKey) + 1]);
 };
 $("close-dialog").onclick = () => $("complete-dialog").close();
+document.querySelectorAll(".touch-button").forEach(button => {
+  const move = button.dataset.move;
+  button.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    if (!$("home-screen").classList.contains("hidden") || $("complete-dialog").open) return;
+    stop(false); tryMove(move); $("board").focus();
+  });
+});
 document.addEventListener("keydown", (event) => {
   if (!$("home-screen").classList.contains("hidden") ||
       $("complete-dialog").open || event.target.matches("select, button")) return;

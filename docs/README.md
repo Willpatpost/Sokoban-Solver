@@ -19,8 +19,8 @@ pruning, robot-reachability canonicalization, and wall-aware push-distance
 heuristics. This is much more appropriate for large Sokoban boards than
 expanding every single walking step.
 
-The search budgets are intentionally bounded so the browser stays responsive on
-extremely large or unsolved boards.
+Searches are uncapped. They keep running until they find a solution, exhaust
+every reachable state, or you press **Stop**.
 
 ## How to play
 
@@ -30,8 +30,9 @@ Push every box onto its matching goal:
 - Lettered boxes such as `A` go on the matching lowercase goal, such as `a`.
 - Boxes can be pushed but cannot be pulled.
 
-Use the arrow keys or WASD to move. Press U to undo and R to reset. The timer
-starts on the first legal move.
+Use the arrow keys or WASD to move on desktop. On mobile, use the on-screen
+arrow pad below the board. Press U to undo and R to reset. The timer starts on
+the first legal move.
 
 ## Local preview
 

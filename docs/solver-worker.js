@@ -230,13 +230,6 @@ function bidirectionalSide(payload) {
       : {side: "reverse", key: signature, robot: current.robot, boxes: current.boxes, suffix: current.suffix});
 
     if (visits.length >= 150) flushVisits(visits);
-    if (payload.maxVisited && visited >= payload.maxVisited) {
-      flushVisits(visits);
-      postMessage({type: "progress", visited, delta: visited - reported});
-      postMessage({type: "done", visited, budgetHit: true});
-      return;
-    }
-
     const nextStates = forward
       ? pushNeighbors(current, board, reachable).map(next => ({
           robot: next.robot,
@@ -263,11 +256,11 @@ function bidirectionalSide(payload) {
 
 function search(payload) {
   if (["ultimate", "portfolio", "fast"].includes(payload.algorithm)) {
-    const greedy = search({...payload, algorithm: "push-greedy", maxVisited: 50000});
+    const greedy = search({...payload, algorithm: "push-greedy"});
     if (greedy.path) return {...greedy, strategy: "Push Greedy"};
-    const weighted = search({...payload, algorithm: "weighted-push-astar", maxVisited: 100000});
+    const weighted = search({...payload, algorithm: "weighted-push-astar"});
     if (weighted.path) return {...weighted, strategy: "Weighted Push A*"};
-    return search({...payload, algorithm: "push-astar", maxVisited: 150000});
+    return search({...payload, algorithm: "push-astar"});
   }
   const board = parse(payload.state), initial = {
     robot: payload.state.robot,
@@ -291,7 +284,6 @@ function search(payload) {
     if (seen.has(signature) && seen.get(signature) <= current.cost) continue;
     seen.set(signature, current.cost); visited++;
     if (goal(current.boxes, board.goals)) return {path: current.path, visited};
-    if (payload.maxVisited && visited >= payload.maxVisited) return {path: null, visited, budgetHit: true};
     const nextStates = pushMacro ? pushNeighbors(current, board, reachable) :
       neighbors(current, board).map(n => ({robot: n.robot, boxes: n.boxes, path: [n.move]}));
     for (const next of nextStates) {
