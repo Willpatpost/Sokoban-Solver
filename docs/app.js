@@ -6,7 +6,7 @@ const LEVELS = {
     "OR     OOO", "OO A X X O", "OO BXO O O", "OO   O   O", "OOOOOOOOOO"],
   huge: ["OOOOOOOOOOOOOOO", "OaSS   S   SSbO", "OSCS       SDSO", "OX X       X XO",
     "O             O", "OOOO   X   OOOO", "O      O      O", "O G hOOOOOH g O",
-    "O      O      O", "O             O", "O     X X     O", "OOOOOOOROOOOOOO",
+    "O      O      O", "OO           OO", "OO    X X    OO", "OOOOOOOROOOOOOO",
     "O B X X X X A O", "O Sc       dS O", "OOOOOOOOOOOOOOO"],
 };
 const DIRS = {Up: [-1, 0], Down: [1, 0], Left: [0, -1], Right: [0, 1]};
@@ -223,9 +223,11 @@ function boxesFromMeetKey(key) {
 function reconstructMeetPath(meetKey, forwardSeen, reverseSeen) {
   const forwardSegments = [];
   let current = forwardSeen.get(meetKey);
+  if (!current || !reverseSeen.has(meetKey)) return null;
   while (current?.parent) {
     forwardSegments.unshift(...current.segment);
     current = forwardSeen.get(current.parent);
+    if (!current) return null;
   }
 
   const reverseSegments = [];
@@ -233,6 +235,7 @@ function reconstructMeetPath(meetKey, forwardSeen, reverseSeen) {
   while (current?.parent) {
     reverseSegments.push(...current.segment);
     current = reverseSeen.get(current.parent);
+    if (!current) return null;
   }
 
   const forward = forwardSeen.get(meetKey), reverse = reverseSeen.get(meetKey);
@@ -271,21 +274,26 @@ function startBidirectionalSolver(purpose) {
   };
 
   const requestSolve = (meetKey) => {
-    if (settled) return;
+    if (settled) return false;
     const path = reconstructMeetPath(meetKey, forwardRecords, reverseRecords);
-    if (path) finish(path);
+    if (!path) return false;
+    finish(path);
+    return true;
   };
 
   const inspectRecords = (records, worker) => {
     const side = workerSides.get(worker);
     const recordMap = side === "forward" ? forwardRecords : reverseRecords;
     const otherMap = side === "forward" ? reverseRecords : forwardRecords;
+    const meetings = [];
     for (const record of records) {
       recordMap.set(record.h, record);
       if (otherMap.has(record.h) && otherMap.get(record.h).key === record.key) {
-        requestSolve(record.h);
-        return;
+        meetings.push(record.h);
       }
+    }
+    for (const meetKey of meetings) {
+      if (requestSolve(meetKey)) return;
     }
   };
 
