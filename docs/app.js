@@ -11,6 +11,8 @@ const LEVELS = {
 };
 const DIRS = {Up: [-1, 0], Down: [1, 0], Left: [0, -1], Right: [0, 1]};
 const CODE_MOVE = {U: "Up", D: "Down", L: "Left", R: "Right"};
+const SOLVER_BUILD = "2026-07-18.3";
+const SOLVER_WORKER_URL = `solver-worker.js?build=${SOLVER_BUILD}`;
 const VERIFIED_PUSH_BOUNDS = {huge: 252};
 const PUSH_BOUNDS_KEY = "sokomind-push-bounds-v1";
 const KEYS = {ArrowUp: "Up", ArrowDown: "Down", ArrowLeft: "Left", ArrowRight: "Right",
@@ -303,7 +305,8 @@ function solverPlans(algorithm) {
   ];
 }
 function startBidirectionalSolver(purpose) {
-  stop(false); setControlsBusy(true); setStatus("Ultimate Bidirectional is searching...");
+  stop(false); setControlsBusy(true);
+  setStatus(`Ultimate Bidirectional ${SOLVER_BUILD} is searching...`);
   const hardware = navigator.hardwareConcurrency || 2;
   const searchScale = state.boxes.size * state.board.floor.size;
   const reverseLimit = searchScale >= 1200 ? 1 : searchScale >= 500 ? 2 : 3;
@@ -317,7 +320,7 @@ function startBidirectionalSolver(purpose) {
     {beamProfile: "milestone", weight: 2.3, diversity: 2,
       topologyWeight: 2, goalPackingWeight: 1.3},
   ];
-  const beamAttemptCount = 3;
+  const beamAttemptCount = 2;
   const beamPlans = Array.from({length: beamAttemptCount}, (_item, index) => ({
     algorithm: "push-beam",
     side: "direct",
@@ -329,13 +332,40 @@ function startBidirectionalSolver(purpose) {
     seed: 29 + index * 104729,
     ...beamProfiles[index % beamProfiles.length],
   }));
+  const macroProfiles = [
+    {beamProfile: "milestone", weight: 2, topologyWeight: 1.4,
+      goalPackingWeight: 1.2, diversity: 2, seed: 29, beamWidth: 40,
+      sequenceMacroResults: 6},
+    {beamProfile: "detour", weight: 3.2, topologyWeight: 0.7,
+      goalPackingWeight: 1.5, diversity: 1.2, seed: 104800, beamWidth: 50,
+      sequenceMacroResults: 6},
+    {beamProfile: "detour", weight: 3, topologyWeight: 0.9,
+      goalPackingWeight: 1.7, diversity: 1.8, seed: 314258, beamWidth: 50,
+      sequenceMacroResults: 8},
+    {beamProfile: "milestone", weight: 2.5, topologyWeight: 1.1,
+      goalPackingWeight: 1.4, diversity: 2.2, seed: 418987, beamWidth: 50,
+      sequenceMacroResults: 8},
+  ];
+  const macroPlans = searchScale >= 1200 ? macroProfiles.map((settings, index) => ({
+    algorithm: "push-beam",
+    side: "direct",
+    label: `Box-Run Macro ${index + 1}/${macroProfiles.length}`,
+    maxDepth: 600,
+    maxVisited: 4000,
+    transpositionLimit: 16000,
+    sequenceMacros: true,
+    sequenceMacroLimit: 12,
+    sequenceMacroExplored: 32,
+    endgameVisited: 60000,
+    endgameThreshold: 60,
+    endgameCandidates: 24,
+    endgameAttempts: 12,
+    endgameProfiles: ["balanced", "detour", "room-flow"],
+    ...settings,
+  })) : [];
   const dfsProfiles = [
     {dfsProfile: "setup", discrepancyLimit: 0, maxVisited: 20000},
     {dfsProfile: "setup", discrepancyLimit: 2, maxVisited: 80000},
-    {dfsProfile: "setup", discrepancyLimit: 5, maxVisited: 300000},
-    {dfsProfile: "room-flow", discrepancyLimit: 3, maxVisited: 180000},
-    {dfsProfile: "detour", discrepancyLimit: 8, maxVisited: 300000},
-    {dfsProfile: "balanced", discrepancyLimit: 12, maxVisited: 300000},
   ];
   const dfsPlans = searchScale >= 1200 ? dfsProfiles.map((settings, index) => ({
     algorithm: "bounded-push-dfs",
@@ -347,12 +377,13 @@ function startBidirectionalSolver(purpose) {
     seed: 313337 + index * 104729,
     ...settings,
   })) : [];
-  const directPlans = [...beamPlans, ...dfsPlans];
+  const directPlans = [...beamPlans, ...macroPlans, ...dfsPlans];
   let nextDirectPlan = 0;
   const forwardRecords = new Map(), reverseRecordSets = [];
   const workerSides = new Map(), workerRecords = new Map(), workerProgress = new Map();
   const expectedWorkers = reverseWorkers + 1 + directPlans.length;
   let settled = false, totalVisited = 0, doneWorkers = 0;
+  const completedPhases = [];
 
   const finish = (path, strategy = "Bidirectional") => {
     const validated = validatePathToGoal(path);
@@ -398,7 +429,7 @@ function startBidirectionalSolver(purpose) {
   };
 
   const launch = (plan) => {
-    const worker = new Worker("solver-worker.js");
+    const worker = new Worker(SOLVER_WORKER_URL);
     workers.push(worker);
     workerSides.set(worker, plan.side);
     if (plan.side === "forward") {
@@ -426,6 +457,7 @@ function startBidirectionalSolver(purpose) {
       if (data.type === "done") {
         const previous = workerProgress.get(worker) || 0;
         totalVisited += Math.max(0, (data.visited || 0) - previous);
+        completedPhases.push(`${plan.label}: ${(data.visited || 0).toLocaleString()}`);
         if (plan.side === "direct" && data.path && finish(data.path, plan.label)) return;
         doneWorkers++;
         worker.terminate();
@@ -438,7 +470,10 @@ function startBidirectionalSolver(purpose) {
         }
         if (!settled && doneWorkers === expectedWorkers) {
           setControlsBusy(false);
-          setStatus(`No solution found (${totalVisited.toLocaleString()} states).`);
+          setStatus(
+            `No solution found by ${SOLVER_BUILD} (${totalVisited.toLocaleString()} states). ` +
+            completedPhases.join("; "),
+          );
         }
       }
     };
@@ -490,7 +525,7 @@ function startSolver(purpose) {
   let settled = false, totalVisited = 0;
   const launchNext = () => {
     if (settled || !queue.length || active.size >= maxWorkers) return;
-    const plan = queue.shift(), worker = new Worker("solver-worker.js");
+    const plan = queue.shift(), worker = new Worker(SOLVER_WORKER_URL);
     workers.push(worker); active.set(worker, plan);
     worker.onmessage = ({data}) => {
       if (settled) return;

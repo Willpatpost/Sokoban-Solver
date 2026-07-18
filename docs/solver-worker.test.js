@@ -233,6 +233,30 @@ test("forced push macro collapses a globally forced corridor", () => {
   assert.equal(worker.goal(collapsed.boxes, board.goals), true);
 });
 
+test("box-run macros preserve a replayable sequence of pushes", () => {
+  const worker = loadWorker();
+  const parsed = stateFromRows([
+    "OOOOOOOO",
+    "O R A aO",
+    "OOOOOOOO",
+  ]);
+  const board = worker.parse(parsed);
+  const state = {
+    robot: parsed.robot,
+    boxes: parsed.boxes.map(([position, label]) => [
+      ...position.split(",").map(Number), label,
+    ]),
+  };
+  const first = worker.pushNeighbors(state, board)
+    .find(candidate => candidate.pushClass.endsWith(":Right"));
+  const sequences = worker.expandPushSequences(first, board, 4, 12, 4);
+  const solved = sequences.find(sequence => worker.goal(sequence.boxes, board.goals));
+
+  assert.ok(solved);
+  assert.equal(solved.pushes, 2);
+  assert.deepEqual(Array.from(solved.path), ["Right", "Right", "Right"]);
+});
+
 test("beam selection reserves room for heuristic detours and push diversity", () => {
   const worker = loadWorker();
   const candidates = [];

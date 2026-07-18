@@ -654,10 +654,35 @@ function pushNeighbors(state, board, reachable = reachablePaths(state, board)) {
         boxes,
         path: [...reachable.get(support), move],
         pushClass: `${label}:${y},${x}:${move}`,
+        pushedFrom: pkey(y, x),
         pushedTo: dest,
       });
     }
   });
+  return result;
+}
+
+function pushBoxNeighbors(state, board, boxPosition, reachable = reachablePaths(state, board)) {
+  const occupied = new Map(state.boxes.map((box, index) => [pkey(box[0], box[1]), index]));
+  const index = occupied.get(boxPosition);
+  if (index === undefined) return [];
+  const [y, x, label] = state.boxes[index], result = [];
+  for (const [move, [dy, dx]] of Object.entries(DIRS)) {
+    const support = pkey(y - dy, x - dx), destination = pkey(y + dy, x + dx);
+    if (!reachable.has(support) || !board.floor.has(destination) || occupied.has(destination)) continue;
+    const boxes = state.boxes.map((box, boxIndex) =>
+      boxIndex === index ? [y + dy, x + dx, label] : box);
+    if (staticDead(y + dy, x + dx, board, label) ||
+        createsDynamicDeadlock(boxes, board, [y + dy, x + dx])) continue;
+    result.push({
+      robot: [y, x],
+      boxes,
+      path: [...reachable.get(support), move],
+      pushClass: `${label}:${y},${x}:${move}`,
+      pushedFrom: boxPosition,
+      pushedTo: destination,
+    });
+  }
   return result;
 }
 
@@ -691,6 +716,80 @@ function collapseForcedPushes(first, board, limit = 32) {
 function expandPushMacro(next, board, enabled = true) {
   if (!enabled || !board.topology.tunnels.has(next.pushedTo)) return {...next, pushes: 1};
   return collapseForcedPushes(next, board);
+}
+
+function expandPushSequences(first, board, maxPushes = 12, maxExplored = 48, maxReturned = 8) {
+  const initial = {...first, pushes: 1};
+  const queue = [initial], endpoints = [];
+  const seen = new Set([exactPushKey(initial)]);
+  let head = 0;
+  for (; head < queue.length && queue.length < maxExplored; head++) {
+    const current = queue[head];
+    if (current.pushes >= maxPushes || goal(current.boxes, board.goals)) {
+      endpoints.push(current);
+      continue;
+    }
+    const state = {robot: current.robot, boxes: current.boxes};
+    const reachable = reachablePaths(state, board);
+    if (createsSealedCorralDeadlock(state, board, reachable)) {
+      endpoints.push(current);
+      continue;
+    }
+    const continuations = pushBoxNeighbors(state, board, current.pushedTo, reachable);
+    if (!continuations.length) endpoints.push(current);
+    for (const next of continuations) {
+      const sequence = {
+        robot: next.robot,
+        boxes: next.boxes,
+        path: [...current.path, ...next.path],
+        pushes: current.pushes + 1,
+        pushClass: `${first.pushClass}:${current.pushes + 1}`,
+        pushedFrom: next.pushedFrom,
+        pushedTo: next.pushedTo,
+      };
+      const signature = exactPushKey(sequence);
+      if (seen.has(signature)) continue;
+      seen.add(signature);
+      queue.push(sequence);
+      if (queue.length >= maxExplored) break;
+    }
+  }
+  endpoints.push(...queue.slice(head));
+  endpoints.sort((left, right) => right.pushes - left.pushes);
+  const selected = [], destinations = new Set();
+  for (const endpoint of endpoints) {
+    if (destinations.has(endpoint.pushedTo)) continue;
+    destinations.add(endpoint.pushedTo);
+    selected.push(endpoint);
+    if (selected.length >= maxReturned) break;
+  }
+  return [initial, ...selected.filter(endpoint => exactPushKey(endpoint) !== exactPushKey(initial))];
+}
+
+function expandStraightPushes(first, board, maxPushes = 8) {
+  const [fromY, fromX] = first.pushedFrom.split(",").map(Number);
+  const [toY, toX] = first.pushedTo.split(",").map(Number);
+  const dy = toY - fromY, dx = toX - fromX;
+  const results = [{...first, pushes: 1}];
+  let current = results[0];
+  while (current.pushes < maxPushes && !goal(current.boxes, board.goals)) {
+    const state = {robot: current.robot, boxes: current.boxes};
+    const reachable = reachablePaths(state, board);
+    if (createsSealedCorralDeadlock(state, board, reachable)) break;
+    const [y, x] = current.pushedTo.split(",").map(Number);
+    const destination = pkey(y + dy, x + dx);
+    const next = pushBoxNeighbors(state, board, current.pushedTo, reachable)
+      .find(candidate => candidate.pushedTo === destination);
+    if (!next) break;
+    current = {
+      ...next,
+      path: [...current.path, ...next.path],
+      pushes: current.pushes + 1,
+      pushClass: `${first.pushClass}:${current.pushes + 1}`,
+    };
+    results.push(current);
+  }
+  return results;
 }
 
 function invertWalk(path) {
@@ -869,6 +968,8 @@ function beamSearch(payload) {
   const seenDepth = new BoundedDepthMap(transpositionLimit);
   const seenExactDepth = new BoundedDepthMap(Math.max(8000, Math.floor(transpositionLimit / 2)));
   let visited = 0, reported = 0, bestEstimate = Infinity, bestPushes = 0;
+  let bestCheckpoint = null;
+  const endgameCheckpoints = [];
   let trackedThrough = payload.trackedSignatures ? 0 : undefined;
 
   initial.reachable = reachablePaths(initial, board);
@@ -895,8 +996,18 @@ function beamSearch(payload) {
         return {path: null, visited, cutoff: true, bestEstimate, bestPushes, trackedThrough};
       }
       for (const rawNext of pushNeighbors(current, board, current.reachable)) {
-        const next = expandPushMacro(rawNext, board, payload.forcedMacros !== false);
-        if (!next) continue;
+        const expansions = payload.straightMacros
+          ? expandStraightPushes(rawNext, board, payload.straightMacroLimit || 8)
+          : payload.sequenceMacros
+          ? expandPushSequences(
+              rawNext,
+              board,
+              payload.sequenceMacroLimit || 12,
+              payload.sequenceMacroExplored || 48,
+              payload.sequenceMacroResults || 8,
+            )
+          : [expandPushMacro(rawNext, board, payload.forcedMacros !== false)].filter(Boolean);
+        for (const next of expansions) {
         const child = {robot: next.robot, boxes: next.boxes, cost: current.cost + next.pushes};
         if (child.cost > maxDepth) continue;
         if (payload.upperBound && child.cost > payload.upperBound) continue;
@@ -933,7 +1044,7 @@ function beamSearch(payload) {
           diversity * signatureNoise(child.exactSignature, seed + 7919);
         const existing = candidates.get(child.exactSignature);
         if (!existing || score < existing.score) {
-          candidates.set(child.exactSignature, {
+          const candidate = {
             ...child,
             node: {parent: current.node || null, segment: next.path},
             estimate,
@@ -946,7 +1057,36 @@ function beamSearch(payload) {
               : null,
             strategicHistory: child.strategicHistory,
             openingHistory: child.openingHistory,
-          });
+          };
+          candidates.set(child.exactSignature, candidate);
+          if (!bestCheckpoint || estimate < bestCheckpoint.estimate ||
+              (estimate === bestCheckpoint.estimate && child.cost < bestCheckpoint.cost)) {
+            bestCheckpoint = candidate;
+          }
+          if (payload.endgameVisited && estimate <= (payload.endgameThreshold || 60)) {
+            const solvedGoals = candidate.boxes
+              .filter(([y, x, label]) => board.goals.get(pkey(y, x)) === label)
+              .map(([y, x, label]) => `${y},${x},${label}`)
+              .sort()
+              .join(";");
+            candidate.checkpointClass =
+              `${roomFlowSignature(candidate.boxes, board)}|${solvedGoals}|${next.pushClass}`;
+            const existingCheckpoint = endgameCheckpoints.findIndex(checkpoint =>
+              checkpoint.checkpointClass === candidate.checkpointClass);
+            if (existingCheckpoint >= 0) {
+              if (candidate.estimate >= endgameCheckpoints[existingCheckpoint].estimate) continue;
+              endgameCheckpoints.splice(existingCheckpoint, 1);
+            }
+            endgameCheckpoints.push(candidate);
+            endgameCheckpoints.sort((left, right) =>
+              left.estimate - right.estimate ||
+              (left.cost + left.estimate) - (right.cost + right.estimate) ||
+              left.cost - right.cost);
+            if (endgameCheckpoints.length > (payload.endgameCandidates || 24)) {
+              endgameCheckpoints.pop();
+            }
+          }
+        }
         }
       }
       if (visited - reported >= 5000) {
@@ -974,6 +1114,44 @@ function beamSearch(payload) {
           trackedThrough = Math.max(trackedThrough, child.cost);
         }
       }
+    }
+  }
+  if (payload.endgameVisited && endgameCheckpoints.length) {
+    let remainingVisited = payload.endgameVisited;
+    const attempts = Math.min(payload.endgameAttempts || 12, endgameCheckpoints.length);
+    for (let index = 0; index < attempts && remainingVisited > 0; index++) {
+      const checkpoint = endgameCheckpoints[index];
+      const remainingBound = (payload.upperBound || maxDepth) - checkpoint.cost;
+      const attemptVisited = Math.ceil(remainingVisited / (attempts - index));
+    const endgame = boundedPushDepthFirstSearch({
+      algorithm: "bounded-push-dfs",
+      state: {
+        rows: board.rows,
+        robot: checkpoint.robot,
+        boxes: checkpoint.boxes.map(([y, x, label]) => [pkey(y, x), label]),
+      },
+      upperBound: remainingBound,
+      maxDepth: remainingBound,
+      maxVisited: attemptVisited,
+      transpositionLimit: payload.endgameTranspositionLimit || 30000,
+      dfsProfile: payload.endgameProfiles?.[index % payload.endgameProfiles.length] ||
+        payload.endgameProfile || "balanced",
+      diversity: payload.diversity,
+      seed: seed + 15485863,
+      progressOffset: (payload.progressOffset || 0) + visited,
+      forcedMacros: false,
+    });
+    if (endgame.path) {
+      return {
+        path: [...reconstructNodePath(checkpoint.node), ...endgame.path],
+        visited: visited + endgame.visited,
+        bestEstimate: 0,
+        bestPushes: checkpoint.cost,
+        endgame: true,
+      };
+    }
+    visited += endgame.visited;
+      remainingVisited -= endgame.visited;
     }
   }
   return {path: null, visited, bestEstimate, bestPushes, trackedThrough};
@@ -1034,7 +1212,7 @@ function boundedPushDepthFirstSearch(payload) {
       return;
     }
     if (visited - reported >= 5000) {
-      postMessage({type: "progress", visited});
+      postMessage({type: "progress", visited: (payload.progressOffset || 0) + visited});
       reported = visited;
     }
     if (goal(state.boxes, board.goals)) {

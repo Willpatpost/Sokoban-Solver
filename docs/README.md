@@ -45,6 +45,12 @@ restart from exhausting its budget below one attractive branch while retaining
 a compact transposition table. A memory-light push IDA* engine is also available
 for admissible push-bound contours.
 
+Very large boards also use box-run macros. A local search follows several legal
+pushes of one box, including turns, and returns only diverse stopping points to
+the global beam. This lets the solver evaluate temporary setup sequences as one
+strategic action. Low-distance macro states are handed to several bounded
+endgame searches with different packing priorities.
+
 The board analysis is puzzle-independent. It detects articulation gates and
 one-entrance rooms, derives farthest-first packing pressure and goal dependencies,
 and marks high-traffic packing cells. Hard pruning includes static and player-side
