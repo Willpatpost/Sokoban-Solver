@@ -330,6 +330,50 @@ test("bounded push DFS finds a solution at the incumbent ceiling", () => {
   assert.ok(exact.retained <= 10);
 });
 
+test("bounded push DFS can limit cumulative ordering discrepancies", () => {
+  const worker = loadWorker();
+  const state = stateFromRows([
+    "OOOOO",
+    "OOROO",
+    "OOAOO",
+    "OO OO",
+    "OOaOO",
+    "OOOOO",
+  ]);
+  const result = worker.search({
+    algorithm: "bounded-push-dfs",
+    state,
+    upperBound: 2,
+    maxVisited: 100,
+    discrepancyLimit: 0,
+  });
+
+  assert.deepEqual(Array.from(result.path), ["Down", "Down"]);
+  assert.equal(result.discrepancyLimit, 0);
+});
+
+test("push IDA star finds a solution on its admissible contour", () => {
+  const worker = loadWorker();
+  const state = stateFromRows([
+    "OOOOO",
+    "OOROO",
+    "OOAOO",
+    "OO OO",
+    "OOaOO",
+    "OOOOO",
+  ]);
+  const result = worker.search({
+    algorithm: "push-ida-star",
+    state,
+    upperBound: 2,
+    maxVisited: 100,
+    transpositionLimit: 10,
+  });
+
+  assert.deepEqual(Array.from(result.path), ["Down", "Down"]);
+  assert.ok(result.visited <= 3);
+});
+
 test("all hard pruning preserves the known Huge solution", () => {
   const worker = loadWorker();
   const parsed = stateFromRows(HUGE_ROWS);

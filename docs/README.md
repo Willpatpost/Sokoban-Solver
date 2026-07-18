@@ -32,12 +32,18 @@ for replay but do not distract the solver from strategic progress.
 
 On very large boards, direct search uses a sequential memory-bounded restart
 portfolio instead of retaining one ever-growing frontier. Restarts alternate
-focused, detour, and room-packing profiles with independent deterministic seeds.
+focused, detour, and room-milestone profiles with independent deterministic
+seeds. The milestone beam reserves capacity for distinct opening push sequences
+and room-crossing histories, including moves that temporarily worsen the raw
+box-to-goal estimate.
 Completed games save their best push count as an incumbent upper bound; later
 searches prune states whose push lower bound already exceeds that solution.
-After the beam attempts, complex boards run fresh-worker incumbent-bounded depth
-first searches. These retain a compact transposition table and revisit admissible
-branches that a fixed-width beam would permanently discard.
+After the beam attempts, complex boards run fresh-worker limited-discrepancy
+depth-first searches. Early contours explore only the top-ranked continuation;
+later contours admit progressively less obvious choices. This prevents every
+restart from exhausting its budget below one attractive branch while retaining
+a compact transposition table. A memory-light push IDA* engine is also available
+for admissible push-bound contours.
 
 The board analysis is puzzle-independent. It detects articulation gates and
 one-entrance rooms, derives farthest-first packing pressure and goal dependencies,

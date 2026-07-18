@@ -314,7 +314,7 @@ function startBidirectionalSolver(purpose) {
       topologyWeight: 0.8, goalPackingWeight: 0.8},
     {beamProfile: "detour", weight: 2, diversity: 2.5,
       topologyWeight: 1.4, goalPackingWeight: 1.1},
-    {beamProfile: "detour", weight: 2.3, diversity: 2,
+    {beamProfile: "milestone", weight: 2.3, diversity: 2,
       topologyWeight: 2, goalPackingWeight: 1.3},
   ];
   const beamAttemptCount = 3;
@@ -329,17 +329,23 @@ function startBidirectionalSolver(purpose) {
     seed: 29 + index * 104729,
     ...beamProfiles[index % beamProfiles.length],
   }));
-  const dfsProfiles = ["setup", "setup", "detour", "setup", "balanced", "setup", "detour"];
-  const dfsPlans = searchScale >= 1200 ? dfsProfiles.map((dfsProfile, index) => ({
+  const dfsProfiles = [
+    {dfsProfile: "setup", discrepancyLimit: 0, maxVisited: 20000},
+    {dfsProfile: "setup", discrepancyLimit: 2, maxVisited: 80000},
+    {dfsProfile: "setup", discrepancyLimit: 5, maxVisited: 300000},
+    {dfsProfile: "room-flow", discrepancyLimit: 3, maxVisited: 180000},
+    {dfsProfile: "detour", discrepancyLimit: 8, maxVisited: 300000},
+    {dfsProfile: "balanced", discrepancyLimit: 12, maxVisited: 300000},
+  ];
+  const dfsPlans = searchScale >= 1200 ? dfsProfiles.map((settings, index) => ({
     algorithm: "bounded-push-dfs",
     side: "direct",
-    label: `Bounded DFS ${index + 1}/${dfsProfiles.length}`,
+    label: `Discrepancy DFS ${index + 1}/${dfsProfiles.length}`,
     maxDepth: 600,
-    maxVisited: 300000,
     transpositionLimit: 60000,
-    dfsProfile,
     diversity: 1.5,
     seed: 313337 + index * 104729,
+    ...settings,
   })) : [];
   const directPlans = [...beamPlans, ...dfsPlans];
   let nextDirectPlan = 0;
