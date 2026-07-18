@@ -257,6 +257,50 @@ test("beam selection reserves room for heuristic detours and push diversity", ()
   assert.equal(new Set(selected.map(candidate => candidate.pushClass)).size, 5);
 });
 
+test("bounded transposition maps evict old entries", () => {
+  const worker = loadWorker();
+  const memo = vm.runInContext("new BoundedDepthMap(2)", worker);
+  memo.set("a", 1);
+  memo.set("b", 2);
+  memo.set("c", 3);
+
+  assert.equal(memo.size, 2);
+  assert.equal(memo.has("a"), false);
+  assert.equal(memo.get("c"), 3);
+});
+
+test("beam restarts honor incumbent push bounds", () => {
+  const worker = loadWorker();
+  const state = stateFromRows([
+    "OOOOO",
+    "OOROO",
+    "OOAOO",
+    "OO OO",
+    "OOaOO",
+    "OOOOO",
+  ]);
+  const tooTight = worker.search({
+    algorithm: "push-beam-restarts",
+    state,
+    beamWidth: 10,
+    restartCount: 2,
+    restartVisited: 20,
+    upperBound: 1,
+  });
+  const exact = worker.search({
+    algorithm: "push-beam-restarts",
+    state,
+    beamWidth: 10,
+    restartCount: 2,
+    restartVisited: 20,
+    upperBound: 2,
+  });
+
+  assert.equal(tooTight.path, null);
+  assert.deepEqual(Array.from(exact.path), ["Down", "Down"]);
+  assert.equal(exact.restart, 1);
+});
+
 test("all hard pruning preserves the known Huge solution", () => {
   const worker = loadWorker();
   const parsed = stateFromRows(HUGE_ROWS);
@@ -277,7 +321,10 @@ test("all hard pruning preserves the known Huge solution", () => {
     const next = worker.neighbors(state, board).find(candidate => candidate.move === move);
     assert.ok(next, `known solution move ${move} must remain legal`);
     state = next;
-    if (signature(state.boxes) !== before) pushes++;
+    if (signature(state.boxes) !== before) {
+      pushes++;
+      assert.ok(pushes + worker.heuristic(state.boxes, board) <= 252);
+    }
     const reachable = worker.reachablePaths(state, board);
     assert.equal(worker.createsSealedCorralDeadlock(state, board, reachable), false);
   }

@@ -5,12 +5,28 @@ const key = (robot, boxes) => `${robot.join(",")}|${[...boxes].sort().join(";")}
 const pkey = (y, x) => `${y},${x}`;
 const boxSignature = (boxes) => boxes.map(box => box.join(",")).sort().join(";");
 const exactPushKey = state => `${state.robot.join(",")}|${boxSignature(state.boxes)}`;
-const HEURISTIC_MEMO_LIMIT = 100000;
+const HEURISTIC_MEMO_LIMIT = 20000;
+const DEADLOCK_MEMO_LIMIT = 10000;
 
-function memoizeBounded(memo, key, value) {
-  if (memo.size >= HEURISTIC_MEMO_LIMIT) memo.delete(memo.keys().next().value);
+function memoizeBounded(memo, key, value, limit = HEURISTIC_MEMO_LIMIT) {
+  if (memo.size >= limit) memo.delete(memo.keys().next().value);
   memo.set(key, value);
   return value;
+}
+
+class BoundedDepthMap {
+  constructor(limit) {
+    this.limit = limit;
+    this.values = new Map();
+  }
+  get(key) { return this.values.get(key); }
+  has(key) { return this.values.has(key); }
+  set(key, value) {
+    if (this.values.has(key)) this.values.delete(key);
+    this.values.set(key, value);
+    while (this.values.size > this.limit) this.values.delete(this.values.keys().next().value);
+  }
+  get size() { return this.values.size; }
 }
 
 class Heap {
@@ -470,7 +486,7 @@ function createsDynamicDeadlock(boxes, board, movedBox) {
   if (board.deadlockMemo.has(signature)) return board.deadlockMemo.get(signature);
   const deadlocked = creates2x2Deadlock(boxes, board, movedBox) ||
     createsFrozenComponentDeadlock(boxes, board, movedBox);
-  return memoizeBounded(board.deadlockMemo, signature, deadlocked);
+  return memoizeBounded(board.deadlockMemo, signature, deadlocked, DEADLOCK_MEMO_LIMIT);
 }
 function neighbors(state, board) {
   const occupied = new Map(state.boxes.map((b, i) => [pkey(b[0], b[1]), i])), result = [];
@@ -755,7 +771,7 @@ function selectBeamLayer(candidates, width, profile = "balanced") {
 }
 
 function beamSearch(payload) {
-  const board = parse(payload.state);
+  const board = payload.preparedBoard || parse(payload.state);
   const initial = {
     robot: payload.state.robot,
     boxes: payload.state.boxes.map(([position, label]) => [
@@ -772,7 +788,9 @@ function beamSearch(payload) {
   const topologyWeight = payload.topologyWeight ?? 0.7;
   const beamProfile = payload.beamProfile || "balanced";
   const seed = payload.seed || 0;
-  const seenDepth = new Map(), seenExactDepth = new Map();
+  const transpositionLimit = payload.transpositionLimit || Math.max(12000, width * 60);
+  const seenDepth = new BoundedDepthMap(transpositionLimit);
+  const seenExactDepth = new BoundedDepthMap(Math.max(8000, Math.floor(transpositionLimit / 2)));
   let visited = 0, reported = 0, bestEstimate = Infinity, bestPushes = 0;
 
   initial.reachable = reachablePaths(initial, board);
@@ -801,6 +819,7 @@ function beamSearch(payload) {
         if (!next) continue;
         const child = {robot: next.robot, boxes: next.boxes, cost: current.cost + next.pushes};
         if (child.cost > maxDepth) continue;
+        if (payload.upperBound && child.cost > payload.upperBound) continue;
         if (goal(child.boxes, board.goals)) {
           return {
             path: [...reconstructNodePath(current.node), ...next.path],
@@ -811,6 +830,7 @@ function beamSearch(payload) {
         if ((seenExactDepth.get(child.exactSignature) ?? Infinity) <= child.cost) continue;
         const estimate = heuristic(child.boxes, board);
         if (!Number.isFinite(estimate)) continue;
+        if (payload.upperBound && child.cost + estimate > payload.upperBound) continue;
         if (estimate < bestEstimate) {
           bestEstimate = estimate;
           bestPushes = child.cost;
@@ -836,7 +856,7 @@ function beamSearch(payload) {
         }
       }
       if (visited - reported >= 5000) {
-        postMessage({type: "progress", visited});
+        postMessage({type: "progress", visited: (payload.progressOffset || 0) + visited});
         reported = visited;
       }
     }
@@ -858,6 +878,33 @@ function beamSearch(payload) {
   return {path: null, visited, bestEstimate, bestPushes};
 }
 
+function beamRestartSearch(payload) {
+  const restartCount = payload.restartCount || 3;
+  const restartVisited = payload.restartVisited || 180000;
+  const seedStride = payload.seedStride || 104729;
+  const profiles = payload.restartProfiles?.length ? payload.restartProfiles : [{}];
+  const preparedBoard = parse(payload.state);
+  let visited = 0, bestEstimate = Infinity, bestPushes = 0;
+  for (let restart = 0; restart < restartCount; restart++) {
+    const result = beamSearch({
+      ...payload,
+      ...profiles[restart % profiles.length],
+      algorithm: "push-beam",
+      preparedBoard,
+      maxVisited: restartVisited,
+      progressOffset: visited,
+      seed: (payload.seed || 0) + restart * seedStride,
+    });
+    visited += result.visited;
+    if ((result.bestEstimate ?? Infinity) < bestEstimate) {
+      bestEstimate = result.bestEstimate;
+      bestPushes = result.bestPushes || 0;
+    }
+    if (result.path) return {...result, visited, restart: restart + 1};
+  }
+  return {path: null, visited, cutoff: true, bestEstimate, bestPushes, restarts: restartCount};
+}
+
 function bidirectionalSide(payload) {
   const board = parse(payload.state);
   const initialBoxes = payload.state.boxes.map(([p, label]) => [...p.split(",").map(Number), label]);
@@ -874,6 +921,7 @@ function bidirectionalSide(payload) {
       ? heuristic(state.boxes, board)
       : homeHeuristic(state.boxes, initialTargets);
     if (!Number.isFinite(estimate) || bestCost.has(state.exactSignature)) return;
+    if (payload.upperBound && state.cost + estimate > payload.upperBound) return;
     bestCost.set(state.exactSignature, state.cost);
     const topology = forward ? 0.2 * topologyPenalty(state.boxes, board) : 0;
     frontier.push([state.cost + estimate + topology, order++, state]);
@@ -920,6 +968,7 @@ function bidirectionalSide(payload) {
         ? heuristic(next.boxes, board)
         : homeHeuristic(next.boxes, initialTargets);
       if (!Number.isFinite(estimate)) continue;
+      if (payload.upperBound && next.cost + estimate > payload.upperBound) continue;
       bestCost.set(next.exactSignature, next.cost);
       const weightedEstimate = (forward ? 1.4 : 1.2) * estimate;
       const topology = forward ? 0.2 * topologyPenalty(next.boxes, board) : 0;
@@ -937,6 +986,7 @@ function bidirectionalSide(payload) {
 
 function search(payload) {
   if (payload.algorithm === "push-beam") return beamSearch(payload);
+  if (payload.algorithm === "push-beam-restarts") return beamRestartSearch(payload);
   if (["ultimate", "portfolio", "fast"].includes(payload.algorithm)) {
     const beam = beamSearch({...payload, algorithm: "push-beam"});
     if (beam.path) return {...beam, strategy: "Push Beam"};
@@ -1005,6 +1055,7 @@ function search(payload) {
         if (child.cost >= (bestCost.get(child.exactSignature) ?? Infinity)) continue;
         const childScore = score(child);
         if (!Number.isFinite(childScore)) continue;
+        if (payload.upperBound && child.cost + heuristic(child.boxes, board) > payload.upperBound) continue;
         bestCost.set(child.exactSignature, child.cost);
         frontier.push([childScore, order++, child]);
       } else {

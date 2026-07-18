@@ -11,6 +11,8 @@ const LEVELS = {
 };
 const DIRS = {Up: [-1, 0], Down: [1, 0], Left: [0, -1], Right: [0, 1]};
 const CODE_MOVE = {U: "Up", D: "Down", L: "Left", R: "Right"};
+const VERIFIED_PUSH_BOUNDS = {huge: 252};
+const PUSH_BOUNDS_KEY = "sokomind-push-bounds-v1";
 const KEYS = {ArrowUp: "Up", ArrowDown: "Down", ArrowLeft: "Left", ArrowRight: "Right",
   w: "Up", W: "Up", s: "Down", S: "Down", a: "Left", A: "Left", d: "Right", D: "Right"};
 const $ = (id) => document.getElementById(id);
@@ -18,6 +20,28 @@ const $ = (id) => document.getElementById(id);
 let levelKey = "ultra-tiny", state, initialState, history = [], moveHistory = [], moves = 0;
 let workers = [], animation = [], timer = null, solvedShown = false;
 let startedAt = null, elapsed = 0, clock = null;
+let pushBounds = {...VERIFIED_PUSH_BOUNDS};
+
+try {
+  const storedBounds = JSON.parse(localStorage.getItem(PUSH_BOUNDS_KEY) || "{}");
+  for (const [key, value] of Object.entries(storedBounds)) {
+    if (!Number.isInteger(value) || value <= 0) continue;
+    pushBounds[key] = Math.min(pushBounds[key] ?? Infinity, value);
+  }
+} catch (_error) {
+  // Storage can be unavailable in private browsing; verified bounds still work.
+}
+
+function rememberPushBound() {
+  const pushes = moveHistory.filter(entry => entry.pushed).length;
+  if (!pushes || pushes >= (pushBounds[levelKey] ?? Infinity)) return;
+  pushBounds[levelKey] = pushes;
+  try { localStorage.setItem(PUSH_BOUNDS_KEY, JSON.stringify(pushBounds)); } catch (_error) {}
+}
+
+function currentUpperBound() {
+  return history.length === 0 ? pushBounds[levelKey] : undefined;
+}
 
 function parse(rows) {
   const board = {rows, walls: new Set(), goals: new Map(), floor: new Set()};
@@ -161,6 +185,7 @@ function tryMove(direction, fromSolver = false) {
 }
 function complete() {
   stop(false); setControlsBusy(false); freezeTimer(); setStatus(`Solved in ${moves} moves!`);
+  rememberPushBound();
   if (solvedShown) return; solvedShown = true;
   $("complete-level").textContent = title(levelKey);
   $("complete-moves").textContent = moves;
@@ -282,10 +307,32 @@ function startBidirectionalSolver(purpose) {
   const hardware = navigator.hardwareConcurrency || 2;
   const searchScale = state.boxes.size * state.board.floor.size;
   const reverseLimit = searchScale >= 1200 ? 1 : searchScale >= 500 ? 2 : 3;
+  const sideVisitedLimit = searchScale >= 1200 ? 100000 : searchScale >= 500 ? 250000 : undefined;
   const reverseWorkers = Math.max(1, Math.min(hardware - 1, reverseLimit));
+  const beamProfiles = [
+    {beamProfile: "balanced", weight: 3, diversity: 1.75,
+      topologyWeight: 0.8, goalPackingWeight: 0.8},
+    {beamProfile: "detour", weight: 2, diversity: 2.5,
+      topologyWeight: 1.4, goalPackingWeight: 1.1},
+    {beamProfile: "detour", weight: 2.3, diversity: 2,
+      topologyWeight: 2, goalPackingWeight: 1.3},
+  ];
+  const beamAttemptCount = searchScale >= 1200 ? 10 : 3;
+  const directPlans = Array.from({length: beamAttemptCount}, (_item, index) => ({
+    algorithm: "push-beam",
+    side: "direct",
+    label: `Beam Restart ${index + 1}/${beamAttemptCount}`,
+    beamWidth: searchScale >= 1200 ? 300 : 1000,
+    maxDepth: 600,
+    maxVisited: searchScale >= 1200 ? 110000 : 250000,
+    transpositionLimit: searchScale >= 1200 ? 18000 : 45000,
+    seed: 29 + index * 104729,
+    ...beamProfiles[index % beamProfiles.length],
+  }));
+  let nextDirectPlan = 0;
   const forwardRecords = new Map(), reverseRecordSets = [];
   const workerSides = new Map(), workerRecords = new Map(), workerProgress = new Map();
-  const expectedWorkers = reverseWorkers + 3;
+  const expectedWorkers = reverseWorkers + 1 + directPlans.length;
   let settled = false, totalVisited = 0, doneWorkers = 0;
 
   const finish = (path, strategy = "Bidirectional") => {
@@ -352,7 +399,8 @@ function startBidirectionalSolver(purpose) {
         const delta = data.delta ?? Math.max(0, (data.visited || 0) - previous);
         workerProgress.set(worker, data.visited || previous + delta);
         totalVisited += delta;
-        setStatus(`${workers.length} Ultimate workers searching... ${totalVisited.toLocaleString()} states`);
+        const phase = plan.side === "direct" ? `${plan.label} - ` : "";
+        setStatus(`${workers.length} Ultimate workers searching... ${phase}${totalVisited.toLocaleString()} states`);
         return;
       }
       if (settled) return;
@@ -364,6 +412,11 @@ function startBidirectionalSolver(purpose) {
         worker.terminate();
         workers = workers.filter(item => item !== worker);
         workerSides.delete(worker);
+        workerProgress.delete(worker);
+        workerRecords.delete(worker);
+        if (plan.side === "direct" && nextDirectPlan < directPlans.length) {
+          launch(directPlans[nextDirectPlan++]);
+        }
         if (!settled && doneWorkers === expectedWorkers) {
           setControlsBusy(false);
           setStatus(`No solution found (${totalVisited.toLocaleString()} states).`);
@@ -376,47 +429,35 @@ function startBidirectionalSolver(purpose) {
       worker.terminate();
       workers = workers.filter(item => item !== worker);
       workerSides.delete(worker);
+      workerProgress.delete(worker);
+      workerRecords.delete(worker);
+      if (plan.side === "direct" && nextDirectPlan < directPlans.length) {
+        launch(directPlans[nextDirectPlan++]);
+      }
       if (doneWorkers === expectedWorkers) {
         setControlsBusy(false);
         setStatus("Bidirectional worker failed.");
       }
     };
-    worker.postMessage({state: serializeState(state), ...plan});
+    worker.postMessage({state: serializeState(state), upperBound: currentUpperBound(), ...plan});
   };
 
-  launch({mode: "bidir-forward", side: "forward", label: "Forward Push Search"});
+  launch({
+    mode: "bidir-forward",
+    side: "forward",
+    label: "Forward Push Search",
+    maxVisited: sideVisitedLimit,
+  });
   for (let index = 0; index < reverseWorkers; index++) {
     launch({
       mode: "bidir-reverse",
       side: "reverse",
       label: `Reverse Unsolver ${index + 1}`,
+      maxVisited: sideVisitedLimit,
       reverseShard: {index, count: reverseWorkers},
     });
   }
-  launch({
-    algorithm: "push-beam",
-    side: "direct",
-    label: "Push Beam",
-    beamWidth: searchScale >= 1200 ? 1200 : 1800,
-    maxDepth: 600,
-    weight: 3,
-    diversity: 1.75,
-    topologyWeight: 0.8,
-    seed: 29,
-  });
-  launch({
-    algorithm: "push-beam",
-    side: "direct",
-    label: "Detour Push Beam",
-    beamWidth: searchScale >= 1200 ? 900 : 1200,
-    maxDepth: 600,
-    weight: 2,
-    diversity: 2.5,
-    topologyWeight: 1.4,
-    goalPackingWeight: 1.1,
-    beamProfile: "detour",
-    seed: 83,
-  });
+  launch(directPlans[nextDirectPlan++]);
 }
 function startSolver(purpose) {
   if ($("algorithm").value === "ultimate-bidirectional") {
@@ -479,7 +520,7 @@ function startSolver(purpose) {
         setStatus("Solver worker failed.");
       }
     };
-    worker.postMessage({state: serializeState(state), ...plan});
+    worker.postMessage({state: serializeState(state), upperBound: currentUpperBound(), ...plan});
     launchNext();
   };
   launchNext();

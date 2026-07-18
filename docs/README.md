@@ -30,6 +30,12 @@ frontier. Separate beam quotas preserve promising direct states and strategic
 temporary detours. Search priorities count pushes; walking paths are preserved
 for replay but do not distract the solver from strategic progress.
 
+On very large boards, direct search uses a sequential memory-bounded restart
+portfolio instead of retaining one ever-growing frontier. Restarts alternate
+focused, detour, and room-packing profiles with independent deterministic seeds.
+Completed games save their best push count as an incumbent upper bound; later
+searches prune states whose push lower bound already exceeds that solution.
+
 The board analysis is puzzle-independent. It detects articulation gates and
 one-entrance rooms, derives farthest-first packing pressure and goal dependencies,
 and marks high-traffic packing cells. Hard pruning includes static and player-side
@@ -37,14 +43,15 @@ dead squares, label-aware Hall deadlocks, 2x2 and frozen box groups, and sealed
 corrals. Globally forced pushes in straight tunnels are collapsed into macros.
 Heuristic room ordering affects priority only; it never rejects a state.
 
-Searches are uncapped. They keep running until they find a solution, exhaust
-every reachable state, or you press **Stop**.
+Small searches remain exhaustive. Complex boards use explicit state and cache
+budgets, continuing through independent restarts until a solution is found, the
+configured portfolio is exhausted, or you press **Stop**.
 
 Very large puzzles can still hit browser memory limits before the search space
-is exhausted. Ultimate Bidirectional uses compact parent records and
-automatically reduces its reverse-worker count on complex boards, but Chrome
-can still terminate a tab
-if the puzzle requires millions of retained states.
+is exhausted. Ultimate Bidirectional uses compact parent records, caps each
+bidirectional side on complex boards, bounds worker transposition and memo
+tables, and automatically reduces its reverse-worker count. Finished workers
+release their frontiers while the sequential restart portfolio continues.
 
 ## How to play
 
