@@ -27,6 +27,22 @@ function stateFromRows(rows) {
   return {rows, robot, boxes};
 }
 
+const HUGE_ROWS = [
+  "OOOOOOOOOOOOOOO", "OaSS   S   SSbO", "OSCS  OOO  SDSO", "OX X  OOO  X XO",
+  "O     OOO     O", "OOOO   X   OOOO", "O      O      O", "O G hOOOOOH g O",
+  "O      O      O", "OOO         OOO", "OOO   X X   OOO", "OOOOOOOROOOOOOO",
+  "O B X X X X A O", "O Sc       dS O", "OOOOOOOOOOOOOOO",
+];
+const HUGE_SOLUTION =
+  "URRLLLLRRDDDRRULDLUUURULLDLURULDLUUUUUUULURRRLDDDDLDDDRDRDRDDDRRRRULLLDLUUULURRDRULDLDDDRRRRRRULLLLL" +
+  "DLUUURULLDLURULDLUUUUUUURULLLRRDDDLLLURDRRUUULLDDURRDDLUURULDDLLDRURRDLRDDDDDRRRRRLURRDRURUULRLRDDLL" +
+  "DRLRLLLLDDDDLLURDRUUURULLDLURULDLUUUUUUURULDDDDDDDRDRDRDDDLLLLURRRDRUUURULLDLURULDLUUUUUURULDDULLLDR" +
+  "URRDDDDDDRRRRRRRUDDLLLULDDDLDRRRRRLLLLUUUUDDDDLLLLLLURRRRRDRUUULULULUURURRRRDRRDDLDLURRUULLRLRDDUULU" +
+  "URDDLLULLDLLDDRDRDRRULLDLURULDLLUUURUDLDDDDRRRURDDDRDLLLLLRRRRUUUULLLLUUURUUULLDRURDDRLDLLDRDRLUURDD" +
+  "DLDRRRURDDDRDLLLLRRRUUULLLUUUURRURRRRUUUURRRDLLLULDDDRDLLLLLULDDDDDLDRRRURDDDLRLDRRRRLLLUUURRRRLLUUR" +
+  "LLDLLULLDLUULURDRUURUULLDRURDLDRRRRRDRUUUULURRRDDDRUDLLUULURLDDDDDRDDLUUUUUULURDDDDDDDLDDRUDRUUURULD" +
+  "LUUUULURDDDDDDRDLLLLLLDLUULULLRRDRULLLDRRURDLDRRRRRRRDRUULURLUULLLLLLD";
+
 test("browser worker solves a one-push dedicated-box puzzle", () => {
   const worker = loadWorker();
   const result = worker.search({
@@ -133,6 +149,27 @@ test("player-aware push distances detect one-way chokepoints", () => {
   assert.equal(aware.has("4,3"), true);
 });
 
+test("topology analysis prefers deeper goals in one-entrance rooms", () => {
+  const worker = loadWorker();
+  const board = worker.parse({rows: [
+    "OOOOOOO",
+    "O     O",
+    "OOO OOO",
+    "O  S  O",
+    "O S   O",
+    "O     O",
+    "OOOOOOO",
+  ]});
+  const room = board.topology.rooms[0];
+
+  assert.equal(room.gate, "2,3");
+  assert.ok(room.depths.get("4,2") > room.depths.get("3,3"));
+  assert.ok(
+    worker.topologyPenalty([[3, 3, "X"]], board) >
+      worker.topologyPenalty([[4, 2, "X"]], board),
+  );
+});
+
 test("reverse search charges one unit per pull regardless of walking", () => {
   const worker = loadWorker();
   const board = worker.parse({rows: ["OOOOO", "O   O", "O   O", "O a O", "OOOOO"]});
@@ -173,6 +210,29 @@ test("push beam returns a replayable solution", () => {
   assert.deepEqual(Array.from(result.path), ["Down"]);
 });
 
+test("forced push macro collapses a globally forced corridor", () => {
+  const worker = loadWorker();
+  const state = stateFromRows([
+    "OOOOO",
+    "OOROO",
+    "OOAOO",
+    "OO OO",
+    "OOaOO",
+    "OOOOO",
+  ]);
+  const board = worker.parse(state);
+  const initial = {
+    robot: state.robot,
+    boxes: state.boxes.map(([position, label]) => [...position.split(",").map(Number), label]),
+  };
+  const first = worker.pushNeighbors(initial, board)[0];
+  const collapsed = worker.collapseForcedPushes(first, board);
+
+  assert.equal(collapsed.pushes, 2);
+  assert.deepEqual(Array.from(collapsed.path), ["Down", "Down"]);
+  assert.equal(worker.goal(collapsed.boxes, board.goals), true);
+});
+
 test("beam selection reserves room for heuristic detours and push diversity", () => {
   const worker = loadWorker();
   const candidates = [];
@@ -195,4 +255,35 @@ test("beam selection reserves room for heuristic detours and push diversity", ()
   });
   assert.deepEqual(counts, [6, 5, 5, 4]);
   assert.equal(new Set(selected.map(candidate => candidate.pushClass)).size, 5);
+});
+
+test("all hard pruning preserves the known Huge solution", () => {
+  const worker = loadWorker();
+  const parsed = stateFromRows(HUGE_ROWS);
+  const board = worker.parse(parsed);
+  const dependencies = board.topology.rooms.flatMap(room => room.dependencies)
+    .map(pair => Array.from(pair).join(">"));
+  assert.ok(dependencies.includes("13,3>13,2"));
+  assert.ok(dependencies.includes("13,11>13,12"));
+  let state = {
+    robot: parsed.robot,
+    boxes: parsed.boxes.map(([position, label]) => [...position.split(",").map(Number), label]),
+  };
+  const signature = boxes => boxes.map(box => box.join(",")).sort().join(";");
+  let pushes = 0;
+  for (const code of HUGE_SOLUTION) {
+    const move = {U: "Up", D: "Down", L: "Left", R: "Right"}[code];
+    const before = signature(state.boxes);
+    const next = worker.neighbors(state, board).find(candidate => candidate.move === move);
+    assert.ok(next, `known solution move ${move} must remain legal`);
+    state = next;
+    if (signature(state.boxes) !== before) pushes++;
+    const reachable = worker.reachablePaths(state, board);
+    assert.equal(worker.createsSealedCorralDeadlock(state, board, reachable), false);
+  }
+
+  assert.equal(HUGE_SOLUTION.length, 770);
+  assert.equal(pushes, 252);
+  assert.equal(worker.goal(state.boxes, board.goals), true);
+  assert.equal(worker.heuristic(state.boxes, board), 0);
 });

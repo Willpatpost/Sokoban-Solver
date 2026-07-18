@@ -35,6 +35,128 @@ class Heap {
   }
   get length() { return this.items.length; }
 }
+
+function floorNeighbors(position, floor) {
+  const [y, x] = position.split(",").map(Number);
+  return Object.values(DIRS).map(([dy, dx]) => pkey(y + dy, x + dx))
+    .filter(next => floor.has(next));
+}
+
+function floorComponents(floor, blocked = null) {
+  const remaining = new Set(floor);
+  if (blocked) remaining.delete(blocked);
+  const components = [];
+  while (remaining.size) {
+    const start = remaining.values().next().value;
+    const component = new Set([start]), queue = [start];
+    remaining.delete(start);
+    for (let head = 0; head < queue.length; head++) {
+      for (const next of floorNeighbors(queue[head], floor)) {
+        if (next === blocked || !remaining.has(next)) continue;
+        remaining.delete(next);
+        component.add(next);
+        queue.push(next);
+      }
+    }
+    components.push(component);
+  }
+  return components;
+}
+
+function articulationPoints(floor) {
+  const discovered = new Map(), low = new Map(), parent = new Map(), result = new Set();
+  let time = 0;
+  const visit = position => {
+    discovered.set(position, ++time);
+    low.set(position, time);
+    let children = 0;
+    for (const next of floorNeighbors(position, floor)) {
+      if (!discovered.has(next)) {
+        parent.set(next, position);
+        children++;
+        visit(next);
+        low.set(position, Math.min(low.get(position), low.get(next)));
+        if (!parent.has(position) && children > 1) result.add(position);
+        if (parent.has(position) && low.get(next) >= discovered.get(position)) result.add(position);
+      } else if (next !== parent.get(position)) {
+        low.set(position, Math.min(low.get(position), discovered.get(next)));
+      }
+    }
+  };
+  for (const position of floor) if (!discovered.has(position)) visit(position);
+  return result;
+}
+
+function analyzeTopology(floor, goals) {
+  const articulations = articulationPoints(floor);
+  const tunnels = new Set([...floor].filter(position => {
+    const neighbors = floorNeighbors(position, floor);
+    if (neighbors.length !== 2) return false;
+    const coordinates = neighbors.map(next => next.split(",").map(Number));
+    return coordinates[0][0] === coordinates[1][0] || coordinates[0][1] === coordinates[1][1];
+  }));
+  const candidates = [];
+  for (const gate of articulations) {
+    const components = floorComponents(floor, gate).sort((left, right) => right.size - left.size);
+    for (const cells of components) {
+      if (cells.size < 2 || cells.size > floor.size * 0.72) continue;
+      const roomGoals = [...goals.keys()].filter(goal => cells.has(goal));
+      if (!roomGoals.length) continue;
+      const depths = new Map(), queue = [];
+      for (const neighbor of floorNeighbors(gate, floor)) {
+        if (!cells.has(neighbor)) continue;
+        depths.set(neighbor, 1);
+        queue.push(neighbor);
+      }
+      for (let head = 0; head < queue.length; head++) {
+        const position = queue[head], distance = depths.get(position);
+        for (const next of floorNeighbors(position, floor)) {
+          if (!cells.has(next) || depths.has(next)) continue;
+          depths.set(next, distance + 1);
+          queue.push(next);
+        }
+      }
+      const traffic = new Map([...cells].map(cell => [cell, 0]));
+      for (const goal of roomGoals) {
+        const goalDistances = new Map([[goal, 0]]), goalQueue = [goal];
+        for (let head = 0; head < goalQueue.length; head++) {
+          const position = goalQueue[head], distance = goalDistances.get(position);
+          for (const next of floorNeighbors(position, floor)) {
+            if (!cells.has(next) || goalDistances.has(next)) continue;
+            goalDistances.set(next, distance + 1);
+            goalQueue.push(next);
+          }
+        }
+        const goalDepth = depths.get(goal);
+        for (const cell of cells) {
+          if ((depths.get(cell) ?? Infinity) + (goalDistances.get(cell) ?? Infinity) === goalDepth) {
+            traffic.set(cell, traffic.get(cell) + 1);
+          }
+        }
+      }
+      const dependencies = [];
+      for (const blocker of roomGoals) {
+        const reducedFloor = new Set(floor);
+        reducedFloor.delete(blocker);
+        for (const target of roomGoals) {
+          if (target === blocker) continue;
+          const normallyReachable = reversePushDistances(floor, target).has(gate);
+          const blockedReachable = reversePushDistances(reducedFloor, target).has(gate);
+          if (normallyReachable && !blockedReachable) dependencies.push([blocker, target]);
+        }
+      }
+      candidates.push({gate, cells, goals: roomGoals, depths, traffic, dependencies});
+    }
+  }
+  candidates.sort((left, right) => right.cells.size - left.cells.size);
+  const rooms = [];
+  for (const candidate of candidates) {
+    if (rooms.some(room => [...candidate.cells].every(cell => room.cells.has(cell)))) continue;
+    rooms.push(candidate);
+  }
+  return {articulations, rooms, tunnels};
+}
+
 function parse(data) {
   const floor = new Set(), walls = new Set(), goals = new Map(), goalsByLabel = new Map();
   data.rows.forEach((row, y) => [...row].forEach((ch, x) => {
@@ -52,9 +174,11 @@ function parse(data) {
     goal,
     floor.size / Math.max(1, pushDistances.get(goal).size),
   ]));
+  const topology = analyzeTopology(floor, goals);
   return {
     rows: data.rows, floor, walls, goals, goalsByLabel, pushDistances, goalPressure,
-    heuristicMemo: new Map(), playerPushDistances: new Map(),
+    topology, heuristicMemo: new Map(), playerPushDistances: new Map(),
+    deadlockMemo: new Map(),
   };
 }
 function reversePushDistances(floor, goalKey) {
@@ -207,6 +331,36 @@ function heuristic(boxes, board) {
   }
   return memoizeBounded(board.heuristicMemo, signature, total);
 }
+
+function topologyPenalty(boxes, board) {
+  const occupied = new Map(boxes.map(([y, x, label]) => [pkey(y, x), label]));
+  let penalty = 0;
+  for (const room of board.topology.rooms) {
+    const boxesInside = boxes.filter(([y, x]) => room.cells.has(pkey(y, x)));
+    penalty += Math.abs(boxesInside.length - room.goals.length);
+    for (const [y, x, label] of boxesInside) {
+      const position = pkey(y, x);
+      if (board.goals.get(position) !== label) penalty += 0.35 * (room.traffic.get(position) || 0);
+    }
+
+    const unsolved = room.goals.filter(goal => occupied.get(goal) !== board.goals.get(goal));
+    for (const goal of room.goals) {
+      if (occupied.get(goal) !== board.goals.get(goal)) continue;
+      const depth = room.depths.get(goal) || 0;
+      for (const pending of unsolved) {
+        const pendingDepth = room.depths.get(pending) || 0;
+        if (pendingDepth > depth) penalty += 1 + pendingDepth - depth;
+      }
+    }
+    for (const [blocker, prerequisite] of room.dependencies) {
+      const blockerSolved = occupied.get(blocker) === board.goals.get(blocker);
+      const prerequisiteSolved = occupied.get(prerequisite) === board.goals.get(prerequisite);
+      if (blockerSolved && !prerequisiteSolved) penalty += 4;
+    }
+    if (occupied.has(room.gate) && unsolved.length) penalty += 2 * unsolved.length;
+  }
+  return penalty;
+}
 function forwardPushDistances(floor, startKey) {
   const [startY, startX] = startKey.split(",").map(Number);
   const distances = new Map([[startKey, 0]]), queue = [[startY, startX]];
@@ -266,8 +420,8 @@ function corner(y, x, board, label) {
 }
 function staticDead(y, x, board, label) {
   if (board.goals.get(pkey(y, x)) === label) return false;
-  return !(board.goalsByLabel.get(label) || [])
-    .some(goal => board.pushDistances.get(goal)?.has(pkey(y, x)));
+  const distances = playerAwarePushDistances(board, pkey(y, x));
+  return !(board.goalsByLabel.get(label) || []).some(goal => distances.has(goal));
 }
 function creates2x2Deadlock(boxes, board, movedBox) {
   const occupied = new Map(boxes.map(([y, x, label]) => [pkey(y, x), label]));
@@ -310,6 +464,14 @@ function createsFrozenComponentDeadlock(boxes, board, movedBox) {
   if (movable) return false;
   return [...component].some(position => board.goals.get(position) !== occupied.get(position));
 }
+
+function createsDynamicDeadlock(boxes, board, movedBox) {
+  const signature = `${boxSignature(boxes)}|${movedBox.join(",")}`;
+  if (board.deadlockMemo.has(signature)) return board.deadlockMemo.get(signature);
+  const deadlocked = creates2x2Deadlock(boxes, board, movedBox) ||
+    createsFrozenComponentDeadlock(boxes, board, movedBox);
+  return memoizeBounded(board.deadlockMemo, signature, deadlocked);
+}
 function neighbors(state, board) {
   const occupied = new Map(state.boxes.map((b, i) => [pkey(b[0], b[1]), i])), result = [];
   for (const [move, [dy, dx]] of Object.entries(DIRS)) {
@@ -322,8 +484,7 @@ function neighbors(state, board) {
       const index = occupied.get(next), label = boxes[index][2];
       boxes = boxes.map((b, i) => i === index ? [by, bx, label] : b);
       if (staticDead(by, bx, board, label) ||
-          creates2x2Deadlock(boxes, board, [by, bx]) ||
-          createsFrozenComponentDeadlock(boxes, board, [by, bx])) continue;
+          createsDynamicDeadlock(boxes, board, [by, bx])) continue;
     }
     result.push({robot: [ny, nx], boxes, move});
   }
@@ -361,6 +522,35 @@ function reachablePaths(state, board) {
   };
 }
 
+function createsSealedCorralDeadlock(state, board, reachable) {
+  const occupied = new Map(state.boxes.map(([y, x, label]) => [pkey(y, x), label]));
+  const inaccessible = new Set([...board.floor].filter(position => !reachable.has(position)));
+  while (inaccessible.size) {
+    const start = inaccessible.values().next().value;
+    const component = new Set([start]), queue = [start];
+    inaccessible.delete(start);
+    for (let head = 0; head < queue.length; head++) {
+      for (const next of floorNeighbors(queue[head], board.floor)) {
+        if (!inaccessible.has(next)) continue;
+        inaccessible.delete(next);
+        component.add(next);
+        queue.push(next);
+      }
+    }
+    const componentBoxes = [...component].filter(position => occupied.has(position));
+    if (!componentBoxes.some(position => board.goals.get(position) !== occupied.get(position))) continue;
+    const canOpen = componentBoxes.some(position => {
+      const [y, x] = position.split(",").map(Number);
+      return Object.values(DIRS).some(([dy, dx]) => {
+        const support = pkey(y - dy, x - dx), destination = pkey(y + dy, x + dx);
+        return reachable.has(support) && board.floor.has(destination) && !occupied.has(destination);
+      });
+    });
+    if (!canOpen) return true;
+  }
+  return false;
+}
+
 function pushNeighbors(state, board, reachable = reachablePaths(state, board)) {
   const occupied = new Map(state.boxes.map((b, i) => [pkey(b[0], b[1]), i]));
   const result = [];
@@ -370,13 +560,13 @@ function pushNeighbors(state, board, reachable = reachablePaths(state, board)) {
       if (!reachable.has(support) || !board.floor.has(dest) || occupied.has(dest)) continue;
       const boxes = state.boxes.map((b, i) => i === index ? [y + dy, x + dx, label] : b);
       if (staticDead(y + dy, x + dx, board, label) ||
-          creates2x2Deadlock(boxes, board, [y + dy, x + dx]) ||
-          createsFrozenComponentDeadlock(boxes, board, [y + dy, x + dx])) continue;
+          createsDynamicDeadlock(boxes, board, [y + dy, x + dx])) continue;
       result.push({
         robot: [y, x],
         boxes,
         path: [...reachable.get(support), move],
         pushClass: `${label}:${y},${x}:${move}`,
+        pushedTo: dest,
       });
     }
   });
@@ -389,6 +579,30 @@ function pushKey(state, reachable) {
     if (robotRegion === null || position < robotRegion) robotRegion = position;
   }
   return `${robotRegion}|${[...state.boxes.map(b => b.join(","))].sort().join(";")}`;
+}
+
+function collapseForcedPushes(first, board, limit = 32) {
+  let state = {robot: first.robot, boxes: first.boxes};
+  const path = [...first.path], seen = new Set([exactPushKey(state)]);
+  let pushes = 1;
+  while (pushes < limit && !goal(state.boxes, board.goals)) {
+    const reachable = reachablePaths(state, board);
+    if (createsSealedCorralDeadlock(state, board, reachable)) return null;
+    const choices = pushNeighbors(state, board, reachable);
+    if (choices.length !== 1) break;
+    const next = choices[0], signature = exactPushKey(next);
+    if (seen.has(signature)) break;
+    seen.add(signature);
+    path.push(...next.path);
+    state = {robot: next.robot, boxes: next.boxes};
+    pushes++;
+  }
+  return {...state, path, pushes, pushClass: first.pushClass};
+}
+
+function expandPushMacro(next, board, enabled = true) {
+  if (!enabled || !board.topology.tunnels.has(next.pushedTo)) return {...next, pushes: 1};
+  return collapseForcedPushes(next, board);
 }
 
 function invertWalk(path) {
@@ -555,15 +769,20 @@ function beamSearch(payload) {
   const diversity = payload.diversity ?? 1.5;
   const goalPackingWeight = payload.goalPackingWeight ?? 0.8;
   const mobilityWeight = payload.mobilityWeight ?? 0.03;
+  const topologyWeight = payload.topologyWeight ?? 0.7;
   const beamProfile = payload.beamProfile || "balanced";
   const seed = payload.seed || 0;
   const seenDepth = new Map(), seenExactDepth = new Map();
-  let visited = 0, reported = 0;
+  let visited = 0, reported = 0, bestEstimate = Infinity, bestPushes = 0;
 
   initial.reachable = reachablePaths(initial, board);
+  if (createsSealedCorralDeadlock(initial, board, initial.reachable)) {
+    return {path: null, visited};
+  }
   initial.signature = pushKey(initial, initial.reachable);
   const initialEstimate = heuristic(initial.boxes, board);
   if (!Number.isFinite(initialEstimate)) return {path: null, visited};
+  bestEstimate = initialEstimate;
   seenDepth.set(initial.signature, 0);
   let beam = [initial];
 
@@ -575,10 +794,13 @@ function beamSearch(payload) {
         return {path: reconstructNodePath(current.node), visited};
       }
       if (payload.maxVisited && visited >= payload.maxVisited) {
-        return {path: null, visited, cutoff: true};
+        return {path: null, visited, cutoff: true, bestEstimate, bestPushes};
       }
-      for (const next of pushNeighbors(current, board, current.reachable)) {
-        const child = {robot: next.robot, boxes: next.boxes, cost: depth + 1};
+      for (const rawNext of pushNeighbors(current, board, current.reachable)) {
+        const next = expandPushMacro(rawNext, board, payload.forcedMacros !== false);
+        if (!next) continue;
+        const child = {robot: next.robot, boxes: next.boxes, cost: current.cost + next.pushes};
+        if (child.cost > maxDepth) continue;
         if (goal(child.boxes, board.goals)) {
           return {
             path: [...reconstructNodePath(current.node), ...next.path],
@@ -589,9 +811,16 @@ function beamSearch(payload) {
         if ((seenExactDepth.get(child.exactSignature) ?? Infinity) <= child.cost) continue;
         const estimate = heuristic(child.boxes, board);
         if (!Number.isFinite(estimate)) continue;
-        const score = weight * estimate - goalPackingWeight * goalPackingBonus(child.boxes, board) +
+        if (estimate < bestEstimate) {
+          bestEstimate = estimate;
+          bestPushes = child.cost;
+        }
+        const topology = topologyPenalty(child.boxes, board);
+        const score = weight * estimate + topologyWeight * topology -
+          goalPackingWeight * goalPackingBonus(child.boxes, board) +
           diversity * signatureNoise(child.exactSignature, seed);
-        const exploreScore = -goalPackingWeight * goalPackingBonus(child.boxes, board) +
+        const exploreScore = topologyWeight * topology -
+          goalPackingWeight * goalPackingBonus(child.boxes, board) +
           diversity * signatureNoise(child.exactSignature, seed + 7919);
         const existing = candidates.get(child.exactSignature);
         if (!existing || score < existing.score) {
@@ -599,6 +828,7 @@ function beamSearch(payload) {
             ...child,
             node: {parent: current.node || null, segment: next.path},
             estimate,
+            topology,
             score,
             exploreScore,
             pushClass: next.pushClass,
@@ -614,6 +844,7 @@ function beamSearch(payload) {
     beam = [];
     for (const child of shortlist) {
       child.reachable = reachablePaths(child, board);
+      if (createsSealedCorralDeadlock(child, board, child.reachable)) continue;
       child.signature = pushKey(child, child.reachable);
       if ((seenDepth.get(child.signature) ?? Infinity) <= child.cost) continue;
       child.score -= mobilityWeight * child.reachable.size;
@@ -624,7 +855,7 @@ function beamSearch(payload) {
     }
     beam = selectBeamLayer(beam, width, beamProfile);
   }
-  return {path: null, visited};
+  return {path: null, visited, bestEstimate, bestPushes};
 }
 
 function bidirectionalSide(payload) {
@@ -644,13 +875,15 @@ function bidirectionalSide(payload) {
       : homeHeuristic(state.boxes, initialTargets);
     if (!Number.isFinite(estimate) || bestCost.has(state.exactSignature)) return;
     bestCost.set(state.exactSignature, state.cost);
-    frontier.push([state.cost + estimate, order++, state]);
+    const topology = forward ? 0.2 * topologyPenalty(state.boxes, board) : 0;
+    frontier.push([state.cost + estimate + topology, order++, state]);
   });
 
   while (frontier.length) {
     const current = frontier.pop()[2];
     if (bestCost.get(current.exactSignature) !== current.cost) continue;
     const reachable = reachablePaths(current, board);
+    if (forward && createsSealedCorralDeadlock(current, board, reachable)) continue;
     const signature = pushKey(current, reachable);
     if (closed.has(signature)) continue;
     closed.add(signature); visited++;
@@ -689,7 +922,8 @@ function bidirectionalSide(payload) {
       if (!Number.isFinite(estimate)) continue;
       bestCost.set(next.exactSignature, next.cost);
       const weightedEstimate = (forward ? 1.4 : 1.2) * estimate;
-      frontier.push([next.cost + weightedEstimate, order++, next]);
+      const topology = forward ? 0.2 * topologyPenalty(next.boxes, board) : 0;
+      frontier.push([next.cost + weightedEstimate + topology, order++, next]);
     }
     if (visited % 1000 === 0) {
       postMessage({type: "progress", visited, delta: visited - reported});
@@ -726,8 +960,10 @@ function search(payload) {
   let order = 0, visited = 0;
   const score = (s) => algorithm === "bfs" ? s.cost :
     algorithm === "dfs" ? -s.cost :
-    ["greedy", "push-greedy"].includes(algorithm) ? heuristic(s.boxes, board) :
-    s.cost + weight * heuristic(s.boxes, board);
+    ["greedy", "push-greedy"].includes(algorithm)
+      ? heuristic(s.boxes, board) + 0.3 * topologyPenalty(s.boxes, board) :
+    s.cost + weight * heuristic(s.boxes, board) +
+      (algorithm === "weighted-push-astar" ? 0.15 * topologyPenalty(s.boxes, board) : 0);
   if (pushMacro) {
     initial.exactSignature = exactPushKey(initial);
     bestCost.set(initial.exactSignature, 0);
@@ -752,14 +988,17 @@ function search(payload) {
       cameFrom.set(signature, {parent: current.parent, segment: current.segment});
     }
     if (goal(current.boxes, board.goals)) return {path: reconstructPath(cameFrom, signature), visited};
+    if (pushMacro && createsSealedCorralDeadlock(current, board, reachable)) continue;
     if (payload.maxVisited && visited >= payload.maxVisited) {
       return {path: null, visited, cutoff: true};
     }
-    const nextStates = pushMacro ? pushNeighbors(current, board, reachable) :
+    const nextStates = pushMacro ? pushNeighbors(current, board, reachable)
+      .map(next => expandPushMacro(next, board, payload.forcedMacros !== false))
+      .filter(Boolean) :
       neighbors(current, board).map(n => ({robot: n.robot, boxes: n.boxes, path: [n.move]}));
     for (const next of nextStates) {
       const child = {robot: next.robot, boxes: next.boxes,
-        cost: current.cost + (pushMacro ? 1 : next.path.length),
+        cost: current.cost + (pushMacro ? next.pushes : next.path.length),
         parent: signature, segment: next.path};
       if (pushMacro) {
         child.exactSignature = exactPushKey(child);

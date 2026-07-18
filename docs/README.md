@@ -23,10 +23,19 @@ heuristics. This is much more appropriate for large Sokoban boards than
 expanding every single walking step.
 
 Ultimate modes also race a bounded-memory Push Beam strategy. It uses exact
-box-to-goal assignment for all box counts, constrained-goal packing, robot-region
+box-to-goal assignment for all box counts, player-side-aware push pattern maps,
+automatic room and chokepoint analysis, constrained-goal packing, robot-region
 mobility, and deterministic diversity while retaining only a fixed-width push
-frontier. Search priorities count pushes; walking paths are preserved for replay
-but do not distract the solver from strategic progress.
+frontier. Separate beam quotas preserve promising direct states and strategic
+temporary detours. Search priorities count pushes; walking paths are preserved
+for replay but do not distract the solver from strategic progress.
+
+The board analysis is puzzle-independent. It detects articulation gates and
+one-entrance rooms, derives farthest-first packing pressure and goal dependencies,
+and marks high-traffic packing cells. Hard pruning includes static and player-side
+dead squares, label-aware Hall deadlocks, 2x2 and frozen box groups, and sealed
+corrals. Globally forced pushes in straight tunnels are collapsed into macros.
+Heuristic room ordering affects priority only; it never rejects a state.
 
 Searches are uncapped. They keep running until they find a solution, exhaust
 every reachable state, or you press **Stop**.

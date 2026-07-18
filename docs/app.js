@@ -401,6 +401,7 @@ function startBidirectionalSolver(purpose) {
     maxDepth: 600,
     weight: 3,
     diversity: 1.75,
+    topologyWeight: 0.8,
     seed: 29,
   });
   launch({
@@ -411,6 +412,8 @@ function startBidirectionalSolver(purpose) {
     maxDepth: 600,
     weight: 2,
     diversity: 2.5,
+    topologyWeight: 1.4,
+    goalPackingWeight: 1.1,
     beamProfile: "detour",
     seed: 83,
   });
