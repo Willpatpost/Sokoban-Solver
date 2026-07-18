@@ -114,6 +114,25 @@ test("Hungarian matching enforces distinct goals and detects Hall deadlocks", ()
   ]), Infinity);
 });
 
+test("player-aware push distances detect one-way chokepoints", () => {
+  const worker = loadWorker();
+  const board = worker.parse({rows: [
+    "OOOOOOO",
+    "O S   O",
+    "O X   O",
+    "OOO OOO",
+    "O  S  O",
+    "O     O",
+    "OOOOOOO",
+  ]});
+  const geometric = board.pushDistances.get("1,2");
+  const aware = worker.playerAwarePushDistances(board, "2,2");
+
+  assert.equal(geometric.has("2,2"), true);
+  assert.equal(aware.has("1,2"), false);
+  assert.equal(aware.has("4,3"), true);
+});
+
 test("reverse search charges one unit per pull regardless of walking", () => {
   const worker = loadWorker();
   const board = worker.parse({rows: ["OOOOO", "O   O", "O   O", "O a O", "OOOOO"]});
@@ -152,4 +171,28 @@ test("push beam returns a replayable solution", () => {
     state: stateFromRows(["OOOOO", "O R O", "O A O", "O a O", "OOOOO"]),
   });
   assert.deepEqual(Array.from(result.path), ["Down"]);
+});
+
+test("beam selection reserves room for heuristic detours and push diversity", () => {
+  const worker = loadWorker();
+  const candidates = [];
+  for (let index = 0; index < 40; index++) {
+    const estimate = index < 10 ? 10 : index < 20 ? 14 : index < 30 ? 18 : 25;
+    candidates.push({
+      exactSignature: `state-${index}`,
+      pushClass: `box-${index % 5}`,
+      estimate,
+      score: estimate * 3 + index / 100,
+      exploreScore: index / 100,
+    });
+  }
+
+  const selected = worker.selectBeamLayer(candidates, 20, "detour");
+  const counts = [0, 0, 0, 0];
+  selected.forEach(candidate => {
+    const slack = candidate.estimate - 10;
+    counts[slack <= 2 ? 0 : slack <= 5 ? 1 : slack <= 9 ? 2 : 3]++;
+  });
+  assert.deepEqual(counts, [6, 5, 5, 4]);
+  assert.equal(new Set(selected.map(candidate => candidate.pushClass)).size, 5);
 });

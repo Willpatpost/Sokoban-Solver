@@ -285,7 +285,7 @@ function startBidirectionalSolver(purpose) {
   const reverseWorkers = Math.max(1, Math.min(hardware - 1, reverseLimit));
   const forwardRecords = new Map(), reverseRecordSets = [];
   const workerSides = new Map(), workerRecords = new Map(), workerProgress = new Map();
-  const expectedWorkers = reverseWorkers + 2;
+  const expectedWorkers = reverseWorkers + 3;
   let settled = false, totalVisited = 0, doneWorkers = 0;
 
   const finish = (path, strategy = "Bidirectional") => {
@@ -402,6 +402,17 @@ function startBidirectionalSolver(purpose) {
     weight: 3,
     diversity: 1.75,
     seed: 29,
+  });
+  launch({
+    algorithm: "push-beam",
+    side: "direct",
+    label: "Detour Push Beam",
+    beamWidth: searchScale >= 1200 ? 900 : 1200,
+    maxDepth: 600,
+    weight: 2,
+    diversity: 2.5,
+    beamProfile: "detour",
+    seed: 83,
   });
 }
 function startSolver(purpose) {

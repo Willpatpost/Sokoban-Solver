@@ -54,7 +54,7 @@ function parse(data) {
   ]));
   return {
     rows: data.rows, floor, walls, goals, goalsByLabel, pushDistances, goalPressure,
-    heuristicMemo: new Map(),
+    heuristicMemo: new Map(), playerPushDistances: new Map(),
   };
 }
 function reversePushDistances(floor, goalKey) {
@@ -131,6 +131,63 @@ function minimumAssignmentCost(costs) {
   }
   return total;
 }
+
+function singleBoxReachable(floor, boxKey, startKey) {
+  const reached = new Set([startKey]), queue = [startKey];
+  for (let head = 0; head < queue.length; head++) {
+    const [y, x] = queue[head].split(",").map(Number);
+    for (const [dy, dx] of Object.values(DIRS)) {
+      const next = pkey(y + dy, x + dx);
+      if (next === boxKey || !floor.has(next) || reached.has(next)) continue;
+      reached.add(next);
+      queue.push(next);
+    }
+  }
+  return reached;
+}
+
+function playerAwarePushDistances(board, startKey) {
+  if (board.playerPushDistances.has(startKey)) return board.playerPushDistances.get(startKey);
+  const initialRegions = [], unassigned = new Set(board.floor);
+  unassigned.delete(startKey);
+  while (unassigned.size) {
+    const representative = unassigned.values().next().value;
+    const region = singleBoxReachable(board.floor, startKey, representative);
+    region.forEach(position => unassigned.delete(position));
+    initialRegions.push(representative);
+  }
+
+  const distances = new Map([[startKey, 0]]), seen = new Set(), queue = [];
+  const enqueue = (boxKey, robotKey, distance) => {
+    const region = singleBoxReachable(board.floor, boxKey, robotKey);
+    let representative = null;
+    for (const position of region) {
+      if (representative === null || position < representative) representative = position;
+    }
+    const signature = `${boxKey}|${representative}`;
+    if (seen.has(signature)) return;
+    seen.add(signature);
+    queue.push({boxKey, region, distance});
+  };
+  initialRegions.forEach(robotKey => enqueue(startKey, robotKey, 0));
+
+  for (let head = 0; head < queue.length; head++) {
+    const {boxKey, region, distance} = queue[head];
+    const [y, x] = boxKey.split(",").map(Number);
+    for (const [dy, dx] of Object.values(DIRS)) {
+      const support = pkey(y - dy, x - dx), destination = pkey(y + dy, x + dx);
+      if (!region.has(support) || !board.floor.has(destination)) continue;
+      const nextDistance = distance + 1;
+      if (nextDistance < (distances.get(destination) ?? Infinity)) {
+        distances.set(destination, nextDistance);
+      }
+      enqueue(destination, boxKey, nextDistance);
+    }
+  }
+  board.playerPushDistances.set(startKey, distances);
+  return distances;
+}
+
 function heuristic(boxes, board) {
   const signature = boxSignature(boxes);
   if (board.heuristicMemo.has(signature)) return board.heuristicMemo.get(signature);
@@ -142,9 +199,10 @@ function heuristic(boxes, board) {
   let total = 0;
   for (const [label, positions] of byLabel) {
     const targets = board.goalsByLabel.get(label) || [];
-    const costs = positions.map(([y, x]) => targets.map(target => (
-      board.pushDistances.get(target)?.get(pkey(y, x)) ?? Infinity
-    )));
+    const costs = positions.map(([y, x]) => {
+      const distances = playerAwarePushDistances(board, pkey(y, x));
+      return targets.map(target => distances.get(target) ?? Infinity);
+    });
     total += minimumAssignmentCost(costs);
   }
   return memoizeBounded(board.heuristicMemo, signature, total);
@@ -314,7 +372,12 @@ function pushNeighbors(state, board, reachable = reachablePaths(state, board)) {
       if (staticDead(y + dy, x + dx, board, label) ||
           creates2x2Deadlock(boxes, board, [y + dy, x + dx]) ||
           createsFrozenComponentDeadlock(boxes, board, [y + dy, x + dx])) continue;
-      result.push({robot: [y, x], boxes, path: [...reachable.get(support), move]});
+      result.push({
+        robot: [y, x],
+        boxes,
+        path: [...reachable.get(support), move],
+        pushClass: `${label}:${y},${x}:${move}`,
+      });
     }
   });
   return result;
@@ -422,6 +485,61 @@ function reconstructNodePath(node) {
   return path;
 }
 
+function takeDiverse(candidates, count, selected, scoreKey) {
+  const groups = new Map();
+  for (const candidate of candidates) {
+    if (selected.has(candidate.exactSignature)) continue;
+    const key = candidate.pushClass || candidate.exactSignature;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(candidate);
+  }
+  let queues = [...groups.values()].map(items => ({
+    items: items.sort((left, right) => left[scoreKey] - right[scoreKey]),
+    index: 0,
+  }));
+  queues.sort((left, right) => left.items[0][scoreKey] - right.items[0][scoreKey]);
+  const result = [];
+  while (result.length < count && queues.length) {
+    const remaining = [];
+    for (const queue of queues) {
+      if (result.length >= count) break;
+      const candidate = queue.items[queue.index++];
+      if (!selected.has(candidate.exactSignature)) {
+        selected.add(candidate.exactSignature);
+        result.push(candidate);
+      }
+      if (queue.index < queue.items.length) remaining.push(queue);
+    }
+    queues = remaining;
+  }
+  return result;
+}
+
+function selectBeamLayer(candidates, width, profile = "balanced") {
+  if (candidates.length <= width) return candidates;
+  let bestEstimate = Infinity;
+  for (const candidate of candidates) bestEstimate = Math.min(bestEstimate, candidate.estimate);
+  const bands = [[], [], [], []];
+  for (const candidate of candidates) {
+    const slack = candidate.estimate - bestEstimate;
+    bands[slack <= 2 ? 0 : slack <= 5 ? 1 : slack <= 9 ? 2 : 3].push(candidate);
+  }
+  const ratios = profile === "detour" ? [0.30, 0.25, 0.25, 0.20] : [0.50, 0.25, 0.15, 0.10];
+  const selected = new Set(), result = [];
+  bands.forEach((band, index) => {
+    const quota = index === bands.length - 1
+      ? width - ratios.slice(0, index).reduce((total, ratio) => total + Math.floor(width * ratio), 0)
+      : Math.floor(width * ratios[index]);
+    const scoreKey = index === bands.length - 1 ? "exploreScore" : "score";
+    result.push(...takeDiverse(band, quota, selected, scoreKey));
+  });
+  if (result.length < width) {
+    const ranked = [...candidates].sort((left, right) => left.score - right.score);
+    result.push(...takeDiverse(ranked, width - result.length, selected, "score"));
+  }
+  return result;
+}
+
 function beamSearch(payload) {
   const board = parse(payload.state);
   const initial = {
@@ -437,6 +555,7 @@ function beamSearch(payload) {
   const diversity = payload.diversity ?? 1.5;
   const goalPackingWeight = payload.goalPackingWeight ?? 0.8;
   const mobilityWeight = payload.mobilityWeight ?? 0.03;
+  const beamProfile = payload.beamProfile || "balanced";
   const seed = payload.seed || 0;
   const seenDepth = new Map(), seenExactDepth = new Map();
   let visited = 0, reported = 0;
@@ -472,12 +591,17 @@ function beamSearch(payload) {
         if (!Number.isFinite(estimate)) continue;
         const score = weight * estimate - goalPackingWeight * goalPackingBonus(child.boxes, board) +
           diversity * signatureNoise(child.exactSignature, seed);
+        const exploreScore = -goalPackingWeight * goalPackingBonus(child.boxes, board) +
+          diversity * signatureNoise(child.exactSignature, seed + 7919);
         const existing = candidates.get(child.exactSignature);
         if (!existing || score < existing.score) {
           candidates.set(child.exactSignature, {
             ...child,
             node: {parent: current.node || null, segment: next.path},
+            estimate,
             score,
+            exploreScore,
+            pushClass: next.pushClass,
           });
         }
       }
@@ -486,19 +610,19 @@ function beamSearch(payload) {
         reported = visited;
       }
     }
-    const ranked = [...candidates.values()].sort((left, right) => left.score - right.score);
+    const shortlist = selectBeamLayer([...candidates.values()], width * 3, beamProfile);
     beam = [];
-    for (const child of ranked.slice(0, width * 3)) {
+    for (const child of shortlist) {
       child.reachable = reachablePaths(child, board);
       child.signature = pushKey(child, child.reachable);
       if ((seenDepth.get(child.signature) ?? Infinity) <= child.cost) continue;
       child.score -= mobilityWeight * child.reachable.size;
+      child.exploreScore -= mobilityWeight * child.reachable.size;
       seenDepth.set(child.signature, child.cost);
       seenExactDepth.set(child.exactSignature, child.cost);
       beam.push(child);
     }
-    beam.sort((left, right) => left.score - right.score);
-    beam = beam.slice(0, width);
+    beam = selectBeamLayer(beam, width, beamProfile);
   }
   return {path: null, visited};
 }
