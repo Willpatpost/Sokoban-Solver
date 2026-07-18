@@ -17,3 +17,8 @@ node --test docs/solver-worker.test.js
 ```
 
 On Windows, use `py -m unittest discover -v` if `python` is not on PATH.
+
+
+## Proof that the huge puzzle is solvable:
+
+![Huge Solution Proof](data/images/"HugeSolutionProof.png")
