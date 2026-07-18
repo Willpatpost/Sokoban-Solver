@@ -11,7 +11,7 @@ const LEVELS = {
 };
 const DIRS = {Up: [-1, 0], Down: [1, 0], Left: [0, -1], Right: [0, 1]};
 const CODE_MOVE = {U: "Up", D: "Down", L: "Left", R: "Right"};
-const SOLVER_BUILD = "2026-07-18.3";
+const SOLVER_BUILD = "2026-07-18.5";
 const SOLVER_WORKER_URL = `solver-worker.js?build=${SOLVER_BUILD}`;
 const VERIFIED_PUSH_BOUNDS = {huge: 252};
 const PUSH_BOUNDS_KEY = "sokomind-push-bounds-v1";
@@ -43,6 +43,11 @@ function rememberPushBound() {
 
 function currentUpperBound() {
   return history.length === 0 ? pushBounds[levelKey] : undefined;
+}
+
+function planUpperBound(plan) {
+  const incumbent = currentUpperBound();
+  return Number.isFinite(incumbent) ? incumbent + (plan.boundSlack || 0) : incumbent;
 }
 
 function parse(rows) {
@@ -358,9 +363,21 @@ function startBidirectionalSolver(purpose) {
     sequenceMacroExplored: 32,
     endgameVisited: 60000,
     endgameThreshold: 60,
-    endgameCandidates: 24,
-    endgameAttempts: 12,
+    endgameCandidates: 32,
+    endgameAttempts: 16,
     endgameProfiles: ["balanced", "detour", "room-flow"],
+    boundSlack: 80,
+    continuationVisited: 20000,
+    continuationAttempts: 16,
+    continuationWidth: 36,
+    continuationProfiles: [
+      {beamProfile: "detour", weight: 3.5, topologyWeight: 0.6,
+        goalPackingWeight: 1.7, diversity: 1.4},
+      {beamProfile: "milestone", weight: 2.6, topologyWeight: 1.2,
+        goalPackingWeight: 1.4, diversity: 2},
+      {beamProfile: "balanced", weight: 4, topologyWeight: 0.35,
+        goalPackingWeight: 1.8, diversity: 1.1},
+    ],
     ...settings,
   })) : [];
   const dfsProfiles = [
@@ -457,7 +474,12 @@ function startBidirectionalSolver(purpose) {
       if (data.type === "done") {
         const previous = workerProgress.get(worker) || 0;
         totalVisited += Math.max(0, (data.visited || 0) - previous);
-        completedPhases.push(`${plan.label}: ${(data.visited || 0).toLocaleString()}`);
+        const progress = Number.isFinite(data.bestEstimate)
+          ? `, h${data.bestEstimate} @ p${data.bestPushes || 0}`
+          : "";
+        completedPhases.push(
+          `${plan.label}: ${(data.visited || 0).toLocaleString()}${progress}`,
+        );
         if (plan.side === "direct" && data.path && finish(data.path, plan.label)) return;
         doneWorkers++;
         worker.terminate();
@@ -493,7 +515,7 @@ function startBidirectionalSolver(purpose) {
         setStatus("Bidirectional worker failed.");
       }
     };
-    worker.postMessage({state: serializeState(state), upperBound: currentUpperBound(), ...plan});
+    worker.postMessage({state: serializeState(state), upperBound: planUpperBound(plan), ...plan});
   };
 
   launch({
@@ -574,7 +596,7 @@ function startSolver(purpose) {
         setStatus("Solver worker failed.");
       }
     };
-    worker.postMessage({state: serializeState(state), upperBound: currentUpperBound(), ...plan});
+    worker.postMessage({state: serializeState(state), upperBound: planUpperBound(plan), ...plan});
     launchNext();
   };
   launchNext();

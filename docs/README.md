@@ -50,6 +50,9 @@ pushes of one box, including turns, and returns only diverse stopping points to
 the global beam. This lets the solver evaluate temporary setup sequences as one
 strategic action. Low-distance macro states are handed to several bounded
 endgame searches with different packing priorities.
+Incomplete macro workers receive a limited push allowance above a known
+incumbent, making it possible to discover an easier non-optimal solution before
+the exact workers prove or improve the incumbent.
 
 The board analysis is puzzle-independent. It detects articulation gates and
 one-entrance rooms, derives farthest-first packing pressure and goal dependencies,

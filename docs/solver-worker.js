@@ -449,6 +449,22 @@ function roomTransitionEvent(before, after, board) {
   const current = roomFlowSignature(after, board);
   return previous === current ? null : current;
 }
+
+function stratifiedCheckpoints(checkpoints) {
+  const bands = new Map();
+  for (const checkpoint of checkpoints) {
+    if (!bands.has(checkpoint.checkpointBand)) bands.set(checkpoint.checkpointBand, []);
+    bands.get(checkpoint.checkpointBand).push(checkpoint);
+  }
+  const queues = [...bands.entries()]
+    .sort(([left], [right]) => left - right)
+    .map(([, items]) => items);
+  const result = [];
+  for (let depth = 0; queues.some(items => depth < items.length); depth++) {
+    for (const items of queues) if (depth < items.length) result.push(items[depth]);
+  }
+  return result;
+}
 function forwardPushDistances(floor, startKey) {
   const [startY, startX] = startKey.split(",").map(Number);
   const distances = new Map([[startKey, 0]]), queue = [[startY, startX]];
@@ -968,6 +984,7 @@ function beamSearch(payload) {
   const seenDepth = new BoundedDepthMap(transpositionLimit);
   const seenExactDepth = new BoundedDepthMap(Math.max(8000, Math.floor(transpositionLimit / 2)));
   let visited = 0, reported = 0, bestEstimate = Infinity, bestPushes = 0;
+  let beamCutoff = false;
   let bestCheckpoint = null;
   const endgameCheckpoints = [];
   let trackedThrough = payload.trackedSignatures ? 0 : undefined;
@@ -985,7 +1002,7 @@ function beamSearch(payload) {
   seenDepth.set(initial.signature, 0);
   let beam = [initial];
 
-  for (let depth = 0; beam.length && depth <= maxDepth; depth++) {
+  searchLayers: for (let depth = 0; beam.length && depth <= maxDepth; depth++) {
     const candidates = new Map();
     for (const current of beam) {
       visited++;
@@ -993,7 +1010,8 @@ function beamSearch(payload) {
         return {path: reconstructNodePath(current.node), visited};
       }
       if (payload.maxVisited && visited >= payload.maxVisited) {
-        return {path: null, visited, cutoff: true, bestEstimate, bestPushes, trackedThrough};
+        beamCutoff = true;
+        break searchLayers;
       }
       for (const rawNext of pushNeighbors(current, board, current.reachable)) {
         const expansions = payload.straightMacros
@@ -1063,7 +1081,8 @@ function beamSearch(payload) {
               (estimate === bestCheckpoint.estimate && child.cost < bestCheckpoint.cost)) {
             bestCheckpoint = candidate;
           }
-          if (payload.endgameVisited && estimate <= (payload.endgameThreshold || 60)) {
+          if ((payload.endgameVisited || payload.continuationVisited) &&
+              estimate <= (payload.endgameThreshold || 60)) {
             const solvedGoals = candidate.boxes
               .filter(([y, x, label]) => board.goals.get(pkey(y, x)) === label)
               .map(([y, x, label]) => `${y},${x},${label}`)
@@ -1071,6 +1090,7 @@ function beamSearch(payload) {
               .join(";");
             candidate.checkpointClass =
               `${roomFlowSignature(candidate.boxes, board)}|${solvedGoals}|${next.pushClass}`;
+            candidate.checkpointBand = Math.floor(estimate / 10);
             const existingCheckpoint = endgameCheckpoints.findIndex(checkpoint =>
               checkpoint.checkpointClass === candidate.checkpointClass);
             if (existingCheckpoint >= 0) {
@@ -1083,7 +1103,23 @@ function beamSearch(payload) {
               (left.cost + left.estimate) - (right.cost + right.estimate) ||
               left.cost - right.cost);
             if (endgameCheckpoints.length > (payload.endgameCandidates || 24)) {
-              endgameCheckpoints.pop();
+              const bandCounts = new Map();
+              endgameCheckpoints.forEach(checkpoint => bandCounts.set(
+                checkpoint.checkpointBand,
+                (bandCounts.get(checkpoint.checkpointBand) || 0) + 1,
+              ));
+              let crowdedBand = null, crowdedCount = 0;
+              for (const [band, count] of bandCounts) {
+                if (count > crowdedCount || (count === crowdedCount && band < crowdedBand)) {
+                  crowdedBand = band;
+                  crowdedCount = count;
+                }
+              }
+              for (let remove = endgameCheckpoints.length - 1; remove >= 0; remove--) {
+                if (endgameCheckpoints[remove].checkpointBand !== crowdedBand) continue;
+                endgameCheckpoints.splice(remove, 1);
+                break;
+              }
             }
           }
         }
@@ -1116,11 +1152,58 @@ function beamSearch(payload) {
       }
     }
   }
-  if (payload.endgameVisited && endgameCheckpoints.length) {
-    let remainingVisited = payload.endgameVisited;
-    const attempts = Math.min(payload.endgameAttempts || 12, endgameCheckpoints.length);
+  const probeCheckpoints = stratifiedCheckpoints(endgameCheckpoints);
+  if (payload.continuationVisited && probeCheckpoints.length) {
+    let remainingVisited = payload.continuationVisited;
+    const profiles = payload.continuationProfiles?.length
+      ? payload.continuationProfiles
+      : [{beamProfile: "detour", weight: 3.5, topologyWeight: 0.6}];
+    const attempts = Math.min(payload.continuationAttempts || 8, probeCheckpoints.length);
     for (let index = 0; index < attempts && remainingVisited > 0; index++) {
-      const checkpoint = endgameCheckpoints[index];
+      const checkpoint = probeCheckpoints[index];
+      const remainingBound = (payload.upperBound || maxDepth) - checkpoint.cost;
+      const attemptVisited = Math.ceil(remainingVisited / (attempts - index));
+      const continuation = beamSearch({
+        ...payload,
+        ...profiles[index % profiles.length],
+        preparedBoard: undefined,
+        state: {
+          rows: board.rows,
+          robot: checkpoint.robot,
+          boxes: checkpoint.boxes.map(([y, x, label]) => [pkey(y, x), label]),
+        },
+        upperBound: remainingBound,
+        maxDepth: remainingBound,
+        maxVisited: attemptVisited,
+        beamWidth: payload.continuationWidth || 36,
+        transpositionLimit: payload.continuationTranspositionLimit || 10000,
+        seed: seed + (index + 1) * 32452843,
+        progressOffset: (payload.progressOffset || 0) + visited,
+        continuationVisited: 0,
+        endgameVisited: 0,
+      });
+      if (continuation.path) {
+        return {
+          path: [...reconstructNodePath(checkpoint.node), ...continuation.path],
+          visited: visited + continuation.visited,
+          bestEstimate: 0,
+          bestPushes: checkpoint.cost,
+          continuation: true,
+        };
+      }
+      visited += continuation.visited;
+      remainingVisited -= continuation.visited;
+      if ((continuation.bestEstimate ?? Infinity) < bestEstimate) {
+        bestEstimate = continuation.bestEstimate;
+        bestPushes = checkpoint.cost + (continuation.bestPushes || 0);
+      }
+    }
+  }
+  if (payload.endgameVisited && probeCheckpoints.length) {
+    let remainingVisited = payload.endgameVisited;
+    const attempts = Math.min(payload.endgameAttempts || 12, probeCheckpoints.length);
+    for (let index = 0; index < attempts && remainingVisited > 0; index++) {
+      const checkpoint = probeCheckpoints[index];
       const remainingBound = (payload.upperBound || maxDepth) - checkpoint.cost;
       const attemptVisited = Math.ceil(remainingVisited / (attempts - index));
     const endgame = boundedPushDepthFirstSearch({
@@ -1154,7 +1237,7 @@ function beamSearch(payload) {
       remainingVisited -= endgame.visited;
     }
   }
-  return {path: null, visited, bestEstimate, bestPushes, trackedThrough};
+  return {path: null, visited, cutoff: beamCutoff, bestEstimate, bestPushes, trackedThrough};
 }
 
 function beamRestartSearch(payload) {
