@@ -42,6 +42,14 @@ const HUGE_SOLUTION =
   "DLDRRRURDDDRDLLLLRRRUUULLLUUUURRURRRRUUUURRRDLLLULDDDRDLLLLLULDDDDDLDRRRURDDDLRLDRRRRLLLUUURRRRLLUUR" +
   "LLDLLULLDLUULURDRUURUULLDRURDLDRRRRRDRUUUULURRRDDDRUDLLUULURLDDDDDRDDLUUUUUULURDDDDDDDLDDRUDRUUURULD" +
   "LUUUULURDDDDDDRDLLLLLLDLUULULLRRDRULLLDRRURDLDRRRRRRRDRUULURLUULLLLLLD";
+const HUGE_SOLUTION_250 =
+  "DDRRULDLUUURRULLLLDLUUUUUUUULURRRLDDDDLDDDDRRRDDDDRRRRULLLDLUUURULLLLDURRRDDDDRRRRRRULLLLLDLUUURULLL" +
+  "DLUUUUUUUURULLLRRDDDLLLUDRRRUUULLDDURRDDLUURULDDLLDURRDRDDDDDRRRDDDDLLURDRUUURULLLDLUUUUUUUURLRULDDD" +
+  "DDDDDRRRDDDDLLLLURRRDRUUURULLLDLUUUUUUURULDDDDDDDRRRDDDLLLLDLLURRRRRDRUUURUUDLLLDLUUUURRURRRUUUURRRR" +
+  "DLLLULDDDDLDRRDUUDDRRULDLDUULUURDDDRDDLLLLLLDLUUDRRRLLLULUURURUULLDRURDLDRRRRRDRUUUULURRRDDDRULLULLD" +
+  "DRUULURRLDDRRDLULLDDRUUULURDDDDDDRLDRDDLLUDLULDDDLDRRRRRLLLLUUURRRRULDULULDRLRDLULDDDLDRRRRLLLUUUULL" +
+  "DRURDDDRDLLLLLRRRRUUURRUURUUULLLLLLUUUDLLLDRRRURDLDRRRRRURDDDDDRDLLLULDDDRDLLLLRRRUUULLLLURUULULLDDR" +
+  "RURDLDRRRRRDURDRUUUUUUULURDDDDDDDLLLLLLLUUULDLDRRURDLDRRRRRRRDRUULURULLLULLLLD";
 
 test("browser worker solves a one-push dedicated-box puzzle", () => {
   const worker = loadWorker();
@@ -430,4 +438,34 @@ test("all hard pruning preserves the known Huge solution", () => {
   assert.equal(pushes, 252);
   assert.equal(worker.goal(state.boxes, board.goals), true);
   assert.equal(worker.heuristic(state.boxes, board), 0);
+});
+
+test("the improved Huge replay establishes a 250-push incumbent", () => {
+  const worker = loadWorker();
+  const parsed = stateFromRows(HUGE_ROWS);
+  const board = worker.parse(parsed);
+  let state = {
+    robot: parsed.robot,
+    boxes: parsed.boxes.map(([position, label]) => [...position.split(",").map(Number), label]),
+  };
+  const signature = boxes => boxes.map(box => box.join(",")).sort().join(";");
+  let pushes = 0, maximumBound = 0;
+  for (const code of HUGE_SOLUTION_250) {
+    const move = {U: "Up", D: "Down", L: "Left", R: "Right"}[code];
+    const before = signature(state.boxes);
+    const next = worker.neighbors(state, board).find(candidate => candidate.move === move);
+    assert.ok(next, `improved solution move ${move} must remain legal`);
+    state = next;
+    if (signature(state.boxes) !== before) {
+      pushes++;
+      const bound = pushes + worker.heuristic(state.boxes, board);
+      maximumBound = Math.max(maximumBound, bound);
+      assert.ok(bound <= 250);
+    }
+  }
+
+  assert.equal(HUGE_SOLUTION_250.length, 678);
+  assert.equal(pushes, 250);
+  assert.equal(maximumBound, 250);
+  assert.equal(worker.goal(state.boxes, board.goals), true);
 });

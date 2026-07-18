@@ -752,7 +752,8 @@ function expandPushSequences(first, board, maxPushes = 12, maxExplored = 48, max
       continue;
     }
     const continuations = pushBoxNeighbors(state, board, current.pushedTo, reachable);
-    if (!continuations.length) endpoints.push(current);
+    if (!continuations.length) endpoints.push({...current, macroDecision: true});
+    else if (continuations.length > 1) endpoints.push({...current, macroDecision: true});
     for (const next of continuations) {
       const sequence = {
         robot: next.robot,
@@ -771,7 +772,9 @@ function expandPushSequences(first, board, maxPushes = 12, maxExplored = 48, max
     }
   }
   endpoints.push(...queue.slice(head));
-  endpoints.sort((left, right) => right.pushes - left.pushes);
+  endpoints.sort((left, right) =>
+    Number(Boolean(right.macroDecision)) - Number(Boolean(left.macroDecision)) ||
+    right.pushes - left.pushes);
   const selected = [], destinations = new Set();
   for (const endpoint of endpoints) {
     if (destinations.has(endpoint.pushedTo)) continue;
