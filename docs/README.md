@@ -5,6 +5,9 @@ Pages. It includes five levels from Ultra Tiny through Huge, keyboard play,
 undo/reset, a first-move timer, hints, and animated solving in a background Web
 Worker.
 
+The move-history panel records every direction, marks pushes, follows
+undo/reset, and can copy the complete numbered sequence for sharing.
+
 The default solver is **Ultimate Bidirectional**, an experimental Sokoban-aware
 search. It starts one forward Web Worker from the current board and one or more
 reverse Web Workers from different solved robot regions. The reverse workers
@@ -18,6 +21,12 @@ A*, and Push A*. All advanced workers use push-level search, dead-square
 pruning, robot-reachability canonicalization, and wall-aware push-distance
 heuristics. This is much more appropriate for large Sokoban boards than
 expanding every single walking step.
+
+Ultimate modes also race a bounded-memory Push Beam strategy. It uses exact
+box-to-goal assignment for all box counts, constrained-goal packing, robot-region
+mobility, and deterministic diversity while retaining only a fixed-width push
+frontier. Search priorities count pushes; walking paths are preserved for replay
+but do not distract the solver from strategic progress.
 
 Searches are uncapped. They keep running until they find a solution, exhaust
 every reachable state, or you press **Stop**.

@@ -3,6 +3,8 @@
 The desktop edition is a Tkinter application for Windows, macOS, and Linux. It
 includes five built-in levels, custom puzzle loading, keyboard play, a
 first-move timer, undo/reset, hints, and animated solver playback.
+The move-history panel records every direction and marks box pushes; use Copy to
+export a replayable numbered list.
 
 ## Requirements
 

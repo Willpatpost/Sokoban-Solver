@@ -48,7 +48,14 @@ function parse(data) {
     }
   }));
   const pushDistances = new Map([...goals.keys()].map(goal => [goal, reversePushDistances(floor, goal)]));
-  return {rows: data.rows, floor, walls, goals, goalsByLabel, pushDistances, heuristicMemo: new Map()};
+  const goalPressure = new Map([...goals.keys()].map(goal => [
+    goal,
+    floor.size / Math.max(1, pushDistances.get(goal).size),
+  ]));
+  return {
+    rows: data.rows, floor, walls, goals, goalsByLabel, pushDistances, goalPressure,
+    heuristicMemo: new Map(),
+  };
 }
 function reversePushDistances(floor, goalKey) {
   const [gy, gx] = goalKey.split(",").map(Number);
@@ -65,6 +72,65 @@ function reversePushDistances(floor, goalKey) {
   }
   return distances;
 }
+function minimumAssignmentCost(costs) {
+  const size = costs.length;
+  if (!size) return 0;
+  if (costs.some(row => row.length !== size || row.every(cost => !Number.isFinite(cost)))) {
+    return Infinity;
+  }
+  const blocked = 1e9;
+  const rowPotential = Array(size + 1).fill(0);
+  const columnPotential = Array(size + 1).fill(0);
+  const matching = Array(size + 1).fill(0);
+  const predecessor = Array(size + 1).fill(0);
+  for (let row = 1; row <= size; row++) {
+    matching[0] = row;
+    const minimum = Array(size + 1).fill(blocked);
+    const used = Array(size + 1).fill(false);
+    let column = 0;
+    do {
+      used[column] = true;
+      const matchedRow = matching[column];
+      let delta = blocked, nextColumn = 0;
+      for (let candidate = 1; candidate <= size; candidate++) {
+        if (used[candidate]) continue;
+        const cost = costs[matchedRow - 1][candidate - 1];
+        const reduced = (Number.isFinite(cost) ? cost : blocked) -
+          rowPotential[matchedRow] - columnPotential[candidate];
+        if (reduced < minimum[candidate]) {
+          minimum[candidate] = reduced;
+          predecessor[candidate] = column;
+        }
+        if (minimum[candidate] < delta) {
+          delta = minimum[candidate];
+          nextColumn = candidate;
+        }
+      }
+      if (delta >= blocked) return Infinity;
+      for (let candidate = 0; candidate <= size; candidate++) {
+        if (used[candidate]) {
+          rowPotential[matching[candidate]] += delta;
+          columnPotential[candidate] -= delta;
+        } else {
+          minimum[candidate] -= delta;
+        }
+      }
+      column = nextColumn;
+    } while (matching[column] !== 0);
+    do {
+      const previous = predecessor[column];
+      matching[column] = matching[previous];
+      column = previous;
+    } while (column !== 0);
+  }
+  let total = 0;
+  for (let column = 1; column <= size; column++) {
+    const cost = costs[matching[column] - 1][column - 1];
+    if (!Number.isFinite(cost)) return Infinity;
+    total += cost;
+  }
+  return total;
+}
 function heuristic(boxes, board) {
   const signature = boxSignature(boxes);
   if (board.heuristicMemo.has(signature)) return board.heuristicMemo.get(signature);
@@ -76,28 +142,10 @@ function heuristic(boxes, board) {
   let total = 0;
   for (const [label, positions] of byLabel) {
     const targets = board.goalsByLabel.get(label) || [];
-    if (positions.length > 8) {
-      total += positions.reduce((sum, [y, x]) => {
-        const best = Math.min(...targets.map(target => board.pushDistances.get(target)?.get(pkey(y, x)) ?? Infinity));
-        return sum + best;
-      }, 0);
-      continue;
-    }
-    const memo = new Map();
-    const assign = (i, mask) => {
-      if (i === positions.length) return 0;
-      const mk = `${i},${mask}`; if (memo.has(mk)) return memo.get(mk);
-      let best = Infinity;
-      targets.forEach((target, j) => {
-        if (!(mask & (1 << j))) {
-          const [y, x] = positions[i];
-          const distance = board.pushDistances.get(target)?.get(pkey(y, x)) ?? Infinity;
-          best = Math.min(best, distance + assign(i + 1, mask | (1 << j)));
-        }
-      });
-      memo.set(mk, best); return best;
-    };
-    total += assign(0, 0);
+    const costs = positions.map(([y, x]) => targets.map(target => (
+      board.pushDistances.get(target)?.get(pkey(y, x)) ?? Infinity
+    )));
+    total += minimumAssignmentCost(costs);
   }
   return memoizeBounded(board.heuristicMemo, signature, total);
 }
@@ -125,24 +173,6 @@ function targetMapFromBoxes(boxes, floor) {
   targets.memo = new Map();
   return targets;
 }
-function matchingHomeCost(positions, targets) {
-  const memo = new Map();
-  const assign = (index, mask) => {
-    if (index === positions.length) return 0;
-    const key = `${index},${mask}`;
-    if (memo.has(key)) return memo.get(key);
-    let best = Infinity;
-    for (let targetIndex = 0; targetIndex < targets.length; targetIndex++) {
-      if (mask & (1 << targetIndex)) continue;
-      const [y, x] = positions[index];
-      const distance = targets[targetIndex].distances.get(pkey(y, x)) ?? Infinity;
-      best = Math.min(best, distance + assign(index + 1, mask | (1 << targetIndex)));
-    }
-    memo.set(key, best);
-    return best;
-  };
-  return assign(0, 0);
-}
 function homeHeuristic(boxes, targetsByLabel) {
   const signature = boxSignature(boxes);
   if (targetsByLabel.memo.has(signature)) return targetsByLabel.memo.get(signature);
@@ -154,18 +184,21 @@ function homeHeuristic(boxes, targetsByLabel) {
   let total = 0;
   for (const [label, positions] of byLabel) {
     const targets = targetsByLabel.get(label) || [];
-    if (positions.length > 8) {
-      total += positions.reduce((sum, [y, x]) => (
-        sum + Math.min(...targets.map(target => target.distances.get(pkey(y, x)) ?? Infinity))
-      ), 0);
-      continue;
-    }
-    total += matchingHomeCost(positions, targets);
+    const costs = positions.map(([y, x]) => targets.map(target => (
+      target.distances.get(pkey(y, x)) ?? Infinity
+    )));
+    total += minimumAssignmentCost(costs);
   }
   return memoizeBounded(targetsByLabel.memo, signature, total);
 }
 function goal(boxes, goals) {
   return boxes.every(([y, x, label]) => goals.get(pkey(y, x)) === label);
+}
+function goalPackingBonus(boxes, board) {
+  return boxes.reduce((bonus, [y, x, label]) => {
+    const position = pkey(y, x);
+    return bonus + (board.goals.get(position) === label ? board.goalPressure.get(position) || 0 : 0);
+  }, 0);
 }
 function corner(y, x, board, label) {
   if (board.goals.get(pkey(y, x)) === label) return false;
@@ -196,6 +229,29 @@ function creates2x2Deadlock(boxes, board, movedBox) {
   }
   return false;
 }
+function createsFrozenComponentDeadlock(boxes, board, movedBox) {
+  const occupied = new Map(boxes.map(([y, x, label]) => [pkey(y, x), label]));
+  const start = pkey(movedBox[0], movedBox[1]);
+  if (!occupied.has(start)) return false;
+  const component = new Set([start]), queue = [movedBox];
+  for (let head = 0; head < queue.length; head++) {
+    const [y, x] = queue[head];
+    for (const [dy, dx] of Object.values(DIRS)) {
+      const adjacent = pkey(y + dy, x + dx);
+      if (!occupied.has(adjacent) || component.has(adjacent)) continue;
+      component.add(adjacent);
+      queue.push([y + dy, x + dx]);
+    }
+  }
+  const movable = queue.some(([y, x]) => Object.values(DIRS).some(([dy, dx]) => {
+    const destination = pkey(y + dy, x + dx);
+    const support = pkey(y - dy, x - dx);
+    return board.floor.has(destination) && board.floor.has(support) &&
+      !occupied.has(destination) && !occupied.has(support);
+  }));
+  if (movable) return false;
+  return [...component].some(position => board.goals.get(position) !== occupied.get(position));
+}
 function neighbors(state, board) {
   const occupied = new Map(state.boxes.map((b, i) => [pkey(b[0], b[1]), i])), result = [];
   for (const [move, [dy, dx]] of Object.entries(DIRS)) {
@@ -207,7 +263,9 @@ function neighbors(state, board) {
       if (!board.floor.has(beyond) || occupied.has(beyond)) continue;
       const index = occupied.get(next), label = boxes[index][2];
       boxes = boxes.map((b, i) => i === index ? [by, bx, label] : b);
-      if (staticDead(by, bx, board, label) || creates2x2Deadlock(boxes, board, [by, bx])) continue;
+      if (staticDead(by, bx, board, label) ||
+          creates2x2Deadlock(boxes, board, [by, bx]) ||
+          createsFrozenComponentDeadlock(boxes, board, [by, bx])) continue;
     }
     result.push({robot: [ny, nx], boxes, move});
   }
@@ -241,6 +299,7 @@ function reachablePaths(state, board) {
       return path;
     },
     keys: () => parents.keys(),
+    size: parents.size,
   };
 }
 
@@ -252,7 +311,9 @@ function pushNeighbors(state, board, reachable = reachablePaths(state, board)) {
       const support = pkey(y - dy, x - dx), dest = pkey(y + dy, x + dx);
       if (!reachable.has(support) || !board.floor.has(dest) || occupied.has(dest)) continue;
       const boxes = state.boxes.map((b, i) => i === index ? [y + dy, x + dx, label] : b);
-      if (staticDead(y + dy, x + dx, board, label) || creates2x2Deadlock(boxes, board, [y + dy, x + dx])) continue;
+      if (staticDead(y + dy, x + dx, board, label) ||
+          creates2x2Deadlock(boxes, board, [y + dy, x + dx]) ||
+          createsFrozenComponentDeadlock(boxes, board, [y + dy, x + dx])) continue;
       result.push({robot: [y, x], boxes, path: [...reachable.get(support), move]});
     }
   });
@@ -285,13 +346,14 @@ function reversePullNeighbors(state, board, reachable = reachablePaths(state, bo
       if (occupied.has(boxBefore) || occupied.has(robotAfterPull)) continue;
       if (staticDead(y - dy, x - dx, board, label)) continue;
       const boxes = state.boxes.map((b, i) => i === index ? [y - dy, x - dx, label] : b);
-      if (creates2x2Deadlock(boxes, board, [y - dy, x - dx])) continue;
+      if (creates2x2Deadlock(boxes, board, [y - dy, x - dx]) ||
+          createsFrozenComponentDeadlock(boxes, board, [y - dy, x - dx])) continue;
       const walkToPullSpot = reachable.get(boxBefore);
       const walkFromPushLanding = invertWalk(walkToPullSpot);
       result.push({
         robot: [y - 2 * dy, x - 2 * dx],
         boxes,
-        cost: state.cost + 1 + walkFromPushLanding.length,
+        cost: state.cost + 1,
         segment: [move, ...walkFromPushLanding],
       });
     }
@@ -343,6 +405,104 @@ function reconstructPath(cameFrom, signature) {
   return path;
 }
 
+function signatureNoise(signature, seed) {
+  let hash = (2166136261 ^ seed) >>> 0;
+  for (let index = 0; index < signature.length; index++) {
+    hash ^= signature.charCodeAt(index);
+    hash = Math.imul(hash, 16777619) >>> 0;
+  }
+  return hash / 0x100000000;
+}
+
+function reconstructNodePath(node) {
+  const segments = [];
+  for (let current = node; current; current = current.parent) segments.push(current.segment);
+  const path = [];
+  for (let index = segments.length - 1; index >= 0; index--) path.push(...segments[index]);
+  return path;
+}
+
+function beamSearch(payload) {
+  const board = parse(payload.state);
+  const initial = {
+    robot: payload.state.robot,
+    boxes: payload.state.boxes.map(([position, label]) => [
+      ...position.split(",").map(Number), label,
+    ]),
+    cost: 0,
+  };
+  const width = payload.beamWidth || 3000;
+  const maxDepth = payload.maxDepth || 500;
+  const weight = payload.weight || 3;
+  const diversity = payload.diversity ?? 1.5;
+  const goalPackingWeight = payload.goalPackingWeight ?? 0.8;
+  const mobilityWeight = payload.mobilityWeight ?? 0.03;
+  const seed = payload.seed || 0;
+  const seenDepth = new Map(), seenExactDepth = new Map();
+  let visited = 0, reported = 0;
+
+  initial.reachable = reachablePaths(initial, board);
+  initial.signature = pushKey(initial, initial.reachable);
+  const initialEstimate = heuristic(initial.boxes, board);
+  if (!Number.isFinite(initialEstimate)) return {path: null, visited};
+  seenDepth.set(initial.signature, 0);
+  let beam = [initial];
+
+  for (let depth = 0; beam.length && depth <= maxDepth; depth++) {
+    const candidates = new Map();
+    for (const current of beam) {
+      visited++;
+      if (goal(current.boxes, board.goals)) {
+        return {path: reconstructNodePath(current.node), visited};
+      }
+      if (payload.maxVisited && visited >= payload.maxVisited) {
+        return {path: null, visited, cutoff: true};
+      }
+      for (const next of pushNeighbors(current, board, current.reachable)) {
+        const child = {robot: next.robot, boxes: next.boxes, cost: depth + 1};
+        if (goal(child.boxes, board.goals)) {
+          return {
+            path: [...reconstructNodePath(current.node), ...next.path],
+            visited,
+          };
+        }
+        child.exactSignature = exactPushKey(child);
+        if ((seenExactDepth.get(child.exactSignature) ?? Infinity) <= child.cost) continue;
+        const estimate = heuristic(child.boxes, board);
+        if (!Number.isFinite(estimate)) continue;
+        const score = weight * estimate - goalPackingWeight * goalPackingBonus(child.boxes, board) +
+          diversity * signatureNoise(child.exactSignature, seed);
+        const existing = candidates.get(child.exactSignature);
+        if (!existing || score < existing.score) {
+          candidates.set(child.exactSignature, {
+            ...child,
+            node: {parent: current.node || null, segment: next.path},
+            score,
+          });
+        }
+      }
+      if (visited - reported >= 5000) {
+        postMessage({type: "progress", visited});
+        reported = visited;
+      }
+    }
+    const ranked = [...candidates.values()].sort((left, right) => left.score - right.score);
+    beam = [];
+    for (const child of ranked.slice(0, width * 3)) {
+      child.reachable = reachablePaths(child, board);
+      child.signature = pushKey(child, child.reachable);
+      if ((seenDepth.get(child.signature) ?? Infinity) <= child.cost) continue;
+      child.score -= mobilityWeight * child.reachable.size;
+      seenDepth.set(child.signature, child.cost);
+      seenExactDepth.set(child.exactSignature, child.cost);
+      beam.push(child);
+    }
+    beam.sort((left, right) => left.score - right.score);
+    beam = beam.slice(0, width);
+  }
+  return {path: null, visited};
+}
+
 function bidirectionalSide(payload) {
   const board = parse(payload.state);
   const initialBoxes = payload.state.boxes.map(([p, label]) => [...p.split(",").map(Number), label]);
@@ -388,7 +548,7 @@ function bidirectionalSide(payload) {
       ? pushNeighbors(current, board, reachable).map(next => ({
           robot: next.robot,
           boxes: next.boxes,
-          cost: current.cost + next.path.length,
+          cost: current.cost + 1,
           parent: signature,
           segment: next.path,
         }))
@@ -418,7 +578,10 @@ function bidirectionalSide(payload) {
 }
 
 function search(payload) {
+  if (payload.algorithm === "push-beam") return beamSearch(payload);
   if (["ultimate", "portfolio", "fast"].includes(payload.algorithm)) {
+    const beam = beamSearch({...payload, algorithm: "push-beam"});
+    if (beam.path) return {...beam, strategy: "Push Beam"};
     const greedy = search({...payload, algorithm: "push-greedy"});
     if (greedy.path) return {...greedy, strategy: "Push Greedy"};
     const weighted = search({...payload, algorithm: "weighted-push-astar"});
@@ -471,7 +634,8 @@ function search(payload) {
     const nextStates = pushMacro ? pushNeighbors(current, board, reachable) :
       neighbors(current, board).map(n => ({robot: n.robot, boxes: n.boxes, path: [n.move]}));
     for (const next of nextStates) {
-      const child = {robot: next.robot, boxes: next.boxes, cost: current.cost + next.path.length,
+      const child = {robot: next.robot, boxes: next.boxes,
+        cost: current.cost + (pushMacro ? 1 : next.path.length),
         parent: signature, segment: next.path};
       if (pushMacro) {
         child.exactSignature = exactPushKey(child);

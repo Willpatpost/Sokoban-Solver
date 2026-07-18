@@ -15,7 +15,7 @@ const KEYS = {ArrowUp: "Up", ArrowDown: "Down", ArrowLeft: "Left", ArrowRight: "
   w: "Up", W: "Up", s: "Down", S: "Down", a: "Left", A: "Left", d: "Right", D: "Right"};
 const $ = (id) => document.getElementById(id);
 
-let levelKey = "ultra-tiny", state, initialState, history = [], moves = 0;
+let levelKey = "ultra-tiny", state, initialState, history = [], moveHistory = [], moves = 0;
 let workers = [], animation = [], timer = null, solvedShown = false;
 let startedAt = null, elapsed = 0, clock = null;
 
@@ -50,6 +50,19 @@ function moveState(s, direction) {
   }
   result.robot = [y + dy, x + dx];
   return result;
+}
+function isPushMove(s, direction) {
+  const [dy, dx] = DIRS[direction], [y, x] = s.robot;
+  return s.boxes.has(pos(y + dy, x + dx));
+}
+function moveHistoryText() {
+  return moveHistory.map(({direction, pushed}, index) => (
+    `${index + 1}. ${direction}${pushed ? " (push)" : ""}`
+  )).join("\n");
+}
+function renderMoveHistory() {
+  $("move-history-count").textContent = moves.toLocaleString();
+  $("move-history-text").value = moveHistoryText();
 }
 
 function title(key) { return key.split("-").map(x => x[0].toUpperCase() + x.slice(1)).join(" "); }
@@ -127,8 +140,9 @@ function fitBoardToScreen() {
 }
 function loadLevel(key) {
   stop(); levelKey = key; state = parse(LEVELS[key]); initialState = cloneState(state);
-  history = []; moves = 0; solvedShown = false; resetTimer();
+  history = []; moveHistory = []; moves = 0; solvedShown = false; resetTimer();
   setStatus("Use arrow keys or WASD to play."); renderLevels(); render();
+  renderMoveHistory();
 }
 function setControlsBusy(active) {
   $("solve").disabled = active;
@@ -136,10 +150,12 @@ function setControlsBusy(active) {
   $("algorithm").disabled = active;
 }
 function tryMove(direction, fromSolver = false) {
+  const pushed = isPushMove(state, direction);
   const next = moveState(state, direction);
   if (!next) { if (!fromSolver) setStatus(`${direction} is blocked.`); return false; }
   startTimer();
-  history.push(cloneState(state)); state = next; moves++; render();
+  history.push(cloneState(state)); state = next; moves++;
+  moveHistory.push({direction, pushed}); render(); renderMoveHistory();
   if (isGoal(state)) complete(); else if (!fromSolver) setStatus("Playing");
   return true;
 }
@@ -154,12 +170,13 @@ function complete() {
 function setStatus(text) { $("status").textContent = text; }
 function undo() {
   stop(); if (!history.length) return;
-  state = history.pop(); moves--; solvedShown = false; render(); setStatus("Undid one move.");
+  state = history.pop(); moveHistory.pop(); moves--; solvedShown = false;
+  render(); renderMoveHistory(); setStatus("Undid one move.");
 }
 function reset() {
-  stop(); state = cloneState(initialState); history = []; moves = 0; solvedShown = false;
+  stop(); state = cloneState(initialState); history = []; moveHistory = []; moves = 0; solvedShown = false;
   resetTimer();
-  render(); setStatus("Level reset.");
+  render(); renderMoveHistory(); setStatus("Level reset.");
 }
 function stop(message = true) {
   workers.forEach(worker => worker.terminate()); workers = [];
@@ -254,6 +271,7 @@ function solverPlans(algorithm) {
     return [{algorithm, label: $("algorithm").selectedOptions[0].text}];
   }
   return [
+    {algorithm: "push-beam", label: "Push Beam", beamWidth: 1800, weight: 3, seed: 17},
     {algorithm: "push-greedy", label: "Push Greedy"},
     {algorithm: "weighted-push-astar", label: "Weighted Push A*"},
     {algorithm: "push-astar", label: "Push A*"},
@@ -266,10 +284,11 @@ function startBidirectionalSolver(purpose) {
   const reverseLimit = searchScale >= 1200 ? 1 : searchScale >= 500 ? 2 : 3;
   const reverseWorkers = Math.max(1, Math.min(hardware - 1, reverseLimit));
   const forwardRecords = new Map(), reverseRecordSets = [];
-  const workerSides = new Map(), workerRecords = new Map();
+  const workerSides = new Map(), workerRecords = new Map(), workerProgress = new Map();
+  const expectedWorkers = reverseWorkers + 2;
   let settled = false, totalVisited = 0, doneWorkers = 0;
 
-  const finish = (path) => {
+  const finish = (path, strategy = "Bidirectional") => {
     const validated = validatePathToGoal(path);
     if (validated === null) return false;
     settled = true;
@@ -277,10 +296,10 @@ function startBidirectionalSolver(purpose) {
     setControlsBusy(false);
     if (purpose === "hint") {
       setStatus(validated.length
-        ? `Hint: ${validated[0]} - ${validated.length} moves remain (Bidirectional)`
+        ? `Hint: ${validated[0]} - ${validated.length} moves remain (${strategy})`
         : "This puzzle is already solved.");
     } else {
-      setStatus(`Met in the middle: ${validated.length} moves after ${totalVisited.toLocaleString()} states.`);
+      setStatus(`${strategy} found ${validated.length} moves after ${totalVisited.toLocaleString()} states.`);
       animation = validated; animate();
     }
     return true;
@@ -318,7 +337,7 @@ function startBidirectionalSolver(purpose) {
     workerSides.set(worker, plan.side);
     if (plan.side === "forward") {
       workerRecords.set(worker, forwardRecords);
-    } else {
+    } else if (plan.side === "reverse") {
       const records = new Map();
       reverseRecordSets.push(records);
       workerRecords.set(worker, records);
@@ -329,19 +348,25 @@ function startBidirectionalSolver(purpose) {
         return;
       }
       if (data.type === "progress") {
-        totalVisited += data.delta || 0;
-        setStatus(`${workers.length} bidirectional workers searching... ${totalVisited.toLocaleString()} states`);
+        const previous = workerProgress.get(worker) || 0;
+        const delta = data.delta ?? Math.max(0, (data.visited || 0) - previous);
+        workerProgress.set(worker, data.visited || previous + delta);
+        totalVisited += delta;
+        setStatus(`${workers.length} Ultimate workers searching... ${totalVisited.toLocaleString()} states`);
         return;
       }
       if (settled) return;
       if (data.type === "done") {
+        const previous = workerProgress.get(worker) || 0;
+        totalVisited += Math.max(0, (data.visited || 0) - previous);
+        if (plan.side === "direct" && data.path && finish(data.path, plan.label)) return;
         doneWorkers++;
         worker.terminate();
         workers = workers.filter(item => item !== worker);
         workerSides.delete(worker);
-        if (!settled && doneWorkers === reverseWorkers + 1) {
+        if (!settled && doneWorkers === expectedWorkers) {
           setControlsBusy(false);
-          setStatus(`No bidirectional meeting found (${totalVisited.toLocaleString()} states).`);
+          setStatus(`No solution found (${totalVisited.toLocaleString()} states).`);
         }
       }
     };
@@ -351,7 +376,7 @@ function startBidirectionalSolver(purpose) {
       worker.terminate();
       workers = workers.filter(item => item !== worker);
       workerSides.delete(worker);
-      if (doneWorkers === reverseWorkers + 1) {
+      if (doneWorkers === expectedWorkers) {
         setControlsBusy(false);
         setStatus("Bidirectional worker failed.");
       }
@@ -368,6 +393,16 @@ function startBidirectionalSolver(purpose) {
       reverseShard: {index, count: reverseWorkers},
     });
   }
+  launch({
+    algorithm: "push-beam",
+    side: "direct",
+    label: "Push Beam",
+    beamWidth: searchScale >= 1200 ? 1200 : 1800,
+    maxDepth: 600,
+    weight: 3,
+    diversity: 1.75,
+    seed: 29,
+  });
 }
 function startSolver(purpose) {
   if ($("algorithm").value === "ultimate-bidirectional") {
@@ -447,6 +482,14 @@ $("start-game").onclick = hideHome;
 $("hint").onclick = () => startSolver("hint");
 $("stop").onclick = () => stop();
 $("undo").onclick = undo; $("reset").onclick = reset;
+$("copy-moves").onclick = async () => {
+  try {
+    await navigator.clipboard.writeText(moveHistoryText());
+    setStatus(`Copied ${moves.toLocaleString()} moves.`);
+  } catch (_error) {
+    setStatus("Could not copy move history.");
+  }
+};
 $("replay").onclick = () => { $("complete-dialog").close(); reset(); };
 $("next-level").onclick = () => {
   $("complete-dialog").close();

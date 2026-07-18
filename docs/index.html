@@ -21,6 +21,7 @@
             <option value="ultimate-bidirectional">Ultimate Bidirectional</option>
             <option value="ultimate">Ultimate Search</option>
             <option value="portfolio">Fast Portfolio</option>
+            <option value="push-beam">Push Beam</option>
             <option value="weighted-push-astar">Fast Push A*</option>
             <option value="push-astar">Push A*</option>
             <option value="push-greedy">Push Greedy</option>
@@ -66,6 +67,13 @@
           <p id="status">Use arrow keys or WASD to play.</p>
           <p class="key-help"><kbd>&uarr;</kbd><kbd>&darr;</kbd><kbd>&larr;</kbd><kbd>&rarr;</kbd> or <kbd>WASD</kbd></p>
         </footer>
+        <details class="move-history">
+          <summary><span>Move history</span><strong id="move-history-count">0</strong></summary>
+          <div class="move-history-body">
+            <textarea id="move-history-text" aria-label="Move history" readonly></textarea>
+            <button id="copy-moves" title="Copy move history" aria-label="Copy move history">&#10697;</button>
+          </div>
+        </details>
       </section>
     </main>
   </div>

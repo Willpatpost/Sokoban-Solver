@@ -83,6 +83,7 @@ class SokomindApp(tk.Tk):
         self.state: State
         self.initial_state: State
         self.history: list[State] = []
+        self.move_history: list[tuple[str, bool]] = []
         self.moves = 0
         self._animation: list[str] = []
         self._job_id = 0
@@ -144,8 +145,23 @@ class SokomindApp(tk.Tk):
         for name, puzzle in BUILTIN_PUZZLES.items():
             self._add_level_card(name, puzzle)
 
-        self.canvas = tk.Canvas(body, background="#171a21", highlightthickness=0)
-        self.canvas.pack(side="right", fill="both", expand=True)
+        play_area = ttk.Frame(body)
+        play_area.pack(side="right", fill="both", expand=True)
+        move_log = ttk.Frame(play_area, padding=(0, 6, 0, 0))
+        move_log.pack(side="bottom", fill="x")
+        ttk.Label(move_log, text="Move history").pack(side="left", anchor="n", padx=(0, 8))
+        self.move_history_text = tk.Text(
+            move_log, height=5, wrap="none", state="disabled",
+            background="#111722", foreground="#dbe6f2", insertbackground="white",
+            relief="flat", padx=8, pady=6,
+        )
+        self.move_history_text.pack(side="left", fill="x", expand=True)
+        ttk.Button(move_log, text="Copy", command=self._copy_move_history).pack(
+            side="right", anchor="n", padx=(8, 0)
+        )
+
+        self.canvas = tk.Canvas(play_area, background="#171a21", highlightthickness=0)
+        self.canvas.pack(side="top", fill="both", expand=True)
         self.canvas.bind("<Configure>", lambda _event: self.draw())
 
         footer = ttk.Frame(self, padding=(10, 3, 10, 10))
@@ -241,13 +257,41 @@ class SokomindApp(tk.Tk):
                 highlightbackground="#54a8e8" if name == selected else "#2a313d"
             )
 
-    def _set_state(self, state: State, *, record: bool = True) -> None:
+    def _move_history_value(self) -> str:
+        return "\n".join(
+            f"{index}. {move}{' (push)' if pushed else ''}"
+            for index, (move, pushed) in enumerate(self.move_history, 1)
+        )
+
+    def _update_move_history(self) -> None:
+        self.move_history_text.configure(state="normal")
+        self.move_history_text.delete("1.0", "end")
+        self.move_history_text.insert("1.0", self._move_history_value())
+        self.move_history_text.configure(state="disabled")
+        self.move_history_text.see("end")
+
+    def _copy_move_history(self) -> None:
+        self.clipboard_clear()
+        self.clipboard_append(self._move_history_value())
+        self.status.set(f"Copied {len(self.move_history):,} moves")
+
+    def _set_state(
+        self,
+        state: State,
+        *,
+        record: bool = True,
+        move: str | None = None,
+        pushed: bool = False,
+    ) -> None:
         if record:
             self.history.append(self.state)
         self.state = state
         self._start_timer()
         self.moves += 1
+        if move is not None:
+            self.move_history.append((move, pushed))
         self.move_text.set(f"Moves: {self.moves}")
+        self._update_move_history()
         self.draw()
         if state.is_goal():
             self.stop(keep_status=True)
@@ -290,10 +334,12 @@ class SokomindApp(tk.Tk):
         self.initial_state = state
         self.state = state
         self.history.clear()
+        self.move_history.clear()
         self.moves = 0
         self._reset_timer()
         self._completion_shown = False
         self.move_text.set("Moves: 0")
+        self._update_move_history()
         self.status.set("Ready - use arrow keys or WASD")
         self.draw()
         return True
@@ -302,10 +348,12 @@ class SokomindApp(tk.Tk):
         self.stop()
         self.state = self.initial_state
         self.history.clear()
+        self.move_history.clear()
         self.moves = 0
         self._reset_timer()
         self._completion_shown = False
         self.move_text.set("Moves: 0")
+        self._update_move_history()
         self.status.set("Reset")
         self.draw()
 
@@ -410,9 +458,12 @@ class SokomindApp(tk.Tk):
         if not self.history:
             return
         self.state = self.history.pop()
+        if self.move_history:
+            self.move_history.pop()
         self.moves = max(0, self.moves - 1)
         self._completion_shown = False
         self.move_text.set(f"Moves: {self.moves}")
+        self._update_move_history()
         self.status.set("Undid one move")
         self.draw()
 
@@ -431,12 +482,15 @@ class SokomindApp(tk.Tk):
             self.reset()
 
     def try_move(self, move: str) -> bool:
+        dy, dx = DIRECTIONS[move]
+        destination = (self.state.robot_pos[0] + dy, self.state.robot_pos[1] + dx)
+        pushed = any(position == destination for _label, position in self.state.boxes)
         try:
             next_state = apply_move(self.state, move)
         except ValueError:
             self.status.set(f"{move} is blocked")
             return False
-        self._set_state(next_state)
+        self._set_state(next_state, move=move, pushed=pushed)
         if not next_state.is_goal():
             self.status.set("Playing")
         return True
