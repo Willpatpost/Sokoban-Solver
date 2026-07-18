@@ -161,7 +161,22 @@ function analyzeTopology(floor, goals) {
           if (normallyReachable && !blockedReachable) dependencies.push([blocker, target]);
         }
       }
-      candidates.push({gate, cells, goals: roomGoals, depths, traffic, dependencies});
+      const approach = new Map(), approachQueue = [];
+      for (const neighbor of floorNeighbors(gate, floor)) {
+        if (cells.has(neighbor)) continue;
+        approach.set(neighbor, 1);
+        approachQueue.push(neighbor);
+      }
+      for (let head = 0; head < approachQueue.length; head++) {
+        const position = approachQueue[head], distance = approach.get(position);
+        if (distance >= 3) continue;
+        for (const next of floorNeighbors(position, floor)) {
+          if (next === gate || cells.has(next) || approach.has(next)) continue;
+          approach.set(next, distance + 1);
+          approachQueue.push(next);
+        }
+      }
+      candidates.push({gate, cells, goals: roomGoals, depths, traffic, dependencies, approach});
     }
   }
   candidates.sort((left, right) => right.cells.size - left.cells.size);
@@ -360,6 +375,10 @@ function topologyPenalty(boxes, board) {
     }
 
     const unsolved = room.goals.filter(goal => occupied.get(goal) !== board.goals.get(goal));
+    const trafficDemand = unsolved.length + Math.abs(boxesInside.length - room.goals.length);
+    for (const [position, distance] of room.approach) {
+      if (occupied.has(position)) penalty += 0.75 * trafficDemand * (4 - distance);
+    }
     for (const goal of room.goals) {
       if (occupied.get(goal) !== board.goals.get(goal)) continue;
       const depth = room.depths.get(goal) || 0;
@@ -792,6 +811,7 @@ function beamSearch(payload) {
   const seenDepth = new BoundedDepthMap(transpositionLimit);
   const seenExactDepth = new BoundedDepthMap(Math.max(8000, Math.floor(transpositionLimit / 2)));
   let visited = 0, reported = 0, bestEstimate = Infinity, bestPushes = 0;
+  let trackedThrough = payload.trackedSignatures ? 0 : undefined;
 
   initial.reachable = reachablePaths(initial, board);
   if (createsSealedCorralDeadlock(initial, board, initial.reachable)) {
@@ -812,7 +832,7 @@ function beamSearch(payload) {
         return {path: reconstructNodePath(current.node), visited};
       }
       if (payload.maxVisited && visited >= payload.maxVisited) {
-        return {path: null, visited, cutoff: true, bestEstimate, bestPushes};
+        return {path: null, visited, cutoff: true, bestEstimate, bestPushes, trackedThrough};
       }
       for (const rawNext of pushNeighbors(current, board, current.reachable)) {
         const next = expandPushMacro(rawNext, board, payload.forcedMacros !== false);
@@ -874,8 +894,15 @@ function beamSearch(payload) {
       beam.push(child);
     }
     beam = selectBeamLayer(beam, width, beamProfile);
+    if (payload.trackedSignatures) {
+      for (const child of beam) {
+        if (payload.trackedSignatures[child.cost] === child.signature) {
+          trackedThrough = Math.max(trackedThrough, child.cost);
+        }
+      }
+    }
   }
-  return {path: null, visited, bestEstimate, bestPushes};
+  return {path: null, visited, bestEstimate, bestPushes, trackedThrough};
 }
 
 function beamRestartSearch(payload) {
@@ -903,6 +930,95 @@ function beamRestartSearch(payload) {
     if (result.path) return {...result, visited, restart: restart + 1};
   }
   return {path: null, visited, cutoff: true, bestEstimate, bestPushes, restarts: restartCount};
+}
+
+function boundedPushDepthFirstSearch(payload) {
+  const board = parse(payload.state);
+  const initial = {
+    robot: payload.state.robot,
+    boxes: payload.state.boxes.map(([position, label]) => [
+      ...position.split(",").map(Number), label,
+    ]),
+  };
+  const bound = payload.upperBound || payload.pushBound || 300;
+  const maxVisited = payload.maxVisited || 250000;
+  const maxDepth = payload.maxDepth || bound;
+  const seed = payload.seed || 0;
+  const profile = payload.dfsProfile || "balanced";
+  const transpositions = new BoundedDepthMap(payload.transpositionLimit || 60000);
+  const activePath = new Set(), segments = [];
+  let visited = 0, reported = 0, cutoff = false, solution = null;
+  let bestEstimate = Infinity, bestPushes = 0;
+  let trackedThrough = payload.trackedSignatures ? 0 : undefined;
+
+  const visit = (state, cost) => {
+    if (cutoff || solution) return;
+    visited++;
+    if (visited >= maxVisited) {
+      cutoff = true;
+      return;
+    }
+    if (visited - reported >= 5000) {
+      postMessage({type: "progress", visited});
+      reported = visited;
+    }
+    if (goal(state.boxes, board.goals)) {
+      solution = segments.flatMap(segment => segment);
+      return;
+    }
+    const reachable = reachablePaths(state, board);
+    if (createsSealedCorralDeadlock(state, board, reachable)) return;
+    const signature = pushKey(state, reachable);
+    if (payload.trackedSignatures?.[cost] === signature) {
+      trackedThrough = Math.max(trackedThrough, cost);
+    }
+    if (activePath.has(signature) || (transpositions.get(signature) ?? Infinity) <= cost) return;
+    activePath.add(signature);
+    transpositions.set(signature, cost);
+
+    const candidates = [];
+    for (const rawNext of pushNeighbors(state, board, reachable)) {
+      const next = expandPushMacro(rawNext, board, payload.forcedMacros !== false);
+      if (!next) continue;
+      const childCost = cost + next.pushes;
+      if (childCost > maxDepth || childCost > bound) continue;
+      const estimate = heuristic(next.boxes, board);
+      if (!Number.isFinite(estimate) || childCost + estimate > bound) continue;
+      if (estimate < bestEstimate) {
+        bestEstimate = estimate;
+        bestPushes = childCost;
+      }
+      const topology = topologyPenalty(next.boxes, board);
+      const packing = goalPackingBonus(next.boxes, board);
+      let score = 2.5 * estimate + topology - 0.8 * packing;
+      if (profile === "detour") score = 1.5 * estimate + 1.4 * topology - packing;
+      if (profile === "setup" && childCost <= 12) score = -estimate + topology - packing;
+      score += (payload.diversity ?? 1.5) * signatureNoise(exactPushKey(next), seed + childCost);
+      candidates.push({next, cost: childCost, score});
+    }
+    candidates.sort((left, right) => left.score - right.score);
+    for (const candidate of candidates) {
+      segments.push(candidate.next.path);
+      visit({robot: candidate.next.robot, boxes: candidate.next.boxes}, candidate.cost);
+      segments.pop();
+      if (cutoff || solution) break;
+    }
+    activePath.delete(signature);
+  };
+
+  const initialEstimate = heuristic(initial.boxes, board);
+  bestEstimate = initialEstimate;
+  if (Number.isFinite(initialEstimate) && initialEstimate <= bound) visit(initial, 0);
+  return {
+    path: solution,
+    visited,
+    cutoff,
+    bestEstimate,
+    bestPushes,
+    bound,
+    retained: transpositions.size,
+    trackedThrough,
+  };
 }
 
 function bidirectionalSide(payload) {
@@ -987,6 +1103,7 @@ function bidirectionalSide(payload) {
 function search(payload) {
   if (payload.algorithm === "push-beam") return beamSearch(payload);
   if (payload.algorithm === "push-beam-restarts") return beamRestartSearch(payload);
+  if (payload.algorithm === "bounded-push-dfs") return boundedPushDepthFirstSearch(payload);
   if (["ultimate", "portfolio", "fast"].includes(payload.algorithm)) {
     const beam = beamSearch({...payload, algorithm: "push-beam"});
     if (beam.path) return {...beam, strategy: "Push Beam"};

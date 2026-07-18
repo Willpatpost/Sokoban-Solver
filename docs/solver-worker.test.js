@@ -301,6 +301,35 @@ test("beam restarts honor incumbent push bounds", () => {
   assert.equal(exact.restart, 1);
 });
 
+test("bounded push DFS finds a solution at the incumbent ceiling", () => {
+  const worker = loadWorker();
+  const state = stateFromRows([
+    "OOOOO",
+    "OOROO",
+    "OOAOO",
+    "OO OO",
+    "OOaOO",
+    "OOOOO",
+  ]);
+  const tooTight = worker.search({
+    algorithm: "bounded-push-dfs",
+    state,
+    upperBound: 1,
+    maxVisited: 100,
+  });
+  const exact = worker.search({
+    algorithm: "bounded-push-dfs",
+    state,
+    upperBound: 2,
+    maxVisited: 100,
+    transpositionLimit: 10,
+  });
+
+  assert.equal(tooTight.path, null);
+  assert.deepEqual(Array.from(exact.path), ["Down", "Down"]);
+  assert.ok(exact.retained <= 10);
+});
+
 test("all hard pruning preserves the known Huge solution", () => {
   const worker = loadWorker();
   const parsed = stateFromRows(HUGE_ROWS);

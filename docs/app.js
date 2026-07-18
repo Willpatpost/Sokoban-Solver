@@ -317,8 +317,8 @@ function startBidirectionalSolver(purpose) {
     {beamProfile: "detour", weight: 2.3, diversity: 2,
       topologyWeight: 2, goalPackingWeight: 1.3},
   ];
-  const beamAttemptCount = searchScale >= 1200 ? 10 : 3;
-  const directPlans = Array.from({length: beamAttemptCount}, (_item, index) => ({
+  const beamAttemptCount = 3;
+  const beamPlans = Array.from({length: beamAttemptCount}, (_item, index) => ({
     algorithm: "push-beam",
     side: "direct",
     label: `Beam Restart ${index + 1}/${beamAttemptCount}`,
@@ -329,6 +329,19 @@ function startBidirectionalSolver(purpose) {
     seed: 29 + index * 104729,
     ...beamProfiles[index % beamProfiles.length],
   }));
+  const dfsProfiles = ["setup", "setup", "detour", "setup", "balanced", "setup", "detour"];
+  const dfsPlans = searchScale >= 1200 ? dfsProfiles.map((dfsProfile, index) => ({
+    algorithm: "bounded-push-dfs",
+    side: "direct",
+    label: `Bounded DFS ${index + 1}/${dfsProfiles.length}`,
+    maxDepth: 600,
+    maxVisited: 300000,
+    transpositionLimit: 60000,
+    dfsProfile,
+    diversity: 1.5,
+    seed: 313337 + index * 104729,
+  })) : [];
+  const directPlans = [...beamPlans, ...dfsPlans];
   let nextDirectPlan = 0;
   const forwardRecords = new Map(), reverseRecordSets = [];
   const workerSides = new Map(), workerRecords = new Map(), workerProgress = new Map();
