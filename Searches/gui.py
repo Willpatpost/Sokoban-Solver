@@ -271,20 +271,21 @@ class SokomindApp(tk.Tk):
             return
         try:
             puzzle = load_custom_puzzle(Path(path))
-            self._load(puzzle)
         except PuzzleError as exc:
             messagebox.showerror("Invalid puzzle", str(exc), parent=self)
+            return
+        if not self._load(puzzle):
             return
         self._custom_puzzle = puzzle
         self.puzzle_name.set(Path(path).name)
         self._update_level_selection()
 
-    def _load(self, puzzle: list[str]) -> None:
+    def _load(self, puzzle: list[str]) -> bool:
         try:
             state = parse_puzzle(puzzle)
         except PuzzleError as exc:
             messagebox.showerror("Invalid puzzle", str(exc), parent=self)
-            return
+            return False
         self.stop()
         self.initial_state = state
         self.state = state
@@ -295,6 +296,7 @@ class SokomindApp(tk.Tk):
         self.move_text.set("Moves: 0")
         self.status.set("Ready - use arrow keys or WASD")
         self.draw()
+        return True
 
     def reset(self) -> None:
         self.stop()
@@ -409,6 +411,7 @@ class SokomindApp(tk.Tk):
             return
         self.state = self.history.pop()
         self.moves = max(0, self.moves - 1)
+        self._completion_shown = False
         self.move_text.set(f"Moves: {self.moves}")
         self.status.set("Undid one move")
         self.draw()

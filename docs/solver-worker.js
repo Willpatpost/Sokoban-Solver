@@ -1,8 +1,17 @@
 const DIRS = {Up: [-1, 0], Down: [1, 0], Left: [0, -1], Right: [0, 1]};
 const OPPOSITE = {Up: "Down", Down: "Up", Left: "Right", Right: "Left"};
+const MOVE_CODE = {Up: "U", Down: "D", Left: "L", Right: "R"};
 const key = (robot, boxes) => `${robot.join(",")}|${[...boxes].sort().join(";")}`;
 const pkey = (y, x) => `${y},${x}`;
 const boxSignature = (boxes) => boxes.map(box => box.join(",")).sort().join(";");
+const exactPushKey = state => `${state.robot.join(",")}|${boxSignature(state.boxes)}`;
+const HEURISTIC_MEMO_LIMIT = 100000;
+
+function memoizeBounded(memo, key, value) {
+  if (memo.size >= HEURISTIC_MEMO_LIMIT) memo.delete(memo.keys().next().value);
+  memo.set(key, value);
+  return value;
+}
 
 class Heap {
   constructor() { this.items = []; }
@@ -90,18 +99,33 @@ function heuristic(boxes, board) {
     };
     total += assign(0, 0);
   }
-  board.heuristicMemo.set(signature, total);
-  return total;
+  return memoizeBounded(board.heuristicMemo, signature, total);
 }
-function targetMapFromBoxes(boxes) {
+function forwardPushDistances(floor, startKey) {
+  const [startY, startX] = startKey.split(",").map(Number);
+  const distances = new Map([[startKey, 0]]), queue = [[startY, startX]];
+  for (let head = 0; head < queue.length; head++) {
+    const [y, x] = queue[head], distance = distances.get(pkey(y, x));
+    for (const [dy, dx] of Object.values(DIRS)) {
+      const destination = pkey(y + dy, x + dx);
+      const support = pkey(y - dy, x - dx);
+      if (!floor.has(destination) || !floor.has(support) || distances.has(destination)) continue;
+      distances.set(destination, distance + 1);
+      queue.push([y + dy, x + dx]);
+    }
+  }
+  return distances;
+}
+function targetMapFromBoxes(boxes, floor) {
   const targets = new Map();
   boxes.forEach(([y, x, label]) => {
     if (!targets.has(label)) targets.set(label, []);
-    targets.get(label).push([y, x]);
+    targets.get(label).push({distances: forwardPushDistances(floor, pkey(y, x))});
   });
+  targets.memo = new Map();
   return targets;
 }
-function matchingManhattan(positions, targets) {
+function matchingHomeCost(positions, targets) {
   const memo = new Map();
   const assign = (index, mask) => {
     if (index === positions.length) return 0;
@@ -110,8 +134,9 @@ function matchingManhattan(positions, targets) {
     let best = Infinity;
     for (let targetIndex = 0; targetIndex < targets.length; targetIndex++) {
       if (mask & (1 << targetIndex)) continue;
-      const [y, x] = positions[index], [ty, tx] = targets[targetIndex];
-      best = Math.min(best, Math.abs(y - ty) + Math.abs(x - tx) + assign(index + 1, mask | (1 << targetIndex)));
+      const [y, x] = positions[index];
+      const distance = targets[targetIndex].distances.get(pkey(y, x)) ?? Infinity;
+      best = Math.min(best, distance + assign(index + 1, mask | (1 << targetIndex)));
     }
     memo.set(key, best);
     return best;
@@ -120,7 +145,6 @@ function matchingManhattan(positions, targets) {
 }
 function homeHeuristic(boxes, targetsByLabel) {
   const signature = boxSignature(boxes);
-  if (!targetsByLabel.memo) targetsByLabel.memo = new Map();
   if (targetsByLabel.memo.has(signature)) return targetsByLabel.memo.get(signature);
   const byLabel = new Map();
   boxes.forEach(([y, x, label]) => {
@@ -132,14 +156,13 @@ function homeHeuristic(boxes, targetsByLabel) {
     const targets = targetsByLabel.get(label) || [];
     if (positions.length > 8) {
       total += positions.reduce((sum, [y, x]) => (
-        sum + Math.min(...targets.map(([ty, tx]) => Math.abs(y - ty) + Math.abs(x - tx)))
+        sum + Math.min(...targets.map(target => target.distances.get(pkey(y, x)) ?? Infinity))
       ), 0);
       continue;
     }
-    total += matchingManhattan(positions, targets);
+    total += matchingHomeCost(positions, targets);
   }
-  targetsByLabel.memo.set(signature, total);
-  return total;
+  return memoizeBounded(targetsByLabel.memo, signature, total);
 }
 function goal(boxes, goals) {
   return boxes.every(([y, x, label]) => goals.get(pkey(y, x)) === label);
@@ -247,6 +270,9 @@ function pushKey(state, reachable) {
 function invertWalk(path) {
   return [...path].reverse().map(move => OPPOSITE[move]);
 }
+function encodeMoves(path) {
+  return path.map(move => MOVE_CODE[move]).join("");
+}
 
 function reversePullNeighbors(state, board, reachable = reachablePaths(state, board)) {
   const occupied = new Map(state.boxes.map((b, i) => [pkey(b[0], b[1]), i]));
@@ -259,6 +285,7 @@ function reversePullNeighbors(state, board, reachable = reachablePaths(state, bo
       if (occupied.has(boxBefore) || occupied.has(robotAfterPull)) continue;
       if (staticDead(y - dy, x - dx, board, label)) continue;
       const boxes = state.boxes.map((b, i) => i === index ? [y - dy, x - dx, label] : b);
+      if (creates2x2Deadlock(boxes, board, [y - dy, x - dx])) continue;
       const walkToPullSpot = reachable.get(boxBefore);
       const walkFromPushLanding = invertWalk(walkToPullSpot);
       result.push({
@@ -319,26 +346,34 @@ function reconstructPath(cameFrom, signature) {
 function bidirectionalSide(payload) {
   const board = parse(payload.state);
   const initialBoxes = payload.state.boxes.map(([p, label]) => [...p.split(",").map(Number), label]);
-  const initialTargets = targetMapFromBoxes(initialBoxes);
+  const initialTargets = targetMapFromBoxes(initialBoxes, board.floor);
   const forward = payload.mode === "bidir-forward";
-  const frontier = new Heap(), seen = new Map(), records = [];
+  const frontier = new Heap(), bestCost = new Map(), closed = new Set(), records = [];
   let order = 0, visited = 0, reported = 0;
   const starts = forward
     ? [{robot: payload.state.robot, boxes: initialBoxes, cost: 0, path: []}]
     : reverseStartStates(board, initialBoxes, payload.reverseShard || {index: 0, count: 1});
-  starts.forEach(state => frontier.push([state.cost + heuristic(state.boxes, board), order++, state]));
+  starts.forEach(state => {
+    state.exactSignature = exactPushKey(state);
+    const estimate = forward
+      ? heuristic(state.boxes, board)
+      : homeHeuristic(state.boxes, initialTargets);
+    if (!Number.isFinite(estimate) || bestCost.has(state.exactSignature)) return;
+    bestCost.set(state.exactSignature, state.cost);
+    frontier.push([state.cost + estimate, order++, state]);
+  });
 
   while (frontier.length) {
     const current = frontier.pop()[2];
+    if (bestCost.get(current.exactSignature) !== current.cost) continue;
     const reachable = reachablePaths(current, board);
     const signature = pushKey(current, reachable);
-    if (seen.has(signature) && seen.get(signature) <= current.cost) continue;
-    seen.set(signature, current.cost); visited++;
+    if (closed.has(signature)) continue;
+    closed.add(signature); visited++;
     records.push({
       id: signature,
-      key: signature,
       parent: current.parent ?? null,
-      segment: current.segment || [],
+      segment: encodeMoves(current.segment || []),
       robot: current.robot,
     });
 
@@ -362,10 +397,15 @@ function bidirectionalSide(payload) {
           parent: signature,
         }));
     for (const next of nextStates) {
-      const score = forward
-        ? next.cost + 1.4 * heuristic(next.boxes, board)
-        : next.cost + 1.2 * homeHeuristic(next.boxes, initialTargets);
-      frontier.push([score, order++, next]);
+      next.exactSignature = exactPushKey(next);
+      if (next.cost >= (bestCost.get(next.exactSignature) ?? Infinity)) continue;
+      const estimate = forward
+        ? heuristic(next.boxes, board)
+        : homeHeuristic(next.boxes, initialTargets);
+      if (!Number.isFinite(estimate)) continue;
+      bestCost.set(next.exactSignature, next.cost);
+      const weightedEstimate = (forward ? 1.4 : 1.2) * estimate;
+      frontier.push([next.cost + weightedEstimate, order++, next]);
     }
     if (visited % 1000 === 0) {
       postMessage({type: "progress", visited, delta: visited - reported});
@@ -393,6 +433,7 @@ function search(payload) {
     segment: [],
   };
   const algorithm = payload.algorithm, frontier = new Heap(), seen = new Map(), cameFrom = new Map();
+  const bestCost = new Map(), closed = new Set();
   const pushMacro = ["push-astar", "push-greedy", "weighted-push-astar"].includes(algorithm);
   const weight = algorithm === "weighted-push-astar" ? 1.6 : 1;
   let order = 0, visited = 0;
@@ -400,14 +441,26 @@ function search(payload) {
     algorithm === "dfs" ? -s.cost :
     ["greedy", "push-greedy"].includes(algorithm) ? heuristic(s.boxes, board) :
     s.cost + weight * heuristic(s.boxes, board);
-  frontier.push([score(initial), order++, initial]);
+  if (pushMacro) {
+    initial.exactSignature = exactPushKey(initial);
+    bestCost.set(initial.exactSignature, 0);
+  }
+  const initialScore = score(initial);
+  if (!Number.isFinite(initialScore)) return {path: null, visited: 0};
+  frontier.push([initialScore, order++, initial]);
   while (frontier.length) {
     const current = frontier.pop()[2];
+    if (pushMacro && bestCost.get(current.exactSignature) !== current.cost) continue;
     const reachable = pushMacro ? reachablePaths(current, board) : null;
-    const signature = pushMacro ? pushKey(current, reachable) :
-      key(current.robot, current.boxes.map(b => b.join(",")));
-    if (seen.has(signature) && seen.get(signature) <= current.cost) continue;
-    seen.set(signature, current.cost); visited++;
+    const signature = pushMacro ? pushKey(current, reachable) : exactPushKey(current);
+    if (pushMacro) {
+      if (closed.has(signature)) continue;
+      closed.add(signature);
+    } else {
+      if (seen.has(signature) && seen.get(signature) <= current.cost) continue;
+      seen.set(signature, current.cost);
+    }
+    visited++;
     if (current.parent !== null) {
       cameFrom.set(signature, {parent: current.parent, segment: current.segment});
     }
@@ -420,7 +473,16 @@ function search(payload) {
     for (const next of nextStates) {
       const child = {robot: next.robot, boxes: next.boxes, cost: current.cost + next.path.length,
         parent: signature, segment: next.path};
-      frontier.push([score(child), order++, child]);
+      if (pushMacro) {
+        child.exactSignature = exactPushKey(child);
+        if (child.cost >= (bestCost.get(child.exactSignature) ?? Infinity)) continue;
+        const childScore = score(child);
+        if (!Number.isFinite(childScore)) continue;
+        bestCost.set(child.exactSignature, child.cost);
+        frontier.push([childScore, order++, child]);
+      } else {
+        frontier.push([score(child), order++, child]);
+      }
     }
     if (visited % 10000 === 0) postMessage({type: "progress", visited});
   }

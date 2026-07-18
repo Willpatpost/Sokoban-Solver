@@ -10,6 +10,7 @@ const LEVELS = {
     "O B X X X X A O", "O Sc       dS O", "OOOOOOOOOOOOOOO"],
 };
 const DIRS = {Up: [-1, 0], Down: [1, 0], Left: [0, -1], Right: [0, 1]};
+const CODE_MOVE = {U: "Up", D: "Down", L: "Left", R: "Right"};
 const KEYS = {ArrowUp: "Up", ArrowDown: "Down", ArrowLeft: "Left", ArrowRight: "Right",
   w: "Up", W: "Up", s: "Down", S: "Down", a: "Left", A: "Left", d: "Right", D: "Right"};
 const $ = (id) => document.getElementById(id);
@@ -195,16 +196,8 @@ function hideHome() {
 function serializeState(s) {
   return {rows: s.board.rows, robot: s.robot, boxes: [...s.boxes]};
 }
-function trimPathToGoal(path) {
-  const replay = cloneState(state), trimmed = [];
-  for (const move of path) {
-    const next = moveState(replay, move);
-    if (!next) break;
-    replay.robot = next.robot; replay.boxes = next.boxes;
-    trimmed.push(move);
-    if (isGoal(replay)) break;
-  }
-  return trimmed;
+function validatePathToGoal(path) {
+  return SokomindPath.validatePathToGoal(state, path, cloneState, moveState, isGoal);
 }
 function walkBetween(board, boxes, start, target) {
   const blocked = new Set(boxes.map(([y, x]) => pos(y, x)));
@@ -230,12 +223,15 @@ function boxesFromMeetKey(key) {
     return [Number(y), Number(x), label];
   });
 }
+function decodeSegment(segment) {
+  return typeof segment === "string" ? [...segment].map(code => CODE_MOVE[code]) : segment;
+}
 function reconstructMeetPath(meetKey, forwardSeen, reverseSeen) {
   const forwardSegments = [];
   let current = forwardSeen.get(meetKey);
   if (!current || !reverseSeen.has(meetKey)) return null;
   while (current?.parent) {
-    forwardSegments.unshift(...current.segment);
+    forwardSegments.unshift(...decodeSegment(current.segment));
     current = forwardSeen.get(current.parent);
     if (!current) return null;
   }
@@ -243,13 +239,13 @@ function reconstructMeetPath(meetKey, forwardSeen, reverseSeen) {
   const reverseSegments = [];
   current = reverseSeen.get(meetKey);
   while (current?.parent) {
-    reverseSegments.push(...current.segment);
+    reverseSegments.push(...decodeSegment(current.segment));
     current = reverseSeen.get(current.parent);
     if (!current) return null;
   }
 
   const forward = forwardSeen.get(meetKey), reverse = reverseSeen.get(meetKey);
-  const bridge = walkBetween(state.board, boxesFromMeetKey(forward.key), forward.robot, reverse.robot);
+  const bridge = walkBetween(state.board, boxesFromMeetKey(forward.id), forward.robot, reverse.robot);
   if (!bridge) return null;
   return [...forwardSegments, ...bridge, ...reverseSegments];
 }
@@ -266,45 +262,53 @@ function solverPlans(algorithm) {
 function startBidirectionalSolver(purpose) {
   stop(false); setControlsBusy(true); setStatus("Ultimate Bidirectional is searching...");
   const hardware = navigator.hardwareConcurrency || 2;
-  const reverseWorkers = Math.max(1, Math.min(hardware - 1, 3));
-  const forwardRecords = new Map(), reverseRecords = new Map();
-  const workerSides = new Map();
+  const searchScale = state.boxes.size * state.board.floor.size;
+  const reverseLimit = searchScale >= 1200 ? 1 : searchScale >= 500 ? 2 : 3;
+  const reverseWorkers = Math.max(1, Math.min(hardware - 1, reverseLimit));
+  const forwardRecords = new Map(), reverseRecordSets = [];
+  const workerSides = new Map(), workerRecords = new Map();
   let settled = false, totalVisited = 0, doneWorkers = 0;
 
   const finish = (path) => {
+    const validated = validatePathToGoal(path);
+    if (validated === null) return false;
     settled = true;
     workers.forEach(worker => worker.terminate()); workers = [];
     setControlsBusy(false);
-    const trimmed = trimPathToGoal(path);
     if (purpose === "hint") {
-      setStatus(`Hint: ${trimmed[0]} - ${trimmed.length} moves remain (Bidirectional)`);
+      setStatus(validated.length
+        ? `Hint: ${validated[0]} - ${validated.length} moves remain (Bidirectional)`
+        : "This puzzle is already solved.");
     } else {
-      setStatus(`Met in the middle: ${trimmed.length} moves after ${totalVisited.toLocaleString()} states.`);
-      animation = trimmed; animate();
+      setStatus(`Met in the middle: ${validated.length} moves after ${totalVisited.toLocaleString()} states.`);
+      animation = validated; animate();
     }
+    return true;
   };
 
-  const requestSolve = (meetKey) => {
+  const requestSolve = (meetKey, reverseRecords) => {
     if (settled) return false;
     const path = reconstructMeetPath(meetKey, forwardRecords, reverseRecords);
     if (!path) return false;
-    finish(path);
-    return true;
+    return finish(path);
   };
 
   const inspectRecords = (records, worker) => {
     const side = workerSides.get(worker);
-    const recordMap = side === "forward" ? forwardRecords : reverseRecords;
-    const otherMap = side === "forward" ? reverseRecords : forwardRecords;
+    const recordMap = workerRecords.get(worker);
     const meetings = [];
     for (const record of records) {
       recordMap.set(record.id, record);
-      if (otherMap.has(record.id)) {
-        meetings.push(record.id);
+      if (side === "forward") {
+        for (const reverseRecords of reverseRecordSets) {
+          if (reverseRecords.has(record.id)) meetings.push([record.id, reverseRecords]);
+        }
+      } else if (forwardRecords.has(record.id)) {
+        meetings.push([record.id, recordMap]);
       }
     }
-    for (const meetKey of meetings) {
-      if (requestSolve(meetKey)) return;
+    for (const [meetKey, reverseRecords] of meetings) {
+      if (requestSolve(meetKey, reverseRecords)) return;
     }
   };
 
@@ -312,6 +316,13 @@ function startBidirectionalSolver(purpose) {
     const worker = new Worker("solver-worker.js");
     workers.push(worker);
     workerSides.set(worker, plan.side);
+    if (plan.side === "forward") {
+      workerRecords.set(worker, forwardRecords);
+    } else {
+      const records = new Map();
+      reverseRecordSets.push(records);
+      workerRecords.set(worker, records);
+    }
     worker.onmessage = ({data}) => {
       if (data.type === "records") {
         inspectRecords(data.records, worker);
@@ -383,17 +394,21 @@ function startSolver(purpose) {
       active.delete(worker);
       totalVisited += data.visited || 0;
       if (data.path) {
-        settled = true;
-        workers.forEach(item => item.terminate()); workers = [];
-        setControlsBusy(false);
-        const path = trimPathToGoal(data.path);
-        if (purpose === "hint") {
-          setStatus(`Hint: ${path[0]} - ${path.length} moves remain (${plan.label})`);
-        } else {
-          setStatus(`Found ${path.length} moves with ${plan.label} after ${totalVisited.toLocaleString()} states.`);
-          animation = path; animate();
+        const path = validatePathToGoal(data.path);
+        if (path !== null) {
+          settled = true;
+          workers.forEach(item => item.terminate()); workers = [];
+          setControlsBusy(false);
+          if (purpose === "hint") {
+            setStatus(path.length
+              ? `Hint: ${path[0]} - ${path.length} moves remain (${plan.label})`
+              : "This puzzle is already solved.");
+          } else {
+            setStatus(`Found ${path.length} moves with ${plan.label} after ${totalVisited.toLocaleString()} states.`);
+            animation = path; animate();
+          }
+          return;
         }
-        return;
       }
       finished.push(data);
       if (!queue.length && active.size === 0) {

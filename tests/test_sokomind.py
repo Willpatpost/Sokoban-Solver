@@ -1,4 +1,8 @@
+import io
+import tempfile
 import unittest
+from contextlib import redirect_stdout
+from pathlib import Path
 from threading import Event
 
 from Searches.Sokomind import (
@@ -8,6 +12,7 @@ from Searches.Sokomind import (
     a_star_search,
     get_push_neighbors,
     get_neighbors,
+    main,
     parse_puzzle,
     push_a_star_search,
     render_puzzle,
@@ -150,6 +155,19 @@ class SokomindTests(unittest.TestCase):
         path, final, _, _ = push_a_star_search(state)
         self.assertEqual(["Down", "Left", "Down", "Right", "Right"], [move for move, _ in path])
         self.assertTrue(final.is_goal())
+
+    def test_cli_reports_output_write_failures_cleanly(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "missing" / "solution.txt"
+            with self.assertLogs(level="ERROR") as logs, redirect_stdout(io.StringIO()):
+                result = main([
+                    "--puzzle", "ultra-tiny",
+                    "--algorithm", "astar",
+                    "--output", str(output),
+                ])
+        self.assertEqual(2, result)
+        self.assertIn("Could not write solution", logs.output[0])
+        self.assertFalse(output.exists())
 
 
 if __name__ == "__main__":

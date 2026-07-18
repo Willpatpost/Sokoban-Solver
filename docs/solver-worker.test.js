@@ -4,10 +4,10 @@ const path = require("node:path");
 const test = require("node:test");
 const vm = require("node:vm");
 
-function loadWorker() {
+function loadWorker(postMessage = () => {}) {
   const source = fs.readFileSync(path.join(__dirname, "solver-worker.js"), "utf8");
   const context = {
-    postMessage() {},
+    postMessage,
     onmessage: null,
     console,
   };
@@ -75,4 +75,28 @@ test("browser worker prunes 2x2 box deadlocks", () => {
   const boxes = [[2, 3, "X"], [2, 4, "X"], [3, 3, "X"]];
 
   assert.equal(worker.creates2x2Deadlock(boxes, board, [3, 3]), true);
+});
+
+test("bidirectional sides emit compatible compact records", () => {
+  const rows = ["OOOOO", "O R O", "O A O", "O a O", "OOOOO"];
+  const state = stateFromRows(rows);
+  const forwardMessages = [], reverseMessages = [];
+  const forward = loadWorker(message => forwardMessages.push(message));
+  const reverse = loadWorker(message => reverseMessages.push(message));
+
+  forward.bidirectionalSide({mode: "bidir-forward", state});
+  reverse.bidirectionalSide({
+    mode: "bidir-reverse",
+    state,
+    reverseShard: {index: 0, count: 1},
+  });
+
+  const records = messages => messages
+    .filter(message => message.type === "records")
+    .flatMap(message => message.records);
+  const forwardRecords = records(forwardMessages);
+  const reverseIds = new Set(records(reverseMessages).map(record => record.id));
+  assert.equal(forwardRecords.some(record => reverseIds.has(record.id)), true);
+  assert.equal(forwardRecords.every(record => !("key" in record)), true);
+  assert.equal(forwardRecords.every(record => typeof record.segment === "string"), true);
 });

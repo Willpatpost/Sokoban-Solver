@@ -6,7 +6,7 @@ undo/reset, a first-move timer, hints, and animated solving in a background Web
 Worker.
 
 The default solver is **Ultimate Bidirectional**, an experimental Sokoban-aware
-search. It starts one forward Web Worker from the current board and several
+search. It starts one forward Web Worker from the current board and one or more
 reverse Web Workers from different solved robot regions. The reverse workers
 "unsolve" the puzzle with legal reverse pulls; when the forward search and any
 reverse search reach the same canonical box layout and robot-reachability
@@ -23,8 +23,9 @@ Searches are uncapped. They keep running until they find a solution, exhaust
 every reachable state, or you press **Stop**.
 
 Very large puzzles can still hit browser memory limits before the search space
-is exhausted. Ultimate Bidirectional uses compact parent records and fewer
-reverse workers to reduce memory pressure, but Chrome can still terminate a tab
+is exhausted. Ultimate Bidirectional uses compact parent records and
+automatically reduces its reverse-worker count on complex boards, but Chrome
+can still terminate a tab
 if the puzzle requires millions of retained states.
 
 ## How to play
@@ -53,7 +54,7 @@ Then open `http://localhost:8000`.
 From the repository root:
 
 ```powershell
-node --test docs/solver-worker.test.js
+node --test docs/solver-worker.test.js docs/path-validation.test.js
 ```
 
 ## GitHub Pages deployment

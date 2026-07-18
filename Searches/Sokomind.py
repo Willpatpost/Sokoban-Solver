@@ -766,6 +766,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         print(f"No solution found{budget} ({visited} states, {elapsed:.3f}s).")
         return 1
+    if args.output:
+        try:
+            args.output.write_text(
+                "\n".join(f"{i}: {move} {pos}" for i, (move, pos)
+                          in enumerate(path, 1)) + "\n",
+                encoding="utf-8",
+            )
+        except OSError as exc:
+            logging.error("Could not write solution to %s: %s", args.output, exc)
+            return 2
     print(f"Solved in {len(path)} moves ({visited} states, {elapsed:.3f}s).")
     print(" ".join(move for move, _ in path))
     if args.show_steps:
@@ -774,12 +784,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         for move, _ in path:
             state = apply_move(state, move)
             print(render_puzzle(state), end="\n\n")
-    if args.output:
-        args.output.write_text(
-            "\n".join(f"{i}: {move} {pos}" for i, (move, pos)
-                      in enumerate(path, 1)) + "\n",
-            encoding="utf-8",
-        )
     assert final is not None and final.is_goal()
     return 0
 

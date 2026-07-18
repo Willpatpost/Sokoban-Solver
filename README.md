@@ -13,7 +13,7 @@ Run the automated solver tests with:
 
 ```powershell
 python -m unittest discover -v
-node --test docs/solver-worker.test.js
+node --test docs/solver-worker.test.js docs/path-validation.test.js
 ```
 
 On Windows, use `py -m unittest discover -v` if `python` is not on PATH.

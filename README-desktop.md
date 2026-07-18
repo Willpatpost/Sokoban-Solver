@@ -24,8 +24,8 @@ There are no PyPI dependencies.
 Clone the repository and enter its directory:
 
 ```bash
-git clone https://github.com/YOUR-USERNAME/Sokoban-Solver.git
-cd Sokoban-Solver
+git clone https://github.com/Willpatpost/Sokomind.git
+cd Sokomind
 ```
 
 Creating a virtual environment is optional because the project has no external
