@@ -49,6 +49,14 @@ class Heap {
     }
     return root;
   }
+  retainBest(limit) {
+    if (this.items.length <= limit) return;
+    const kept = this.items
+      .sort((left, right) => left[0] - right[0] || left[1] - right[1])
+      .slice(0, limit);
+    this.items = [];
+    kept.forEach(item => this.push(item));
+  }
   get length() { return this.items.length; }
 }
 
@@ -465,26 +473,11 @@ function stratifiedCheckpoints(checkpoints) {
   }
   return result;
 }
-function forwardPushDistances(floor, startKey) {
-  const [startY, startX] = startKey.split(",").map(Number);
-  const distances = new Map([[startKey, 0]]), queue = [[startY, startX]];
-  for (let head = 0; head < queue.length; head++) {
-    const [y, x] = queue[head], distance = distances.get(pkey(y, x));
-    for (const [dy, dx] of Object.values(DIRS)) {
-      const destination = pkey(y + dy, x + dx);
-      const support = pkey(y - dy, x - dx);
-      if (!floor.has(destination) || !floor.has(support) || distances.has(destination)) continue;
-      distances.set(destination, distance + 1);
-      queue.push([y + dy, x + dx]);
-    }
-  }
-  return distances;
-}
-function targetMapFromBoxes(boxes, floor) {
+function targetMapFromBoxes(boxes, board) {
   const targets = new Map();
   boxes.forEach(([y, x, label]) => {
     if (!targets.has(label)) targets.set(label, []);
-    targets.get(label).push({distances: forwardPushDistances(floor, pkey(y, x))});
+    targets.get(label).push({distances: playerAwarePushDistances(board, pkey(y, x))});
   });
   targets.memo = new Map();
   return targets;
@@ -506,6 +499,31 @@ function homeHeuristic(boxes, targetsByLabel) {
     total += minimumAssignmentCost(costs);
   }
   return memoizeBounded(targetsByLabel.memo, signature, total);
+}
+
+function targetLayoutHeuristic(boxes, targetBoxes, board, memo) {
+  const signature = boxSignature(boxes);
+  if (memo.has(signature)) return memo.get(signature);
+  const targetsByLabel = new Map();
+  targetBoxes.forEach(([y, x, label]) => {
+    if (!targetsByLabel.has(label)) targetsByLabel.set(label, []);
+    targetsByLabel.get(label).push(pkey(y, x));
+  });
+  const byLabel = new Map();
+  boxes.forEach(([y, x, label]) => {
+    if (!byLabel.has(label)) byLabel.set(label, []);
+    byLabel.get(label).push([y, x]);
+  });
+  let total = 0;
+  for (const [label, positions] of byLabel) {
+    const targets = targetsByLabel.get(label) || [];
+    const costs = positions.map(([y, x]) => {
+      const distances = playerAwarePushDistances(board, pkey(y, x));
+      return targets.map(target => distances.get(target) ?? Infinity);
+    });
+    total += minimumAssignmentCost(costs);
+  }
+  return memoizeBounded(memo, signature, total);
 }
 function goal(boxes, goals) {
   return boxes.every(([y, x, label]) => goals.get(pkey(y, x)) === label);
@@ -905,6 +923,20 @@ function reconstructNodePath(node) {
   return path;
 }
 
+function serializeSearchCheckpoint(candidate, board) {
+  if (!candidate) return null;
+  return {
+    state: {
+      rows: board.rows,
+      robot: candidate.robot,
+      boxes: candidate.boxes.map(([y, x, label]) => [pkey(y, x), label]),
+    },
+    path: reconstructNodePath(candidate.node),
+    cost: candidate.cost,
+    estimate: candidate.estimate,
+  };
+}
+
 function takeDiverse(candidates, count, selected, scoreKey, groupKey = "pushClass") {
   const groups = new Map();
   for (const candidate of candidates) {
@@ -981,14 +1013,19 @@ function beamSearch(payload) {
   const goalPackingWeight = payload.goalPackingWeight ?? 0.8;
   const mobilityWeight = payload.mobilityWeight ?? 0.03;
   const topologyWeight = payload.topologyWeight ?? 0.7;
+  const evacuationWeight = payload.evacuationWeight ?? 0;
   const beamProfile = payload.beamProfile || "balanced";
   const seed = payload.seed || 0;
   const transpositionLimit = payload.transpositionLimit || Math.max(12000, width * 60);
   const seenDepth = new BoundedDepthMap(transpositionLimit);
   const seenExactDepth = new BoundedDepthMap(Math.max(8000, Math.floor(transpositionLimit / 2)));
+  const handoffLimit = payload.checkpointLimit || 12;
+  const handoffCheckpoints = new Map();
   let visited = 0, reported = 0, bestEstimate = Infinity, bestPushes = 0;
   let beamCutoff = false;
   let bestCheckpoint = null;
+  let bestHandoff = null;
+  let phaseHandoff = null;
   const endgameCheckpoints = [];
   let trackedThrough = payload.trackedSignatures ? 0 : undefined;
 
@@ -1048,6 +1085,9 @@ function beamSearch(payload) {
           bestPushes = child.cost;
         }
         const topology = topologyPenalty(child.boxes, board);
+        const evacuation = evacuationWeight
+          ? roomEvacuationPenalty(child.boxes, board)
+          : 0;
         if (beamProfile === "milestone") {
           const transition = roomTransitionEvent(current.boxes, child.boxes, board);
           child.strategicHistory = transition
@@ -1057,10 +1097,11 @@ function beamSearch(payload) {
             ? `${current.openingHistory || ""}/${next.pushClass}`
             : current.openingHistory || "";
         }
-        const score = weight * estimate + topologyWeight * topology -
+        const score = weight * estimate + topologyWeight * topology +
+          evacuationWeight * evacuation -
           goalPackingWeight * goalPackingBonus(child.boxes, board) +
           diversity * signatureNoise(child.exactSignature, seed);
-        const exploreScore = topologyWeight * topology -
+        const exploreScore = topologyWeight * topology + evacuationWeight * evacuation -
           goalPackingWeight * goalPackingBonus(child.boxes, board) +
           diversity * signatureNoise(child.exactSignature, seed + 7919);
         const existing = candidates.get(child.exactSignature);
@@ -1070,6 +1111,7 @@ function beamSearch(payload) {
             node: {parent: current.node || null, segment: next.path},
             estimate,
             topology,
+            evacuation,
             score,
             exploreScore,
             pushClass: next.pushClass,
@@ -1145,6 +1187,28 @@ function beamSearch(payload) {
       seenDepth.set(child.signature, child.cost);
       seenExactDepth.set(child.exactSignature, child.cost);
       beam.push(child);
+      if (!bestHandoff || child.estimate < bestHandoff.estimate ||
+          (child.estimate === bestHandoff.estimate && child.cost < bestHandoff.cost)) {
+        bestHandoff = child;
+      }
+      if (!handoffCheckpoints.has(child.signature)) {
+        handoffCheckpoints.set(child.signature, child);
+        if (handoffCheckpoints.size > handoffLimit * 3) {
+          const retained = [...handoffCheckpoints.entries()]
+            .sort(([, left], [, right]) =>
+              left.estimate - right.estimate ||
+              (left.cost + left.estimate) - (right.cost + right.estimate))
+            .slice(0, handoffLimit);
+          handoffCheckpoints.clear();
+          retained.forEach(([signature, checkpoint]) =>
+            handoffCheckpoints.set(signature, checkpoint));
+        }
+      }
+      if (evacuationWeight && child.evacuation === 0 &&
+          (!phaseHandoff || child.cost + child.estimate <
+            phaseHandoff.cost + phaseHandoff.estimate)) {
+        phaseHandoff = child;
+      }
     }
     beam = selectBeamLayer(beam, width, beamProfile);
     if (payload.trackedSignatures) {
@@ -1240,7 +1304,22 @@ function beamSearch(payload) {
       remainingVisited -= endgame.visited;
     }
   }
-  return {path: null, visited, cutoff: beamCutoff, bestEstimate, bestPushes, trackedThrough};
+  return {
+    path: null,
+    visited,
+    cutoff: beamCutoff,
+    bestEstimate,
+    bestPushes,
+    trackedThrough,
+    checkpoint: serializeSearchCheckpoint(bestHandoff, board),
+    checkpoints: [...handoffCheckpoints.values()]
+      .sort((left, right) =>
+        left.estimate - right.estimate ||
+        (left.cost + left.estimate) - (right.cost + right.estimate))
+      .slice(0, handoffLimit)
+      .map(checkpoint => serializeSearchCheckpoint(checkpoint, board)),
+    phaseCheckpoint: serializeSearchCheckpoint(phaseHandoff, board),
+  };
 }
 
 function beamRestartSearch(payload) {
@@ -1278,7 +1357,7 @@ function boundedPushDepthFirstSearch(payload) {
       ...position.split(",").map(Number), label,
     ]),
   };
-  const bound = payload.upperBound || payload.pushBound || 300;
+  const bound = payload.upperBound ?? payload.pushBound ?? 300;
   const maxVisited = payload.maxVisited || 250000;
   const maxDepth = payload.maxDepth || bound;
   const seed = payload.seed || 0;
@@ -1286,8 +1365,11 @@ function boundedPushDepthFirstSearch(payload) {
   const discrepancyLimit = payload.discrepancyLimit ?? Infinity;
   const transpositions = new BoundedDepthMap(payload.transpositionLimit || 60000);
   const activePath = new Set(), segments = [];
+  const checkpointLimit = payload.checkpointLimit || 8;
+  const checkpoints = new Map();
   let visited = 0, reported = 0, cutoff = false, solution = null;
   let bestEstimate = Infinity, bestPushes = 0;
+  let bestCheckpoint = null;
   let trackedThrough = payload.trackedSignatures ? 0 : undefined;
 
   const visit = (state, cost, discrepancyRemaining) => {
@@ -1323,9 +1405,42 @@ function boundedPushDepthFirstSearch(payload) {
       if (childCost > maxDepth || childCost > bound) continue;
       const estimate = heuristic(next.boxes, board);
       if (!Number.isFinite(estimate) || childCost + estimate > bound) continue;
+      const checkpointSignature = exactPushKey(next);
+      if (!checkpoints.has(checkpointSignature)) {
+        checkpoints.set(checkpointSignature, {
+          state: {
+            rows: board.rows,
+            robot: next.robot,
+            boxes: next.boxes.map(([y, x, label]) => [pkey(y, x), label]),
+          },
+          path: [...segments.flatMap(segment => segment), ...next.path],
+          cost: childCost,
+          estimate,
+        });
+        if (checkpoints.size > checkpointLimit * 3) {
+          const retained = [...checkpoints.entries()]
+            .sort(([, left], [, right]) =>
+              left.estimate - right.estimate ||
+              (left.cost + left.estimate) - (right.cost + right.estimate))
+            .slice(0, checkpointLimit);
+          checkpoints.clear();
+          retained.forEach(([signature, checkpoint]) =>
+            checkpoints.set(signature, checkpoint));
+        }
+      }
       if (estimate < bestEstimate) {
         bestEstimate = estimate;
         bestPushes = childCost;
+        bestCheckpoint = {
+          state: {
+            rows: board.rows,
+            robot: next.robot,
+            boxes: next.boxes.map(([y, x, label]) => [pkey(y, x), label]),
+          },
+          path: [...segments.flatMap(segment => segment), ...next.path],
+          cost: childCost,
+          estimate,
+        };
       }
       const topology = topologyPenalty(next.boxes, board);
       const evacuation = profile === "evacuation" ? roomEvacuationPenalty(next.boxes, board) : 0;
@@ -1370,6 +1485,12 @@ function boundedPushDepthFirstSearch(payload) {
     discrepancyLimit,
     retained: transpositions.size,
     trackedThrough,
+    checkpoint: bestCheckpoint,
+    checkpoints: [...checkpoints.values()]
+      .sort((left, right) =>
+        left.estimate - right.estimate ||
+        (left.cost + left.estimate) - (right.cost + right.estimate))
+      .slice(0, checkpointLimit),
   };
 }
 
@@ -1381,7 +1502,7 @@ function pushIterativeDeepeningAStar(payload) {
       ...position.split(",").map(Number), label,
     ]),
   };
-  const upperBound = payload.upperBound || payload.pushBound || 300;
+  const upperBound = payload.upperBound ?? payload.pushBound ?? 300;
   const maxVisited = payload.maxVisited || 300000;
   const seed = payload.seed || 0;
   const profile = payload.idaProfile || "balanced";
@@ -1389,6 +1510,9 @@ function pushIterativeDeepeningAStar(payload) {
   let visited = 0, reported = 0, solution = null, cutoff = false;
   let bestEstimate = heuristic(initial.boxes, board), bestPushes = 0;
   let trackedThrough = payload.trackedSignatures ? 0 : undefined;
+  if (!Number.isFinite(bestEstimate)) {
+    return {path: null, visited, cutoff: false, bestEstimate, bestPushes};
+  }
 
   const orderingScore = (state, cost) => {
     const estimate = heuristic(state.boxes, board);
@@ -1478,6 +1602,7 @@ function pushIterativeDeepeningAStar(payload) {
     activePath.clear();
     const transpositions = new BoundedDepthMap(payload.transpositionLimit || 80000);
     const nextThreshold = searchContour(initial, 0, threshold, transpositions);
+    if (!Number.isFinite(nextThreshold)) break;
     if (nextThreshold <= threshold) threshold++;
     else threshold = nextThreshold;
   }
@@ -1493,13 +1618,108 @@ function pushIterativeDeepeningAStar(payload) {
   };
 }
 
+function bridgeAStarSearch(payload) {
+  const board = parse(payload.state);
+  const initial = {
+    robot: payload.state.robot,
+    boxes: payload.state.boxes.map(([position, label]) => [
+      ...position.split(",").map(Number), label,
+    ]),
+    cost: 0,
+  };
+  const targetBoxes = payload.targetState.boxes.map(([position, label]) => [
+    ...position.split(",").map(Number), label,
+  ]);
+  const targetState = {robot: payload.targetState.robot, boxes: targetBoxes};
+  const targetReachable = reachablePaths(targetState, board);
+  const targetKey = payload.targetId || pushKey(targetState, targetReachable);
+  const heuristicMemo = new Map();
+  const frontier = new Heap(), bestCost = new Map(), closed = new Set(), cameFrom = new Map();
+  const weight = payload.weight || 1.4;
+  const maxVisited = payload.maxVisited || 100000;
+  const frontierLimit = payload.frontierLimit || 4000;
+  let visited = 0, order = 0, bestEstimate = Infinity, bestCheckpoint = null;
+
+  initial.reachable = reachablePaths(initial, board);
+  initial.signature = pushKey(initial, initial.reachable);
+  initial.estimate = targetLayoutHeuristic(initial.boxes, targetBoxes, board, heuristicMemo);
+  if (!Number.isFinite(initial.estimate)) return {path: null, visited};
+  delete initial.reachable;
+  bestCost.set(initial.signature, 0);
+  frontier.push([weight * initial.estimate, order++, initial]);
+
+  while (frontier.length) {
+    const current = frontier.pop()[2];
+    if (bestCost.get(current.signature) !== current.cost || closed.has(current.signature)) continue;
+    closed.add(current.signature);
+    visited++;
+    if (current.signature === targetKey) {
+      return {
+        path: reconstructPath(cameFrom, current.signature),
+        visited,
+        finalState: {
+          rows: board.rows,
+          robot: current.robot,
+          boxes: current.boxes.map(([y, x, label]) => [pkey(y, x), label]),
+        },
+      };
+    }
+    if (visited >= maxVisited) break;
+    const currentReachable = reachablePaths(current, board);
+    for (const rawNext of pushNeighbors(current, board, currentReachable)) {
+      const next = expandPushMacro(rawNext, board, payload.forcedMacros !== false);
+      if (!next) continue;
+      const child = {
+        robot: next.robot,
+        boxes: next.boxes,
+        cost: current.cost + next.pushes,
+      };
+      if (payload.upperBound && child.cost > payload.upperBound) continue;
+      child.reachable = reachablePaths(child, board);
+      child.signature = pushKey(child, child.reachable);
+      delete child.reachable;
+      if (closed.has(child.signature) ||
+          child.cost >= (bestCost.get(child.signature) ?? Infinity)) continue;
+      child.estimate = targetLayoutHeuristic(child.boxes, targetBoxes, board, heuristicMemo);
+      if (!Number.isFinite(child.estimate) ||
+          (payload.upperBound && child.cost + child.estimate > payload.upperBound)) continue;
+      if (child.estimate < bestEstimate) {
+        bestEstimate = child.estimate;
+        bestCheckpoint = {
+          state: {
+            rows: board.rows,
+            robot: child.robot,
+            boxes: child.boxes.map(([y, x, label]) => [pkey(y, x), label]),
+          },
+          cost: child.cost,
+          estimate: child.estimate,
+        };
+      }
+      bestCost.set(child.signature, child.cost);
+      cameFrom.set(child.signature, {parent: current.signature, segment: next.path});
+      frontier.push([child.cost + weight * child.estimate, order++, child]);
+    }
+    if (frontier.length > frontierLimit * 2) frontier.retainBest(frontierLimit);
+    if (visited % 5000 === 0) postMessage({type: "progress", visited});
+  }
+  return {path: null, visited, cutoff: visited >= maxVisited, bestEstimate, checkpoint: bestCheckpoint};
+}
+
 function bidirectionalSide(payload) {
   const board = parse(payload.state);
   const initialBoxes = payload.state.boxes.map(([p, label]) => [...p.split(",").map(Number), label]);
-  const initialTargets = targetMapFromBoxes(initialBoxes, board.floor);
+  const initialTargets = targetMapFromBoxes(initialBoxes, board);
   const forward = payload.mode === "bidir-forward";
   const frontier = new Heap(), bestCost = new Map(), closed = new Set(), records = [];
-  let order = 0, visited = 0, reported = 0;
+  let order = 0, visited = 0, reported = 0, bestLandmarkEstimate = Infinity;
+  const landmarkCandidates = new Map();
+  const emitLandmarks = () => {
+    if (forward || !landmarkCandidates.size) return;
+    const landmarks = stratifiedCheckpoints([...landmarkCandidates.values()])
+      .slice(0, payload.landmarkLimit || 64)
+      .map(({checkpointBand: _band, checkpointClass: _class, ...landmark}) => landmark);
+    postMessage({type: "landmarks", landmarks});
+  };
   const starts = forward
     ? [{robot: payload.state.robot, boxes: initialBoxes, cost: 0, path: []}]
     : reverseStartStates(board, initialBoxes, payload.reverseShard || {index: 0, count: 1});
@@ -1529,10 +1749,54 @@ function bidirectionalSide(payload) {
       segment: encodeMoves(current.segment || []),
       robot: current.robot,
     });
+    const landmarkEstimate = forward
+      ? heuristic(current.boxes, board)
+      : homeHeuristic(current.boxes, initialTargets);
+    if (landmarkEstimate < bestLandmarkEstimate) {
+      bestLandmarkEstimate = landmarkEstimate;
+      postMessage({
+        type: "landmark",
+        id: signature,
+        estimate: landmarkEstimate,
+        cost: current.cost,
+        state: {
+          rows: board.rows,
+          robot: current.robot,
+          boxes: current.boxes.map(([y, x, label]) => [pkey(y, x), label]),
+        },
+      });
+    }
+    if (!forward) {
+      const solvedGoals = current.boxes
+        .filter(([y, x, label]) => board.goals.get(pkey(y, x)) === label)
+        .map(([y, x, label]) => `${y},${x},${label}`)
+        .sort()
+        .join(";");
+      const checkpointBand = Math.floor(landmarkEstimate / 10);
+      const checkpointClass =
+        `${checkpointBand}|${roomFlowSignature(current.boxes, board)}|${solvedGoals}`;
+      const existing = landmarkCandidates.get(checkpointClass);
+      if (!existing || landmarkEstimate < existing.estimate ||
+          (landmarkEstimate === existing.estimate && current.cost < existing.cost)) {
+        landmarkCandidates.set(checkpointClass, {
+          id: signature,
+          estimate: landmarkEstimate,
+          cost: current.cost,
+          checkpointBand,
+          checkpointClass,
+          state: {
+            rows: board.rows,
+            robot: current.robot,
+            boxes: current.boxes.map(([y, x, label]) => [pkey(y, x), label]),
+          },
+        });
+      }
+    }
 
     if (records.length >= 500) flushRecords(records);
     if (payload.maxVisited && visited >= payload.maxVisited) {
       flushRecords(records);
+      emitLandmarks();
       postMessage({type: "progress", visited, delta: visited - reported});
       postMessage({type: "done", visited, cutoff: true});
       return;
@@ -1568,11 +1832,13 @@ function bidirectionalSide(payload) {
     }
   }
   flushRecords(records);
+  emitLandmarks();
   postMessage({type: "progress", visited, delta: visited - reported});
   postMessage({type: "done", visited});
 }
 
 function search(payload) {
+  if (payload.algorithm === "bridge-astar") return bridgeAStarSearch(payload);
   if (payload.algorithm === "push-beam") return beamSearch(payload);
   if (payload.algorithm === "push-beam-restarts") return beamRestartSearch(payload);
   if (payload.algorithm === "bounded-push-dfs") return boundedPushDepthFirstSearch(payload);

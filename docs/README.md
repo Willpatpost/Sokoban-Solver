@@ -15,12 +15,6 @@ reverse Web Workers from different solved robot regions. The reverse workers
 reverse search reach the same canonical box layout and robot-reachability
 region, the browser stitches both halves into a playable solution.
 
-The built-in Huge level also ships with a verified 250-push incumbent. From the
-untouched starting position, Ultimate Bidirectional validates and replays that
-incumbent immediately, guaranteeing a solution while the general search remains
-available for changed states. The UI identifies this result as a verified
-incumbent rather than claiming that the current search rediscovered it.
-
 The regular **Ultimate Search** mode is still available. It uses a multi-worker
 portfolio that races complementary strategies such as Push Greedy, Weighted Push
 A*, and Push A*. All advanced workers use push-level search, dead-square
@@ -60,6 +54,20 @@ Incomplete macro workers receive a limited push allowance above a known
 incumbent, making it possible to discover an easier non-optimal solution before
 the exact workers prove or improve the incumbent.
 
+When topology analysis finds a one-entrance room containing more boxes of a
+label than the room can ultimately accept, a dedicated evacuation worker treats
+moving the surplus through the gate as its first subgoal. After the surplus is
+clear, the ordinary assignment and packing scores take over. This objective is
+derived from room contents and goals, without puzzle-specific moves or coordinates.
+
+Incomplete forward workers publish replayable box-layout checkpoints. A phase
+checkpoint starts a milestone-conditioned reverse worker from the solved layouts;
+it discards reverse states that no box assignment can reach from that checkpoint.
+The reverse worker publishes stratified landmarks, and bounded bridge workers try
+to join compatible checkpoint/landmark pairs. A successful bridge is stitched to
+the forward prefix and reverse suffix and replay-validated before it is accepted.
+All milestones, targets, and worker assignments are derived from the loaded board.
+
 The board analysis is puzzle-independent. It detects articulation gates and
 one-entrance rooms, derives farthest-first packing pressure and goal dependencies,
 and marks high-traffic packing cells. Hard pruning includes static and player-side
@@ -70,8 +78,10 @@ Boxes occupying the exterior approach to an unresolved one-entrance room add
 congestion pressure, encouraging the solver to clear staging gates before packing.
 
 Small searches remain exhaustive. Complex boards use explicit state and cache
-budgets, continuing through independent restarts until a solution is found, the
-configured portfolio is exhausted, or you press **Stop**.
+budgets. After the bounded heuristic portfolio finishes, an exact push-IDA*
+worker restarts with geometrically increasing state budgets. It continues until
+it finds a solution, proves the state space unsolvable, or you press **Stop**;
+there is no fixed push-depth ceiling when no learned incumbent is available.
 
 Very large puzzles can still hit browser memory limits before the search space
 is exhausted. Ultimate Bidirectional uses compact parent records, caps each

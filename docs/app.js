@@ -11,9 +11,8 @@ const LEVELS = {
 };
 const DIRS = {Up: [-1, 0], Down: [1, 0], Left: [0, -1], Right: [0, 1]};
 const CODE_MOVE = {U: "Up", D: "Down", L: "Left", R: "Right"};
-const SOLVER_BUILD = "2026-07-19.1";
+const SOLVER_BUILD = "2026-07-19.3";
 const SOLVER_WORKER_URL = `solver-worker.js?build=${SOLVER_BUILD}`;
-const VERIFIED_PUSH_BOUNDS = {huge: 250};
 const PUSH_BOUNDS_KEY = "sokomind-push-bounds-v1";
 const KEYS = {ArrowUp: "Up", ArrowDown: "Down", ArrowLeft: "Left", ArrowRight: "Right",
   w: "Up", W: "Up", s: "Down", S: "Down", a: "Left", A: "Left", d: "Right", D: "Right"};
@@ -22,7 +21,7 @@ const $ = (id) => document.getElementById(id);
 let levelKey = "ultra-tiny", state, initialState, history = [], moveHistory = [], moves = 0;
 let workers = [], animation = [], timer = null, solvedShown = false;
 let startedAt = null, elapsed = 0, clock = null;
-let pushBounds = {...VERIFIED_PUSH_BOUNDS};
+let pushBounds = {};
 
 try {
   const storedBounds = JSON.parse(localStorage.getItem(PUSH_BOUNDS_KEY) || "{}");
@@ -31,7 +30,7 @@ try {
     pushBounds[key] = Math.min(pushBounds[key] ?? Infinity, value);
   }
 } catch (_error) {
-  // Storage can be unavailable in private browsing; verified bounds still work.
+  // Storage can be unavailable in private browsing; search remains unbounded.
 }
 
 function rememberPushBound() {
@@ -248,14 +247,6 @@ function serializeState(s) {
 function validatePathToGoal(path) {
   return SokomindPath.validatePathToGoal(state, path, cloneState, moveState, isGoal);
 }
-function verifiedSolutionPath() {
-  if (history.length) return null;
-  const encoded = globalThis.SokomindVerifiedSolutions?.[levelKey];
-  if (!encoded) return null;
-  const path = [...encoded].map(code => CODE_MOVE[code]);
-  if (path.some(move => !move)) return null;
-  return validatePathToGoal(path);
-}
 function walkBetween(board, boxes, start, target) {
   const blocked = new Set(boxes.map(([y, x]) => pos(y, x)));
   const startKey = pos(start[0], start[1]), targetKey = pos(target[0], target[1]);
@@ -306,6 +297,46 @@ function reconstructMeetPath(meetKey, forwardSeen, reverseSeen) {
   if (!bridge) return null;
   return [...forwardSegments, ...bridge, ...reverseSegments];
 }
+function checkpointMeetKey(checkpointState) {
+  const boxes = new Set(checkpointState.boxes.map(([position]) => position));
+  const start = pos(checkpointState.robot[0], checkpointState.robot[1]);
+  const reached = new Set([start]), queue = [checkpointState.robot];
+  for (let head = 0; head < queue.length; head++) {
+    const [y, x] = queue[head];
+    for (const [dy, dx] of Object.values(DIRS)) {
+      const next = pos(y + dy, x + dx);
+      if (reached.has(next) || boxes.has(next) || !state.board.floor.has(next)) continue;
+      reached.add(next);
+      queue.push([y + dy, x + dx]);
+    }
+  }
+  const representative = [...reached].sort()[0];
+  const boxPart = checkpointState.boxes
+    .map(([position, label]) => `${position},${label}`)
+    .sort()
+    .join(";");
+  return `${representative}|${boxPart}`;
+}
+function reconstructCheckpointMeetPath(checkpoint, prefixPath, reverseSeen) {
+  const meetKey = checkpointMeetKey(checkpoint.state);
+  let current = reverseSeen.get(meetKey);
+  if (!current) return null;
+  const boxes = checkpoint.state.boxes.map(([position]) => position.split(",").map(Number));
+  const bridge = walkBetween(
+    state.board,
+    boxes,
+    checkpoint.state.robot,
+    current.robot,
+  );
+  if (!bridge) return null;
+  const suffix = [];
+  while (current?.parent) {
+    suffix.push(...decodeSegment(current.segment));
+    current = reverseSeen.get(current.parent);
+    if (!current) return null;
+  }
+  return [...prefixPath, ...bridge, ...suffix];
+}
 function solverPlans(algorithm) {
   if (!["ultimate", "portfolio", "fast"].includes(algorithm)) {
     return [{algorithm, label: $("algorithm").selectedOptions[0].text}];
@@ -319,22 +350,6 @@ function solverPlans(algorithm) {
 }
 function startBidirectionalSolver(purpose) {
   stop(false); setControlsBusy(true);
-  const verified = verifiedSolutionPath();
-  if (verified !== null) {
-    setControlsBusy(false);
-    const pushes = pushBounds[levelKey];
-    const source = `verified ${pushes}-push incumbent`;
-    if (purpose === "hint") {
-      setStatus(verified.length
-        ? `Hint: ${verified[0]} - ${verified.length} moves remain (${source})`
-        : "This puzzle is already solved.");
-    } else {
-      setStatus(`Loaded ${source}: ${verified.length} replayable moves.`);
-      animation = verified;
-      animate();
-    }
-    return;
-  }
   setStatus(`Ultimate Bidirectional ${SOLVER_BUILD} is searching...`);
   const hardware = navigator.hardwareConcurrency || 2;
   const searchScale = state.boxes.size * state.board.floor.size;
@@ -362,9 +377,10 @@ function startBidirectionalSolver(purpose) {
     ...beamProfiles[index % beamProfiles.length],
   }));
   const macroProfiles = [
-    {beamProfile: "milestone", weight: 2, topologyWeight: 1.4,
-      goalPackingWeight: 1.2, diversity: 2, seed: 29, beamWidth: 40,
-      sequenceMacroResults: 6},
+    {beamProfile: "evacuation", weight: 1, topologyWeight: 1,
+      evacuationWeight: 8, goalPackingWeight: 1, diversity: 1.5,
+      seed: 29, beamWidth: 50, sequenceMacroResults: 8,
+      continuationVisited: 0, endgameVisited: 0, handoffStage: "evacuation"},
     {beamProfile: "detour", weight: 3.2, topologyWeight: 0.7,
       goalPackingWeight: 1.5, diversity: 1.2, seed: 104800, beamWidth: 50,
       sequenceMacroResults: 6},
@@ -421,10 +437,156 @@ function startBidirectionalSolver(purpose) {
   const directPlans = [...beamPlans, ...macroPlans, ...dfsPlans];
   let nextDirectPlan = 0;
   const forwardRecords = new Map(), reverseRecordSets = [];
+  const directCheckpoints = new Map();
+  const reverseLandmarks = [], bridgePairs = new Set();
   const workerSides = new Map(), workerRecords = new Map(), workerProgress = new Map();
-  const expectedWorkers = reverseWorkers + 1 + directPlans.length;
+  let expectedWorkers = reverseWorkers + 1 + directPlans.length;
   let settled = false, totalVisited = 0, doneWorkers = 0;
+  let targetedReverseQueued = false, exhaustiveGeneration = 0;
   const completedPhases = [];
+
+  const enqueueDirectPlans = (plans) => {
+    if (!plans.length) return;
+    directPlans.splice(nextDirectPlan, 0, ...plans);
+    expectedWorkers += plans.length;
+  };
+
+  const queueBridgePlans = (checkpointKey, checkpointRecord) => {
+    if (!reverseLandmarks.length || bridgePairs.size >= 12) return;
+    const totalBound = checkpointRecord.totalBound ?? Infinity;
+    const candidates = reverseLandmarks
+      .map(entry => ({
+        ...entry,
+        projected: checkpointRecord.pushCost + entry.landmark.cost + entry.landmark.estimate,
+      }))
+      .sort((left, right) => left.projected - right.projected)
+      .slice(0, 4);
+    const plans = [];
+    for (const entry of candidates) {
+      if (bridgePairs.size >= 12) break;
+      const pairKey = `${checkpointKey}=>${entry.landmark.id}`;
+      if (bridgePairs.has(pairKey)) continue;
+      const remaining = totalBound - checkpointRecord.pushCost - entry.landmark.cost;
+      if (remaining <= 0) continue;
+      bridgePairs.add(pairKey);
+      plans.push({
+        algorithm: "bridge-astar",
+        side: "direct",
+        label: `Landmark Bridge ${bridgePairs.size}`,
+        handoffStage: "bridge",
+        state: checkpointRecord.checkpoint.state,
+        prefixPath: checkpointRecord.prefixPath,
+        prefixCost: checkpointRecord.pushCost,
+        totalBound,
+        targetState: entry.landmark.state,
+        targetId: entry.landmark.id,
+        reverseRecordIndex: entry.reverseRecordIndex,
+        reverseCost: entry.landmark.cost,
+        upperBound: remaining,
+        maxVisited: 60000,
+        frontierLimit: 4000,
+        weight: 1.35,
+        forcedMacros: false,
+      });
+    }
+    enqueueDirectPlans(plans);
+  };
+
+  const registerLandmarks = (landmarks, worker) => {
+    const records = workerRecords.get(worker);
+    const reverseRecordIndex = reverseRecordSets.indexOf(records);
+    if (reverseRecordIndex < 0) return;
+    for (const landmark of landmarks) {
+      if (!landmark?.id || !landmark.state ||
+          reverseLandmarks.some(entry => entry.landmark.id === landmark.id)) continue;
+      reverseLandmarks.push({landmark, reverseRecordIndex});
+    }
+    for (const [checkpointKey, checkpointRecord] of directCheckpoints) {
+      queueBridgePlans(checkpointKey, checkpointRecord);
+    }
+  };
+
+  const queueCheckpointWorkers = (plan, data) => {
+    const totalBound = plan.totalBound ?? planUpperBound(plan) ?? Infinity;
+    const prefixPath = plan.prefixPath || [];
+    const prefixCost = plan.prefixCost || 0;
+    if (plan.handoffStage === "evacuation") {
+      const checkpoint = data.phaseCheckpoint;
+      if (!checkpoint) return;
+      const consumed = prefixCost + checkpoint.cost;
+      const remaining = totalBound - consumed;
+      if (remaining <= 0) return;
+      if (!targetedReverseQueued) {
+        targetedReverseQueued = true;
+        expectedWorkers++;
+        launch({
+          mode: "bidir-reverse",
+          side: "reverse",
+          label: "Milestone Reverse Search",
+          state: checkpoint.state,
+          maxVisited: 100000,
+          landmarkLimit: 256,
+          reverseShard: {index: 0, count: 1},
+        });
+      }
+      enqueueDirectPlans([{
+        algorithm: "push-beam",
+        side: "direct",
+        label: "Topology Packing Handoff",
+        state: checkpoint.state,
+        prefixPath: [...prefixPath, ...checkpoint.path],
+        prefixCost: consumed,
+        totalBound,
+        upperBound: remaining,
+        maxDepth: remaining,
+        maxVisited: 2000,
+        transpositionLimit: 24000,
+        beamProfile: "milestone",
+        weight: 2,
+        topologyWeight: 1.2,
+        goalPackingWeight: 1.4,
+        diversity: 2,
+        seed: 104800,
+        beamWidth: 80,
+        sequenceMacros: true,
+        sequenceMacroLimit: 16,
+        sequenceMacroExplored: 64,
+        sequenceMacroResults: 10,
+        checkpointLimit: 8,
+        continuationVisited: 0,
+        endgameVisited: 0,
+        handoffStage: "packing",
+      }]);
+      return;
+    }
+    if (plan.handoffStage === "packing") {
+      const checkpoints = (data.checkpoints || []).slice(0, 6);
+      enqueueDirectPlans(checkpoints.map((checkpoint, index) => {
+        const consumed = prefixCost + checkpoint.cost;
+        const remaining = totalBound - consumed;
+        const profiles = ["room-flow", "balanced", "setup"];
+        return {
+          algorithm: "bounded-push-dfs",
+          side: "direct",
+          label: `Exact Handoff ${index + 1}/${checkpoints.length}`,
+          state: checkpoint.state,
+          prefixPath: [...prefixPath, ...checkpoint.path],
+          prefixCost: consumed,
+          totalBound,
+          upperBound: remaining,
+          maxDepth: remaining,
+          maxVisited: 100000,
+          transpositionLimit: 100000,
+          checkpointLimit: 8,
+          dfsProfile: profiles[index % profiles.length],
+          discrepancyLimit: index % profiles.length === 2 ? 4 : undefined,
+          forcedMacros: false,
+          seed: 313337 + index * 104729,
+          handoffStage: "exact",
+        };
+      }).filter(next => next.upperBound > 0));
+    }
+  };
 
   const finish = (path, strategy = "Bidirectional") => {
     const validated = validatePathToGoal(path);
@@ -450,6 +612,41 @@ function startBidirectionalSolver(purpose) {
     return finish(path);
   };
 
+  const requestCheckpointSolve = (meetKey, reverseRecords) => {
+    const checkpoint = directCheckpoints.get(meetKey);
+    if (!checkpoint) return false;
+    const path = reconstructCheckpointMeetPath(
+      checkpoint.checkpoint,
+      checkpoint.prefixPath,
+      reverseRecords,
+    );
+    return path ? finish(path, checkpoint.label) : false;
+  };
+
+  const registerCheckpoints = (plan, data) => {
+    const prefixPath = plan.prefixPath || [];
+    const candidates = [data.phaseCheckpoint, ...(data.checkpoints || [])]
+      .filter(Boolean);
+    for (const checkpoint of candidates) {
+      const meetKey = checkpointMeetKey(checkpoint.state);
+      const record = {
+        checkpoint,
+        prefixPath: [...prefixPath, ...checkpoint.path],
+        pushCost: (plan.prefixCost || 0) + checkpoint.cost,
+        totalBound: plan.totalBound ?? planUpperBound(plan) ?? Infinity,
+        label: `${plan.label} + Reverse Frontier`,
+      };
+      directCheckpoints.set(meetKey, record);
+      for (const reverseRecords of reverseRecordSets) {
+        if (reverseRecords.has(meetKey) && requestCheckpointSolve(meetKey, reverseRecords)) {
+          return true;
+        }
+      }
+      queueBridgePlans(meetKey, record);
+    }
+    return false;
+  };
+
   const inspectRecords = (records, worker) => {
     const side = workerSides.get(worker);
     const recordMap = workerRecords.get(worker);
@@ -463,10 +660,30 @@ function startBidirectionalSolver(purpose) {
       } else if (forwardRecords.has(record.id)) {
         meetings.push([record.id, recordMap]);
       }
+      if (side === "reverse" && directCheckpoints.has(record.id) &&
+          requestCheckpointSolve(record.id, recordMap)) return;
     }
     for (const [meetKey, reverseRecords] of meetings) {
       if (requestSolve(meetKey, reverseRecords)) return;
     }
+  };
+
+  const launchExhaustiveFallback = () => {
+    const generation = exhaustiveGeneration++;
+    const maxVisited = Math.min(Number.MAX_SAFE_INTEGER, 250000 * (2 ** generation));
+    const transpositionLimit = Math.min(2000000, 80000 * (2 ** Math.floor(generation / 2)));
+    expectedWorkers++;
+    launch({
+      algorithm: "push-ida-star",
+      side: "direct",
+      label: `Exact IDA* Generation ${generation + 1}`,
+      exhaustiveFallback: true,
+      upperBound: currentUpperBound() ?? Infinity,
+      maxVisited,
+      transpositionLimit,
+      forcedMacros: false,
+      seed: 911 + generation * 104729,
+    });
   };
 
   const launch = (plan) => {
@@ -483,6 +700,10 @@ function startBidirectionalSolver(purpose) {
     worker.onmessage = ({data}) => {
       if (data.type === "records") {
         inspectRecords(data.records, worker);
+        return;
+      }
+      if (data.type === "landmarks") {
+        registerLandmarks(data.landmarks || [], worker);
         return;
       }
       if (data.type === "progress") {
@@ -504,7 +725,21 @@ function startBidirectionalSolver(purpose) {
         completedPhases.push(
           `${plan.label}: ${(data.visited || 0).toLocaleString()}${progress}`,
         );
-        if (plan.side === "direct" && data.path && finish(data.path, plan.label)) return;
+        if (plan.handoffStage === "bridge" && data.path && data.finalState) {
+          const reverseRecords = reverseRecordSets[plan.reverseRecordIndex];
+          const prefixPath = [...(plan.prefixPath || []), ...data.path];
+          const joined = reverseRecords && reconstructCheckpointMeetPath(
+            {state: data.finalState}, prefixPath, reverseRecords,
+          );
+          if (joined && finish(joined, plan.label)) return;
+        }
+        const completePath = plan.handoffStage !== "bridge" && plan.prefixPath && data.path
+          ? [...plan.prefixPath, ...data.path]
+          : plan.handoffStage !== "bridge" ? data.path : null;
+        if (plan.side === "direct" && completePath && finish(completePath, plan.label)) return;
+        if (plan.side === "direct" && registerCheckpoints(plan, data)) return;
+        if (plan.side === "direct") queueCheckpointWorkers(plan, data);
+        const provedUnsolvable = plan.exhaustiveFallback && !data.path && !data.cutoff;
         doneWorkers++;
         worker.terminate();
         workers = workers.filter(item => item !== worker);
@@ -514,12 +749,21 @@ function startBidirectionalSolver(purpose) {
         if (plan.side === "direct" && nextDirectPlan < directPlans.length) {
           launch(directPlans[nextDirectPlan++]);
         }
-        if (!settled && doneWorkers === expectedWorkers) {
+        if (provedUnsolvable) {
+          settled = true;
           setControlsBusy(false);
           setStatus(
-            `No solution found by ${SOLVER_BUILD} (${totalVisited.toLocaleString()} states). ` +
-            completedPhases.join("; "),
+            `Exact IDA* proved that this puzzle has no solution ` +
+            `(${totalVisited.toLocaleString()} states).`,
           );
+          return;
+        }
+        if (!settled && doneWorkers === expectedWorkers) {
+          setStatus(
+            `Heuristic portfolio complete; starting exact search after ` +
+            `${totalVisited.toLocaleString()} states.`,
+          );
+          launchExhaustiveFallback();
         }
       }
     };
@@ -539,7 +783,11 @@ function startBidirectionalSolver(purpose) {
         setStatus("Bidirectional worker failed.");
       }
     };
-    worker.postMessage({state: serializeState(state), upperBound: planUpperBound(plan), ...plan});
+    worker.postMessage({
+      state: plan.state || serializeState(state),
+      upperBound: planUpperBound(plan),
+      ...plan,
+    });
   };
 
   launch({

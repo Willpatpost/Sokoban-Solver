@@ -3,7 +3,6 @@ const fs = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
 const vm = require("node:vm");
-const VERIFIED_SOLUTIONS = require("./verified-solutions.js");
 
 function loadWorker(postMessage = () => {}) {
   const source = fs.readFileSync(path.join(__dirname, "solver-worker.js"), "utf8");
@@ -43,6 +42,14 @@ const HUGE_SOLUTION =
   "DLDRRRURDDDRDLLLLRRRUUULLLUUUURRURRRRUUUURRRDLLLULDDDRDLLLLLULDDDDDLDRRRURDDDLRLDRRRRLLLUUURRRRLLUUR" +
   "LLDLLULLDLUULURDRUURUULLDRURDLDRRRRRDRUUUULURRRDDDRUDLLUULURLDDDDDRDDLUUUUUULURDDDDDDDLDDRUDRUUURULD" +
   "LUUUULURDDDDDDRDLLLLLLDLUULULLRRDRULLLDRRURDLDRRRRRRRDRUULURLUULLLLLLD";
+const HUGE_SOLUTION_250 =
+  "DDRRULDLUUURRULLLLDLUUUUUUUULURRRLDDDDLDDDDRRRDDDDRRRRULLLDLUUURULLLLDURRRDDDDRRRRRRULLLLLDLUUURULLL" +
+  "DLUUUUUUUURULLLRRDDDLLLUDRRRUUULLDDURRDDLUURULDDLLDURRDRDDDDDRRRDDDDLLURDRUUURULLLDLUUUUUUUURLRULDDD" +
+  "DDDDDRRRDDDDLLLLURRRDRUUURULLLDLUUUUUUURULDDDDDDDRRRDDDLLLLDLLURRRRRDRUUURUUDLLLDLUUUURRURRRUUUURRRR" +
+  "DLLLULDDDDLDRRDUUDDRRULDLDUULUURDDDRDDLLLLLLDLUUDRRRLLLULUURURUULLDRURDLDRRRRRDRUUUULURRRDDDRULLULLD" +
+  "DRUULURRLDDRRDLULLDDRUUULURDDDDDDRLDRDDLLUDLULDDDLDRRRRRLLLLUUURRRRULDULULDRLRDLULDDDLDRRRRLLLUUUULL" +
+  "DRURDDDRDLLLLLRRRRUUURRUURUUULLLLLLUUUDLLLDRRRURDLDRRRRRURDDDDDRDLLLULDDDRDLLLLRRRUUULLLLURUULULLDDR" +
+  "RURDLDRRRRRDURDRUUUUUUULURDDDDDDDLLLLLLLUUULDLDRRURDLDRRRRRRRDRUULURULLLULLLLD";
 test("browser worker solves a one-push dedicated-box puzzle", () => {
   const worker = loadWorker();
   const result = worker.search({
@@ -115,6 +122,22 @@ test("bidirectional sides emit compatible compact records", () => {
   assert.equal(forwardRecords.some(record => reverseIds.has(record.id)), true);
   assert.equal(forwardRecords.every(record => !("key" in record)), true);
   assert.equal(forwardRecords.every(record => typeof record.segment === "string"), true);
+  const landmarks = reverseMessages
+    .filter(message => message.type === "landmarks")
+    .flatMap(message => message.landmarks);
+  assert.ok(landmarks.length > 0);
+  const board = reverse.parse(state);
+  const initialBoxes = state.boxes.map(([position, label]) => [
+    ...position.split(",").map(Number), label,
+  ]);
+  assert.equal(landmarks.every(landmark => {
+    const targetBoxes = landmark.state.boxes.map(([position, label]) => [
+      ...position.split(",").map(Number), label,
+    ]);
+    return Number.isFinite(reverse.targetLayoutHeuristic(
+      initialBoxes, targetBoxes, board, new Map(),
+    ));
+  }), true);
 });
 
 test("Hungarian matching enforces distinct goals and detects Hall deadlocks", () => {
@@ -170,6 +193,26 @@ test("topology analysis prefers deeper goals in one-entrance rooms", () => {
   );
 });
 
+test("room evacuation pressure is derived from surplus room contents", () => {
+  const worker = loadWorker();
+  const board = worker.parse({rows: [
+    "OOOOOOO",
+    "O     O",
+    "OOO OOO",
+    "O S   O",
+    "O     O",
+    "O     O",
+    "OOOOOOO",
+  ]});
+  const crowded = [[3, 3, "X"], [4, 4, "X"]];
+  const evacuated = [[1, 3, "X"], [4, 4, "X"]];
+
+  assert.ok(
+    worker.roomEvacuationPenalty(crowded, board) >
+      worker.roomEvacuationPenalty(evacuated, board),
+  );
+});
+
 test("reverse search charges one unit per pull regardless of walking", () => {
   const worker = loadWorker();
   const board = worker.parse({rows: ["OOOOO", "O   O", "O   O", "O a O", "OOOOO"]});
@@ -208,6 +251,27 @@ test("push beam returns a replayable solution", () => {
     state: stateFromRows(["OOOOO", "O R O", "O A O", "O a O", "OOOOO"]),
   });
   assert.deepEqual(Array.from(result.path), ["Down"]);
+});
+
+test("bounded beams return replayable checkpoints for worker handoff", () => {
+  const worker = loadWorker();
+  const state = stateFromRows([
+    "OOOOOOOO",
+    "O R X SO",
+    "OOOOOOOO",
+  ]);
+  const result = worker.search({
+    algorithm: "push-beam",
+    state,
+    beamWidth: 4,
+    maxVisited: 2,
+    forcedMacros: false,
+  });
+
+  assert.equal(result.path, null);
+  assert.ok(result.checkpoint);
+  assert.ok(result.checkpoint.estimate < 3);
+  assert.ok(result.checkpoint.path.length > 0);
 });
 
 test("forced push macro collapses a globally forced corridor", () => {
@@ -376,6 +440,26 @@ test("bounded push DFS can limit cumulative ordering discrepancies", () => {
   assert.equal(result.discrepancyLimit, 0);
 });
 
+test("bounded push DFS returns its best checkpoint when its contour is incomplete", () => {
+  const worker = loadWorker();
+  const state = stateFromRows([
+    "OOOOOOOOO",
+    "O R X  SO",
+    "OOOOOOOOO",
+  ]);
+  const result = worker.search({
+    algorithm: "bounded-push-dfs",
+    state,
+    upperBound: 3,
+    maxVisited: 2,
+  });
+
+  assert.equal(result.path, null);
+  assert.ok(result.checkpoint);
+  assert.ok(result.checkpoint.estimate < 3);
+  assert.ok(result.checkpoint.path.length > 0);
+});
+
 test("push IDA star finds a solution on its admissible contour", () => {
   const worker = loadWorker();
   const state = stateFromRows([
@@ -396,6 +480,72 @@ test("push IDA star finds a solution on its admissible contour", () => {
 
   assert.deepEqual(Array.from(result.path), ["Down", "Down"]);
   assert.ok(result.visited <= 3);
+});
+
+test("push IDA star rejects an unreachable assignment without looping at infinity", () => {
+  const worker = loadWorker();
+  const state = stateFromRows([
+    "OOOOO",
+    "OXR O",
+    "O   O",
+    "O  SO",
+    "OOOOO",
+  ]);
+  const result = worker.search({
+    algorithm: "push-ida-star",
+    state,
+    upperBound: Infinity,
+    maxVisited: 100,
+  });
+
+  assert.equal(result.path, null);
+  assert.equal(result.cutoff, false);
+  assert.equal(result.visited, 0);
+});
+
+test("push IDA star honors an unbounded contour over a finite fallback bound", () => {
+  const worker = loadWorker();
+  const corridor = `ORX${" ".repeat(30)}SO`;
+  const state = stateFromRows(["O".repeat(corridor.length), corridor,
+    "O".repeat(corridor.length)]);
+  const result = worker.search({
+    algorithm: "push-ida-star",
+    state,
+    upperBound: Infinity,
+    pushBound: 30,
+    maxVisited: 100,
+  });
+
+  assert.equal(result.path.length, 31);
+  assert.equal(result.path.every(move => move === "Right"), true);
+});
+
+test("bridge A star connects a forward state to a worker-supplied landmark", () => {
+  const worker = loadWorker();
+  const state = stateFromRows([
+    "OOOOO",
+    "O R O",
+    "O X O",
+    "O S O",
+    "OOOOO",
+  ]);
+  const board = worker.parse(state);
+  const initial = {
+    robot: state.robot,
+    boxes: state.boxes.map(([position, label]) => [
+      ...position.split(",").map(Number), label,
+    ]),
+  };
+  const target = worker.pushNeighbors(initial, board)
+    .find(next => next.pushClass.endsWith(":Down"));
+  const targetState = {
+    rows: state.rows,
+    robot: target.robot,
+    boxes: target.boxes.map(([y, x, label]) => [`${y},${x}`, label]),
+  };
+  const result = worker.search({algorithm: "bridge-astar", state, targetState});
+
+  assert.deepEqual(Array.from(result.path), Array.from(target.path));
 });
 
 test("all hard pruning preserves the known Huge solution", () => {
@@ -442,7 +592,7 @@ test("the improved Huge replay establishes a 250-push incumbent", () => {
   };
   const signature = boxes => boxes.map(box => box.join(",")).sort().join(";");
   let pushes = 0, maximumBound = 0;
-  for (const code of VERIFIED_SOLUTIONS.huge) {
+  for (const code of HUGE_SOLUTION_250) {
     const move = {U: "Up", D: "Down", L: "Left", R: "Right"}[code];
     const before = signature(state.boxes);
     const next = worker.neighbors(state, board).find(candidate => candidate.move === move);
@@ -456,7 +606,7 @@ test("the improved Huge replay establishes a 250-push incumbent", () => {
     }
   }
 
-  assert.equal(VERIFIED_SOLUTIONS.huge.length, 678);
+  assert.equal(HUGE_SOLUTION_250.length, 678);
   assert.equal(pushes, 250);
   assert.equal(maximumBound, 250);
   assert.equal(worker.goal(state.boxes, board.goals), true);
