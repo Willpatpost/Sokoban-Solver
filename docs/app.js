@@ -11,7 +11,7 @@ const LEVELS = {
 };
 const DIRS = {Up: [-1, 0], Down: [1, 0], Left: [0, -1], Right: [0, 1]};
 const CODE_MOVE = {U: "Up", D: "Down", L: "Left", R: "Right"};
-const SOLVER_BUILD = "2026-07-18.6";
+const SOLVER_BUILD = "2026-07-19.1";
 const SOLVER_WORKER_URL = `solver-worker.js?build=${SOLVER_BUILD}`;
 const VERIFIED_PUSH_BOUNDS = {huge: 250};
 const PUSH_BOUNDS_KEY = "sokomind-push-bounds-v1";
@@ -248,6 +248,14 @@ function serializeState(s) {
 function validatePathToGoal(path) {
   return SokomindPath.validatePathToGoal(state, path, cloneState, moveState, isGoal);
 }
+function verifiedSolutionPath() {
+  if (history.length) return null;
+  const encoded = globalThis.SokomindVerifiedSolutions?.[levelKey];
+  if (!encoded) return null;
+  const path = [...encoded].map(code => CODE_MOVE[code]);
+  if (path.some(move => !move)) return null;
+  return validatePathToGoal(path);
+}
 function walkBetween(board, boxes, start, target) {
   const blocked = new Set(boxes.map(([y, x]) => pos(y, x)));
   const startKey = pos(start[0], start[1]), targetKey = pos(target[0], target[1]);
@@ -311,6 +319,22 @@ function solverPlans(algorithm) {
 }
 function startBidirectionalSolver(purpose) {
   stop(false); setControlsBusy(true);
+  const verified = verifiedSolutionPath();
+  if (verified !== null) {
+    setControlsBusy(false);
+    const pushes = pushBounds[levelKey];
+    const source = `verified ${pushes}-push incumbent`;
+    if (purpose === "hint") {
+      setStatus(verified.length
+        ? `Hint: ${verified[0]} - ${verified.length} moves remain (${source})`
+        : "This puzzle is already solved.");
+    } else {
+      setStatus(`Loaded ${source}: ${verified.length} replayable moves.`);
+      animation = verified;
+      animate();
+    }
+    return;
+  }
   setStatus(`Ultimate Bidirectional ${SOLVER_BUILD} is searching...`);
   const hardware = navigator.hardwareConcurrency || 2;
   const searchScale = state.boxes.size * state.board.floor.size;

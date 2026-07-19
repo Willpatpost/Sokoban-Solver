@@ -15,6 +15,12 @@ reverse Web Workers from different solved robot regions. The reverse workers
 reverse search reach the same canonical box layout and robot-reachability
 region, the browser stitches both halves into a playable solution.
 
+The built-in Huge level also ships with a verified 250-push incumbent. From the
+untouched starting position, Ultimate Bidirectional validates and replays that
+incumbent immediately, guaranteeing a solution while the general search remains
+available for changed states. The UI identifies this result as a verified
+incumbent rather than claiming that the current search rediscovered it.
+
 The regular **Ultimate Search** mode is still available. It uses a multi-worker
 portfolio that races complementary strategies such as Push Greedy, Weighted Push
 A*, and Push A*. All advanced workers use push-level search, dead-square

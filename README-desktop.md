@@ -85,8 +85,9 @@ large board, try `push-greedy` directly or expect to add stronger
 Sokoban-specific deadlock/pattern-database logic for that level.
 
 Puzzle symbols are `O` wall, `R` robot, `X` generic box, `S` generic goal,
-uppercase letters for dedicated boxes, lowercase letters for their goals, and
-spaces for floor.
+and spaces for floor. Other uppercase letters are dedicated boxes and their
+lowercase forms are the matching goals; `O`, `R`, `S`, and `X` are reserved
+and cannot be used as dedicated labels.
 
 ## Tests
 

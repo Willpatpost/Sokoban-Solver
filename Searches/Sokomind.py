@@ -2,7 +2,8 @@
 
 Symbols:
     O wall, R robot, X generic box, S generic goal,
-    A-Z dedicated boxes, a-z their dedicated goals, space floor.
+    other uppercase letters are dedicated boxes, their lowercase forms are
+    dedicated goals, and space is floor.
 """
 
 from __future__ import annotations
@@ -25,6 +26,10 @@ DIRECTIONS = {
     "Right": (0, 1),
     "Left": (0, -1),
 }
+
+RESERVED_SYMBOLS = frozenset("ORSX")
+DEDICATED_BOX_LABELS = frozenset(set("ABCDEFGHIJKLMNOPQRSTUVWXYZ") - RESERVED_SYMBOLS)
+DEDICATED_GOAL_LABELS = frozenset(label.lower() for label in DEDICATED_BOX_LABELS)
 
 BUILTIN_PUZZLES = {
     "ultra-tiny": ["OOOOO", "O R O", "O A O", "O a O", "OOOOO"],
@@ -130,8 +135,7 @@ def parse_puzzle(puzzle: Sequence[str]) -> State:
 
     width = max(map(len, puzzle))
     rows = tuple(row.ljust(width, "O") for row in puzzle)
-    allowed = set("ORXS ") | set("ABCDEFGHIJKLMNOPQRSTUVWXYZ") | set(
-        "abcdefghijklmnopqrstuvwxyz")
+    allowed = set("ORXS ") | set(DEDICATED_BOX_LABELS) | set(DEDICATED_GOAL_LABELS)
     robots: list[Position] = []
     boxes: list[Box] = []
     walls: set[Position] = set()
@@ -466,7 +470,7 @@ def get_push_neighbors(state: State) -> list[tuple[State, list[str]]]:
                         box,
                         boxes,
                         state.board,
-                        state.cost + len(segment),
+                        state.cost + 1,
                     ),
                     segment,
                 )
@@ -508,6 +512,9 @@ def _search(
     heuristic_weight: float = 1.0,
     max_seconds: float | None = None,
 ):
+    # Search cost is local to this invocation. GUI states retain the player's
+    # historical move count, which must not bias a new solver run.
+    initial = State(initial.robot_pos, initial.boxes, initial.board)
     started = time.perf_counter()
     came_from: dict[State, tuple[State, list[str]]] = {}
     initial_key = _push_signature(initial) if push_macro else initial
@@ -643,7 +650,7 @@ def ultimate_search(initial_state: State, cancel_event: Event | None = None):
     push-level search, robot reachability canonicalization, static dead-square
     pruning, label-aware goal matching, and push-distance heuristics. The first
     two attempts are bounded so the GUI/browser stay responsive before falling
-    back to a bounded exact push A* attempt.
+    back to a bounded push-optimal A* attempt.
     """
     started = time.perf_counter()
     total_visited = 0

@@ -506,7 +506,10 @@ class SokomindApp(tk.Tk):
         self.status.set(f"{algorithm} is searching...")
 
         def run() -> None:
-            result = SEARCHES[algorithm](snapshot, cancel_event)
+            try:
+                result = SEARCHES[algorithm](snapshot, cancel_event)
+            except Exception as exc:  # Keep worker failures on the Tk event loop.
+                result = exc
             self._results.put((job_id, purpose, snapshot, algorithm, result))
 
         threading.Thread(target=run, daemon=True, name="sokomind-solver").start()
@@ -531,6 +534,12 @@ class SokomindApp(tk.Tk):
             while True:
                 job_id, purpose, snapshot, algorithm, result = self._results.get_nowait()
                 if job_id != self._job_id or snapshot != self.state:
+                    continue
+                self._cancel_event = None
+                if isinstance(result, Exception):
+                    self.status.set(
+                        f"{algorithm} failed: {type(result).__name__}: {result}"
+                    )
                     continue
                 path, _final, elapsed, visited = result
                 if path is None:

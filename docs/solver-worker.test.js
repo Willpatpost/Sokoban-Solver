@@ -3,6 +3,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
 const vm = require("node:vm");
+const VERIFIED_SOLUTIONS = require("./verified-solutions.js");
 
 function loadWorker(postMessage = () => {}) {
   const source = fs.readFileSync(path.join(__dirname, "solver-worker.js"), "utf8");
@@ -42,15 +43,6 @@ const HUGE_SOLUTION =
   "DLDRRRURDDDRDLLLLRRRUUULLLUUUURRURRRRUUUURRRDLLLULDDDRDLLLLLULDDDDDLDRRRURDDDLRLDRRRRLLLUUURRRRLLUUR" +
   "LLDLLULLDLUULURDRUURUULLDRURDLDRRRRRDRUUUULURRRDDDRUDLLUULURLDDDDDRDDLUUUUUULURDDDDDDDLDDRUDRUUURULD" +
   "LUUUULURDDDDDDRDLLLLLLDLUULULLRRDRULLLDRRURDLDRRRRRRRDRUULURLUULLLLLLD";
-const HUGE_SOLUTION_250 =
-  "DDRRULDLUUURRULLLLDLUUUUUUUULURRRLDDDDLDDDDRRRDDDDRRRRULLLDLUUURULLLLDURRRDDDDRRRRRRULLLLLDLUUURULLL" +
-  "DLUUUUUUUURULLLRRDDDLLLUDRRRUUULLDDURRDDLUURULDDLLDURRDRDDDDDRRRDDDDLLURDRUUURULLLDLUUUUUUUURLRULDDD" +
-  "DDDDDRRRDDDDLLLLURRRDRUUURULLLDLUUUUUUURULDDDDDDDRRRDDDLLLLDLLURRRRRDRUUURUUDLLLDLUUUURRURRRUUUURRRR" +
-  "DLLLULDDDDLDRRDUUDDRRULDLDUULUURDDDRDDLLLLLLDLUUDRRRLLLULUURURUULLDRURDLDRRRRRDRUUUULURRRDDDRULLULLD" +
-  "DRUULURRLDDRRDLULLDDRUUULURDDDDDDRLDRDDLLUDLULDDDLDRRRRRLLLLUUURRRRULDULULDRLRDLULDDDLDRRRRLLLUUUULL" +
-  "DRURDDDRDLLLLLRRRRUUURRUURUUULLLLLLUUUDLLLDRRRURDLDRRRRRURDDDDDRDLLLULDDDRDLLLLRRRUUULLLLURUULULLDDR" +
-  "RURDLDRRRRRDURDRUUUUUUULURDDDDDDDLLLLLLLUUULDLDRRURDLDRRRRRRRDRUULURULLLULLLLD";
-
 test("browser worker solves a one-push dedicated-box puzzle", () => {
   const worker = loadWorker();
   const result = worker.search({
@@ -450,7 +442,7 @@ test("the improved Huge replay establishes a 250-push incumbent", () => {
   };
   const signature = boxes => boxes.map(box => box.join(",")).sort().join(";");
   let pushes = 0, maximumBound = 0;
-  for (const code of HUGE_SOLUTION_250) {
+  for (const code of VERIFIED_SOLUTIONS.huge) {
     const move = {U: "Up", D: "Down", L: "Left", R: "Right"}[code];
     const before = signature(state.boxes);
     const next = worker.neighbors(state, board).find(candidate => candidate.move === move);
@@ -464,7 +456,7 @@ test("the improved Huge replay establishes a 250-push incumbent", () => {
     }
   }
 
-  assert.equal(HUGE_SOLUTION_250.length, 678);
+  assert.equal(VERIFIED_SOLUTIONS.huge.length, 678);
   assert.equal(pushes, 250);
   assert.equal(maximumBound, 250);
   assert.equal(worker.goal(state.boxes, board.goals), true);

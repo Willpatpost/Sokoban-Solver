@@ -72,6 +72,14 @@ class SokomindTests(unittest.TestCase):
             with self.subTest(puzzle=puzzle), self.assertRaises(PuzzleError):
                 parse_puzzle(puzzle)
 
+    def test_rejects_lowercase_goals_for_reserved_symbols(self):
+        for reserved_goal in "orsx":
+            puzzle = ["OOOOO", f"OR {reserved_goal}O", "OOOOO"]
+            with self.subTest(goal=reserved_goal), self.assertRaisesRegex(
+                PuzzleError, "Unsupported symbol"
+            ):
+                parse_puzzle(puzzle)
+
     def test_static_dead_square_push_is_pruned(self):
         state = parse_puzzle([
             "OOOOOO",
@@ -155,6 +163,29 @@ class SokomindTests(unittest.TestCase):
         path, final, _, _ = push_a_star_search(state)
         self.assertEqual(["Down", "Left", "Down", "Right", "Right"], [move for move, _ in path])
         self.assertTrue(final.is_goal())
+
+    def test_push_astar_optimizes_pushes_when_robot_positions_are_canonicalized(self):
+        state = parse_puzzle([
+            "OOOOOOO",
+            "O     O",
+            "O  X  O",
+            "O   R O",
+            "OO    O",
+            "O OO SO",
+            "OOOOOOO",
+        ])
+        path, final, _, _ = push_a_star_search(state)
+
+        replay = state
+        pushes = 0
+        for move, _position in path:
+            before = replay.boxes
+            replay = apply_move(replay, move)
+            pushes += replay.boxes != before
+
+        self.assertTrue(final.is_goal())
+        self.assertEqual(5, pushes)
+        self.assertEqual(pushes, final.cost)
 
     def test_cli_reports_output_write_failures_cleanly(self):
         with tempfile.TemporaryDirectory() as directory:
