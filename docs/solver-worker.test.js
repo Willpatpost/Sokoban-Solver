@@ -597,6 +597,33 @@ test("Huge exact contour distributes useful work across four persistent shards",
   assert.equal(results.every(result => result.threshold >= 208), true);
 });
 
+test("persistent exact progress explains contour and shard pruning", () => {
+  const messages = [];
+  const worker = loadWorker(message => messages.push(message));
+  const result = worker.search({
+    algorithm: "push-ida-star",
+    state: stateFromRows(HUGE_ROWS),
+    upperBound: Infinity,
+    maxVisited: 80,
+    progressInterval: 20,
+    transpositionLimit: 30,
+    exactShard: {index: 0, count: 2, depth: 4},
+  });
+  const progressMessages = messages.filter(message => message.type === "progress");
+  const progress = progressMessages[progressMessages.length - 1];
+
+  assert.equal(result.cutoff, true);
+  assert.equal(typeof progress.generated, "number");
+  assert.equal(typeof progress.thresholdPrunes, "number");
+  assert.equal(typeof progress.transpositionPrunes, "number");
+  assert.equal(typeof progress.shardRejected, "number");
+  assert.equal(typeof progress.maxDepth, "number");
+  assert.equal(progress.nextThreshold === undefined ||
+    progress.nextThreshold >= progress.threshold, true);
+  assert.equal(typeof result.transpositionEvictions, "number");
+  assert.equal(typeof result.maxTranspositions, "number");
+});
+
 test("bridge A star connects a forward state to a worker-supplied landmark", () => {
   const worker = loadWorker();
   const state = stateFromRows([

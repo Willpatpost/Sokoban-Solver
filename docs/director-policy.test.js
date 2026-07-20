@@ -5,7 +5,25 @@ const {
   createBridgeCampaignTracker,
   createRequiredWorkTracker,
   evaluateBridgeContinuation,
+  selectAnytimeCheckpoints,
 } = require("./director-policy.js");
+
+test("anytime checkpoint selection minimizes projected cost and preserves phase diversity", () => {
+  const state = {rows: [], robot: [0, 0], boxes: []};
+  const selected = selectAnytimeCheckpoints([
+    {id: "packing-best", generation: "packing", pushCost: 232,
+      checkpoint: {state, estimate: 28}},
+    {id: "packing-second", generation: "packing", pushCost: 233,
+      checkpoint: {state, estimate: 27}},
+    {id: "evacuation", generation: "evacuation", pushCost: 58,
+      checkpoint: {state, estimate: 152}},
+    {id: "expensive", generation: "exact", pushCost: 259,
+      checkpoint: {state, estimate: 25}},
+  ], 2);
+
+  assert.deepEqual(selected.map(candidate => candidate.id), ["evacuation", "packing-best"]);
+  assert.deepEqual(selected.map(candidate => candidate.projectedCost), [210, 260]);
+});
 
 test("opportunistic bridge churn cannot delay completion of required work", () => {
   const required = createRequiredWorkTracker(3);

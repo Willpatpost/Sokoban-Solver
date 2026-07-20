@@ -11,7 +11,7 @@ const LEVELS = {
 };
 const DIRS = {Up: [-1, 0], Down: [1, 0], Left: [0, -1], Right: [0, 1]};
 const CODE_MOVE = {U: "Up", D: "Down", L: "Left", R: "Right"};
-const SOLVER_BUILD = "2026-07-20.4";
+const SOLVER_BUILD = "2026-07-20.5";
 const SOLVER_WORKER_URL = `solver-worker.js?build=${SOLVER_BUILD}`;
 const PUSH_BOUNDS_KEY = "sokomind-push-bounds-v1";
 const KEYS = {ArrowUp: "Up", ArrowDown: "Down", ArrowLeft: "Left", ArrowRight: "Right",
@@ -584,6 +584,7 @@ function runBidirectionalSolver(purpose, analysis) {
   let bridgeOutstanding = 0, bridgeSerial = 0;
   const workerSides = new Map(), workerRecords = new Map(), workerProgress = new Map();
   const workerStarted = new Map(), workerLastMessage = new Map(), workerTelemetry = new Map();
+  const workerPlans = new Map(), workerCancellations = new Map();
   let expectedWorkers = reverseWorkers + 1 + directQueue.length;
   const requiredWork = SokomindDirectorPolicy.createRequiredWorkTracker(expectedWorkers);
   let settled = false, totalVisited = 0, doneWorkers = 0;
@@ -591,7 +592,8 @@ function runBidirectionalSolver(purpose, analysis) {
   let discardedExactIncumbent = false;
   const completedPhases = [];
 
-  const isRequiredPlan = plan => plan.handoffStage !== "bridge" && !plan.persistentExact;
+  const isRequiredPlan = plan => plan.handoffStage !== "bridge" &&
+    !plan.persistentExact && !plan.anytimeGuided;
 
   const enqueueDirectPlans = (plans, {priority = 10} = {}) => {
     if (!plans.length) return;
@@ -623,6 +625,16 @@ function runBidirectionalSolver(purpose, analysis) {
     appendSearchLog("director", "Retired stale pending workers", {
       count: retired.length, reason,
       labels: retired.map(plan => plan.label).join(", "),
+    });
+  };
+
+  const retireActiveWorkers = (predicate, reason) => {
+    const targets = [...workerPlans].filter(([, plan]) => predicate(plan));
+    for (const [worker] of targets) workerCancellations.get(worker)?.(reason);
+    if (targets.length) appendSearchLog("director", "Retired active workers", {
+      count: targets.length,
+      reason,
+      labels: targets.map(([, plan]) => plan.label).join(", "),
     });
   };
 
@@ -782,10 +794,20 @@ function runBidirectionalSolver(purpose, analysis) {
       return;
     }
     if (plan.handoffStage === "packing") {
-      const checkpoints = (data.checkpoints || []).slice(0, 6);
+      const checkpointLimit = analysis.difficulty === "extreme" ? 2 : 4;
+      const checkpoints = (data.checkpoints || [])
+        .sort((left, right) =>
+          (prefixCost + left.cost + left.estimate) -
+          (prefixCost + right.cost + right.estimate))
+        .slice(0, checkpointLimit);
       if (checkpoints.length) retirePendingPlans(
-        pendingPlan => pendingPlan.phaseScope === "opening",
-        "packing checkpoint superseded opening exploration",
+        pendingPlan => pendingPlan.phaseScope === "opening" ||
+          pendingPlan.handoffStage === "bridge",
+        "packing checkpoint superseded opening and bridge exploration",
+      );
+      if (checkpoints.length) retireActiveWorkers(
+        activePlan => activePlan.handoffStage === "bridge",
+        "packing checkpoint reserved capacity for solution discovery",
       );
       if (recommendations.useMilestoneReverse && !targetedReverseQueued && checkpoints.length) {
         const checkpoint = checkpoints[0];
@@ -945,6 +967,65 @@ function runBidirectionalSolver(purpose, analysis) {
   };
 
   let exactRound = 0, exactRoundShardCount = 0;
+  const launchAnytimeDiscovery = (limit) => {
+    if (limit <= 0) return 0;
+    const candidates = [...directCheckpoints]
+      .map(([id, record]) => ({id, ...record}))
+      .filter(candidate => !Number.isFinite(candidate.totalBound) ||
+        candidate.pushCost + candidate.checkpoint.estimate <= candidate.totalBound);
+    const selected = SokomindDirectorPolicy.selectAnytimeCheckpoints(candidates, limit);
+    const profiles = [
+      {beamProfile: "milestone", weight: 2.1, topologyWeight: 1.8,
+        goalPackingWeight: 1.5, diversity: 2.2, seed: 15485863},
+      {beamProfile: "detour", weight: 1.8, topologyWeight: 0.7,
+        goalPackingWeight: 1.8, diversity: 2.8, seed: 32452843},
+    ];
+    if (!selected.length) return 0;
+    expectedWorkers += selected.length;
+    appendSearchLog("director", "Started anytime checkpoint discovery", {
+      workers: selected.length,
+      candidates: selected.map(candidate =>
+        `${shortStateId(candidate.id)}:g${candidate.pushCost}:h${candidate.checkpoint.estimate}:f${candidate.projectedCost}`
+      ).join(","),
+    });
+    selected.forEach((candidate, index) => {
+      const remaining = Number.isFinite(candidate.totalBound)
+        ? candidate.totalBound - candidate.pushCost : 320;
+      launch({
+        algorithm: "push-beam",
+        side: "direct",
+        label: `Anytime Guided ${index + 1}/${selected.length}`,
+        anytimeGuided: true,
+        handoffStage: "anytime",
+        state: candidate.checkpoint.state,
+        prefixPath: candidate.prefixPath,
+        prefixCost: candidate.pushCost,
+        totalBound: candidate.totalBound,
+        upperBound: remaining,
+        maxDepth: Math.min(320, remaining),
+        maxVisited: 600000,
+        beamWidth: 700,
+        transpositionLimit: 120000,
+        costWeight: 1.25,
+        sequenceMacros: true,
+        sequenceMacroLimit: 12,
+        sequenceMacroExplored: 48,
+        sequenceMacroResults: 10,
+        checkpointLimit: 16,
+        continuationVisited: 150000,
+        continuationAttempts: 12,
+        continuationWidth: 80,
+        endgameVisited: 150000,
+        endgameThreshold: 55,
+        endgameAttempts: 12,
+        endgameProfiles: ["room-flow", "balanced", "setup"],
+        progressInterval: 25000,
+        ...profiles[index % profiles.length],
+      });
+    });
+    return selected.length;
+  };
+
   const launchExactShards = () => {
     if (exactShardsStarted) return;
     exactShardsStarted = true;
@@ -953,12 +1034,14 @@ function runBidirectionalSolver(purpose, analysis) {
       "persistent exact search reserved proof capacity");
     const availableSlots = Math.max(1,
       maxWorkerConcurrency - activeSideWorkers - activeDirectWorkers);
-    exactRoundShardCount = Math.max(1, Math.min(3, hardware, availableSlots));
+    const anytimeWorkers = launchAnytimeDiscovery(Math.max(0, Math.min(2, availableSlots - 1)));
+    exactRoundShardCount = anytimeWorkers
+      ? 1 : Math.max(1, Math.min(3, hardware, availableSlots));
     const round = ++exactRound;
     const exactBound = discardedExactIncumbent ? Infinity : currentUpperBound() ?? Infinity;
     expectedWorkers += exactRoundShardCount;
     appendSearchLog("director", "Started persistent partitioned exact contour", {
-      round, shards: exactRoundShardCount, shardDepth: 4,
+      round, shards: exactRoundShardCount, shardDepth: 4, anytimeWorkers,
       bound: Number.isFinite(exactBound) ? exactBound : "unbounded",
       transpositionsPerShard: "160,000",
     });
@@ -974,6 +1057,7 @@ function runBidirectionalSolver(purpose, analysis) {
         upperBound: exactBound,
         maxVisited: Number.MAX_SAFE_INTEGER,
         transpositionLimit: 160000,
+        progressInterval: 25000,
         forcedMacros: false,
         seed: 911 + index * 104729,
       });
@@ -1013,6 +1097,7 @@ function runBidirectionalSolver(purpose, analysis) {
     const effectiveUpperBound = plan.upperBound ?? planUpperBound(plan);
     let workerFinished = false;
     workers.push(worker);
+    workerPlans.set(worker, plan);
     if (plan.side === "direct") activeDirectWorkers++;
     if (["forward", "reverse"].includes(plan.side)) activeSideWorkers++;
     if (plan.handoffStage === "bridge") activeBridgeWorkers++;
@@ -1032,7 +1117,7 @@ function runBidirectionalSolver(purpose, analysis) {
       round: plan.exactRound,
       checkpoint: plan.sourceCheckpointId ? shortStateId(plan.sourceCheckpointId) : undefined,
     });
-    const releaseWorker = () => {
+    const releaseWorker = ({queueBridge = true} = {}) => {
       worker.terminate();
       workers = workers.filter(item => item !== worker);
       workerSides.delete(worker);
@@ -1042,6 +1127,8 @@ function runBidirectionalSolver(purpose, analysis) {
       workerLastMessage.delete(worker);
       clearInterval(workerTelemetry.get(worker));
       workerTelemetry.delete(worker);
+      workerPlans.delete(worker);
+      workerCancellations.delete(worker);
       if (plan.side === "direct") activeDirectWorkers = Math.max(0, activeDirectWorkers - 1);
       if (["forward", "reverse"].includes(plan.side)) {
         activeSideWorkers = Math.max(0, activeSideWorkers - 1);
@@ -1056,7 +1143,7 @@ function runBidirectionalSolver(purpose, analysis) {
         bridgeOutstanding = Math.max(0, bridgeOutstanding - 1);
         bridgeCampaignOutstanding.set(plan.bridgeCampaign,
           Math.max(0, (bridgeCampaignOutstanding.get(plan.bridgeCampaign) || 0) - 1));
-        if (!settled) queueBridgePlans();
+        if (queueBridge && !settled) queueBridgePlans();
       }
     };
     const continuePortfolio = () => {
@@ -1120,6 +1207,19 @@ function runBidirectionalSolver(purpose, analysis) {
       }
       continuePortfolio();
     };
+    const cancelWorker = (reason) => {
+      if (workerFinished || settled) return;
+      workerFinished = true;
+      doneWorkers++;
+      if (isRequiredPlan(plan)) requiredWork.finish();
+      appendSearchLog("worker", `Retired ${plan.label}`, {
+        reason,
+        visited: workerProgress.get(worker) || 0,
+      });
+      releaseWorker({queueBridge: false});
+      continuePortfolio();
+    };
+    workerCancellations.set(worker, cancelWorker);
     const telemetryTimer = setInterval(() => {
       if (!workers.includes(worker)) return;
       const silentSeconds = Math.round(
@@ -1176,6 +1276,10 @@ function runBidirectionalSolver(purpose, analysis) {
           h: Number.isFinite(data.bestEstimate) ? data.bestEstimate : undefined,
           initialH: Number.isFinite(data.initialEstimate) ? data.initialEstimate : undefined,
           pushes: data.bestPushes,
+          totalPushes: Number.isFinite(data.bestPushes)
+            ? (plan.prefixCost || 0) + data.bestPushes : undefined,
+          projected: Number.isFinite(data.bestPushes) && Number.isFinite(data.bestEstimate)
+            ? (plan.prefixCost || 0) + data.bestPushes + data.bestEstimate : undefined,
           depth: data.depth,
           threshold: data.threshold,
           frontier: data.frontier,
@@ -1183,6 +1287,17 @@ function runBidirectionalSolver(purpose, analysis) {
           generated: data.generated,
           peakFrontier: data.peakFrontier,
           compactions: data.compactions,
+          maxDepth: data.maxDepth,
+          nextThreshold: data.nextThreshold,
+          thresholdPrunes: data.thresholdPrunes,
+          upperBoundPrunes: data.upperBoundPrunes,
+          corralPrunes: data.corralPrunes,
+          cyclePrunes: data.cyclePrunes,
+          transpositionPrunes: data.transpositionPrunes,
+          transpositions: data.transpositions,
+          transpositionEvictions: data.transpositionEvictions,
+          shardRejected: data.shardRejected,
+          shardAccepted: data.shardAccepted,
         });
         const phase = plan.side === "direct" ? `${plan.label} - ` : "";
         setStatus(`${workers.length} Ultimate workers searching... ${phase}${totalVisited.toLocaleString()} states`);
@@ -1209,12 +1324,27 @@ function runBidirectionalSolver(purpose, analysis) {
           solved: Boolean(data.path),
           h: Number.isFinite(data.bestEstimate) ? data.bestEstimate : undefined,
           pushes: data.bestPushes,
+          totalPushes: Number.isFinite(data.bestPushes)
+            ? (plan.prefixCost || 0) + data.bestPushes : undefined,
+          projected: Number.isFinite(data.bestPushes) && Number.isFinite(data.bestEstimate)
+            ? (plan.prefixCost || 0) + data.bestPushes + data.bestEstimate : undefined,
           generated: data.generated?.toLocaleString(),
           peakFrontier: data.peakFrontier?.toLocaleString(),
           compactions: data.compactions,
           frontier: data.frontier?.toLocaleString(),
           retained: data.retained?.toLocaleString(),
           checkpoints: data.checkpoints?.length,
+          maxDepth: data.maxDepth,
+          nextThreshold: data.nextThreshold,
+          thresholdPrunes: data.thresholdPrunes,
+          upperBoundPrunes: data.upperBoundPrunes,
+          corralPrunes: data.corralPrunes,
+          cyclePrunes: data.cyclePrunes,
+          transpositionPrunes: data.transpositionPrunes,
+          transpositionEvictions: data.transpositionEvictions,
+          maxTranspositions: data.maxTranspositions,
+          shardRejected: data.shardRejected,
+          shardAccepted: data.shardAccepted,
           reason: data.terminationReason || (data.path ? "solution" : data.cutoff ? "budget" : "exhausted"),
         });
         if (plan.handoffStage === "bridge" && data.path && data.finalState) {

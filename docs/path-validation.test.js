@@ -50,7 +50,7 @@ test("Ultimate scheduling retires stale phases and reclaims silent workers", () 
 
   assert.match(app, /const directQueue = \[\.\.\.evacuationPlans, \.\.\.beamPlans/);
   assert.match(app, /retirePendingPlans\(/);
-  assert.match(app, /packing checkpoint superseded opening exploration/);
+  assert.match(app, /packing checkpoint superseded opening and bridge exploration/);
   assert.match(app, /silentSeconds >= 120/);
   assert.match(app, /abandonWorker\("watchdog"\)/);
   assert.match(app, /bridgeOutstanding = Math\.max\(0, bridgeOutstanding - 1\)/);
@@ -64,6 +64,9 @@ test("Ultimate scheduling retires stale phases and reclaims silent workers", () 
   assert.match(app, /exactShard: \{index, count: exactRoundShardCount, depth: 4\}/);
   assert.match(app, /requiredWork\.isComplete\(\)/);
   assert.match(app, /Bridge campaign circuit breaker opened/);
+  assert.match(app, /Started anytime checkpoint discovery/);
+  assert.match(app, /anytimeGuided/);
+  assert.match(app, /exactRoundShardCount = anytimeWorkers[\s\S]*?\? 1/);
   assert.match(app, /provedUnsolvable = exactRoundComplete && !Number\.isFinite/);
   assert.match(app, /discardedExactIncumbent \? Infinity/);
   assert.doesNotMatch(app, /searchLog\.splice\(0/);

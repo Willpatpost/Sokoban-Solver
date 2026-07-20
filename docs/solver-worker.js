@@ -18,13 +18,17 @@ class BoundedDepthMap {
   constructor(limit) {
     this.limit = limit;
     this.values = new Map();
+    this.evictions = 0;
   }
   get(key) { return this.values.get(key); }
   has(key) { return this.values.has(key); }
   set(key, value) {
     if (this.values.has(key)) this.values.delete(key);
     this.values.set(key, value);
-    while (this.values.size > this.limit) this.values.delete(this.values.keys().next().value);
+    while (this.values.size > this.limit) {
+      this.values.delete(this.values.keys().next().value);
+      this.evictions++;
+    }
   }
   get size() { return this.values.size; }
 }
@@ -1103,6 +1107,7 @@ function beamSearch(payload) {
   const seenDepth = new BoundedDepthMap(transpositionLimit);
   const seenExactDepth = new BoundedDepthMap(Math.max(8000, Math.floor(transpositionLimit / 2)));
   const handoffLimit = payload.checkpointLimit || 12;
+  const progressInterval = payload.progressInterval || 5000;
   const handoffCheckpoints = new Map();
   let visited = 0, reported = 0, bestEstimate = Infinity, bestPushes = 0;
   let beamCutoff = false;
@@ -1180,7 +1185,8 @@ function beamSearch(payload) {
             ? `${current.openingHistory || ""}/${next.pushClass}`
             : current.openingHistory || "";
         }
-        const score = weight * estimate + topologyWeight * topology +
+        const score = (payload.costWeight || 0) * child.cost +
+          weight * estimate + topologyWeight * topology +
           evacuationWeight * evacuation -
           goalPackingWeight * goalPackingBonus(child.boxes, board) +
           diversity * signatureNoise(child.exactSignature, seed);
@@ -1253,7 +1259,7 @@ function beamSearch(payload) {
         }
         }
       }
-      if (visited - reported >= 5000) {
+      if (visited - reported >= progressInterval) {
         postMessage({type: "progress", visited: (payload.progressOffset || 0) + visited,
           bestEstimate, bestPushes, frontier: beam.length, depth});
         reported = visited;
@@ -1597,6 +1603,12 @@ function pushIterativeDeepeningAStar(payload) {
   const segments = [], activePath = new Set();
   let visited = 0, reported = 0, solution = null, cutoff = false;
   let bestEstimate = heuristic(initial.boxes, board), bestPushes = 0;
+  let generated = 0, thresholdPrunes = 0, upperBoundPrunes = 0;
+  let corralPrunes = 0, cyclePrunes = 0, transpositionPrunes = 0;
+  let shardRejections = 0, shardAcceptances = 0, maxDepth = 0;
+  let transpositionEvictions = 0, maxTranspositions = 0;
+  let nextThresholdCandidate = Infinity;
+  const progressInterval = payload.progressInterval || 25000;
   let trackedThrough = payload.trackedSignatures ? 0 : undefined;
   const exactShard = payload.exactShard;
   if (!Number.isFinite(bestEstimate)) {
@@ -1618,15 +1630,24 @@ function pushIterativeDeepeningAStar(payload) {
 
   const searchContour = (state, cost, threshold, transpositions, shardAccepted = false) => {
     if (cutoff || solution) return Infinity;
+    maxDepth = Math.max(maxDepth, cost);
     const estimate = heuristic(state.boxes, board);
     const total = cost + estimate;
     let accepted = shardAccepted;
     if (!accepted && exactShard && cost >= exactShard.depth) {
       const bucket = Math.floor(signatureNoise(exactPushKey(state), 0) * exactShard.count);
-      if (bucket !== exactShard.index) return Infinity;
+      if (bucket !== exactShard.index) {
+        shardRejections++;
+        return Infinity;
+      }
       accepted = true;
+      shardAcceptances++;
     }
-    if (total > threshold) return total;
+    if (total > threshold) {
+      thresholdPrunes++;
+      nextThresholdCandidate = Math.min(nextThresholdCandidate, total);
+      return total;
+    }
     if (goal(state.boxes, board.goals)) {
       solution = segments.flatMap(segment => segment);
       return total;
@@ -1635,18 +1656,30 @@ function pushIterativeDeepeningAStar(payload) {
       cutoff = true;
       return Infinity;
     }
-    if (visited - reported >= 5000) {
+    if (visited - reported >= progressInterval) {
       postMessage({type: "progress", visited, threshold, bestEstimate, bestPushes,
-        depth: cost});
+        depth: cost, maxDepth, generated, thresholdPrunes, upperBoundPrunes,
+        corralPrunes, cyclePrunes, transpositionPrunes,
+        shardRejected: shardRejections, shardAccepted: shardAcceptances,
+        transpositions: transpositions.size, transpositionEvictions: transpositions.evictions,
+        nextThreshold: Number.isFinite(nextThresholdCandidate) ? nextThresholdCandidate : undefined});
       reported = visited;
     }
     const reachable = reachablePaths(state, board);
-    if (createsSealedCorralDeadlock(state, board, reachable)) return Infinity;
+    if (createsSealedCorralDeadlock(state, board, reachable)) {
+      corralPrunes++;
+      return Infinity;
+    }
     const signature = pushKey(state, reachable);
     if (payload.trackedSignatures?.[cost] === signature) {
       trackedThrough = Math.max(trackedThrough, cost);
     }
-    if (activePath.has(signature) || (transpositions.get(signature) ?? Infinity) <= cost) {
+    if (activePath.has(signature)) {
+      cyclePrunes++;
+      return Infinity;
+    }
+    if ((transpositions.get(signature) ?? Infinity) <= cost) {
+      transpositionPrunes++;
       return Infinity;
     }
     activePath.add(signature);
@@ -1655,12 +1688,19 @@ function pushIterativeDeepeningAStar(payload) {
     let nextThreshold = Infinity;
     const candidates = [];
     for (const rawNext of pushNeighbors(state, board, reachable)) {
+      generated++;
       const next = expandPushMacro(rawNext, board, payload.forcedMacros !== false);
       if (!next) continue;
       const childCost = cost + next.pushes;
-      if (childCost > upperBound) continue;
+      if (childCost > upperBound) {
+        upperBoundPrunes++;
+        continue;
+      }
       const childEstimate = heuristic(next.boxes, board);
-      if (!Number.isFinite(childEstimate) || childCost + childEstimate > upperBound) continue;
+      if (!Number.isFinite(childEstimate) || childCost + childEstimate > upperBound) {
+        upperBoundPrunes++;
+        continue;
+      }
       if (childEstimate < bestEstimate) {
         bestEstimate = childEstimate;
         bestPushes = childCost;
@@ -1676,6 +1716,8 @@ function pushIterativeDeepeningAStar(payload) {
     candidates.sort((left, right) => left.total - right.total || left.score - right.score);
     for (const candidate of candidates) {
       if (candidate.total > threshold) {
+        thresholdPrunes++;
+        nextThresholdCandidate = Math.min(nextThresholdCandidate, candidate.total);
         nextThreshold = Math.min(nextThreshold, candidate.total);
         continue;
       }
@@ -1700,7 +1742,10 @@ function pushIterativeDeepeningAStar(payload) {
     postMessage({type: "contour", threshold, visited, exactShard});
     activePath.clear();
     const transpositions = new BoundedDepthMap(payload.transpositionLimit || 80000);
+    nextThresholdCandidate = Infinity;
     const nextThreshold = searchContour(initial, 0, threshold, transpositions);
+    transpositionEvictions += transpositions.evictions;
+    maxTranspositions = Math.max(maxTranspositions, transpositions.size);
     if (!Number.isFinite(nextThreshold)) break;
     if (nextThreshold <= threshold) threshold++;
     else threshold = nextThreshold;
@@ -1716,6 +1761,18 @@ function pushIterativeDeepeningAStar(payload) {
     bound: upperBound,
     trackedThrough,
     exactShard,
+    generated,
+    thresholdPrunes,
+    upperBoundPrunes,
+    corralPrunes,
+    cyclePrunes,
+    transpositionPrunes,
+    shardRejected: shardRejections,
+    shardAccepted: shardAcceptances,
+    transpositionEvictions,
+    maxTranspositions,
+    maxDepth,
+    nextThreshold: Number.isFinite(nextThresholdCandidate) ? nextThresholdCandidate : undefined,
   };
 }
 

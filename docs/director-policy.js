@@ -106,10 +106,39 @@
     };
   }
 
+  function selectAnytimeCheckpoints(candidates, limit = 2) {
+    const ranked = candidates
+      .filter(candidate => candidate?.checkpoint?.state &&
+        Number.isFinite(candidate.pushCost) &&
+        Number.isFinite(candidate.checkpoint.estimate))
+      .map(candidate => ({
+        ...candidate,
+        projectedCost: candidate.pushCost + candidate.checkpoint.estimate,
+      }))
+      .sort((left, right) => left.projectedCost - right.projectedCost ||
+        left.pushCost - right.pushCost ||
+        String(left.id).localeCompare(String(right.id)));
+    const selected = [];
+    const generations = new Set();
+    for (const candidate of ranked) {
+      if (selected.length >= limit) break;
+      if (generations.has(candidate.generation)) continue;
+      selected.push(candidate);
+      generations.add(candidate.generation);
+    }
+    for (const candidate of ranked) {
+      if (selected.length >= limit) break;
+      if (selected.some(existing => existing.id === candidate.id)) continue;
+      selected.push(candidate);
+    }
+    return selected;
+  }
+
   return {
     DEFAULT_BRIDGE_LIMITS,
     createBridgeCampaignTracker,
     createRequiredWorkTracker,
     evaluateBridgeContinuation,
+    selectAnytimeCheckpoints,
   };
 });

@@ -119,8 +119,22 @@ proves the state space unsolvable, or you press **Stop**; there is no fixed push
 ceiling when no learned incumbent is available.
 Required phase work is tracked separately from opportunistic landmark bridges, so
 bridge churn cannot postpone exact search. When required handoffs finish, pending
-bridges are retired and remaining browser capacity is partitioned among up to three
-persistent exact shards while an already-running bridge may finish.
+and active bridges are retired and remaining browser capacity transitions to the
+first-solution portfolio.
+
+The first-solution portfolio now separates discovery from proof. Checkpoints are
+ranked by accumulated pushes plus their admissible remaining estimate, while phase
+diversity prevents every worker from starting at a nearly identical packing layout.
+On capable browsers, two cost-aware guided beams search from the best distinct
+checkpoints while one persistent exact worker continues the admissible contour.
+Packing checkpoints retire active bridge work and extreme puzzles run only the two
+best local exact handoffs, allowing the anytime workers to begin earlier. No stored
+solution path or puzzle-specific coordinate is used.
+
+Persistent exact progress reports generated successors, threshold and incumbent-bound
+prunes, corral and cycle prunes, transposition hits and evictions, shard acceptance,
+shard rejection, maximum depth, and the next known contour threshold. Exact and
+anytime progress is sampled every 25,000 states to reduce search-log rendering cost.
 
 Very large puzzles can still hit browser memory limits before the search space
 is exhausted. Ultimate Bidirectional uses compact parent records, caps each
