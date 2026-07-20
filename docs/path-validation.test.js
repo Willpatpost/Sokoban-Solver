@@ -37,9 +37,12 @@ test("web UI exposes a separate copyable search log", () => {
   assert.match(html, /id="search-log-count"/);
   assert.match(html, /id="search-log-text"/);
   assert.match(html, /id="copy-search-log"/);
+  assert.match(html, /id="copy-search-json"/);
+  assert.match(html, /director-policy\.js/);
   assert.match(app, /function appendSearchLog\(/);
   assert.match(app, /algorithm: "analyze-puzzle"/);
   assert.match(app, /copy-search-log/);
+  assert.match(app, /searchLogJsonLines/);
 });
 
 test("Ultimate scheduling retires stale phases and reclaims silent workers", () => {
@@ -55,9 +58,12 @@ test("Ultimate scheduling retires stale phases and reclaims silent workers", () 
   assert.match(app, /Candidate landmark bridges queued/);
   assert.match(app, /Promising bridge checkpoint promoted/);
   assert.match(app, /activeBridgeWorkers > 0 \|\| lastQueuedDirectKind === "bridge"/);
+  assert.match(app, /requiredAlternative/);
   assert.match(app, /maxWorkerConcurrency - activeSideWorkers/);
   assert.match(app, /persistent partitioned exact contour/);
-  assert.match(app, /exactShard: \{index, count: exactShardCount, depth: 4\}/);
+  assert.match(app, /exactShard: \{index, count: exactRoundShardCount, depth: 4\}/);
+  assert.match(app, /requiredWork\.isComplete\(\)/);
+  assert.match(app, /Bridge campaign circuit breaker opened/);
   assert.match(app, /provedUnsolvable = exactRoundComplete && !Number\.isFinite/);
   assert.match(app, /discardedExactIncumbent \? Infinity/);
   assert.doesNotMatch(app, /searchLog\.splice\(0/);

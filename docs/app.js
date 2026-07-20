@@ -11,7 +11,7 @@ const LEVELS = {
 };
 const DIRS = {Up: [-1, 0], Down: [1, 0], Left: [0, -1], Right: [0, 1]};
 const CODE_MOVE = {U: "Up", D: "Down", L: "Left", R: "Right"};
-const SOLVER_BUILD = "2026-07-20.3";
+const SOLVER_BUILD = "2026-07-20.4";
 const SOLVER_WORKER_URL = `solver-worker.js?build=${SOLVER_BUILD}`;
 const PUSH_BOUNDS_KEY = "sokomind-push-bounds-v1";
 const KEYS = {ArrowUp: "Up", ArrowDown: "Down", ArrowLeft: "Left", ArrowRight: "Right",
@@ -23,6 +23,7 @@ let workers = [], animation = [], timer = null, solvedShown = false;
 let startedAt = null, elapsed = 0, clock = null;
 let pushBounds = {};
 let searchLog = [], searchStartedAt = null;
+let searchRunId = null, searchLogSequence = 0;
 let searchTelemetryTimers = [];
 
 try {
@@ -97,6 +98,19 @@ function renderMoveHistory() {
   $("move-history-text").value = moveHistoryText();
 }
 function searchLogText(entries = searchLog) { return entries.map(entry => entry.text).join("\n"); }
+function searchLogJsonLines(entries = searchLog) {
+  return entries.map(entry => JSON.stringify(entry.event)).join("\n");
+}
+function structuredSearchStats(stats) {
+  return Object.fromEntries(Object.entries(stats || {}).map(([name, value]) => {
+    if (typeof value !== "string") return [name, value];
+    const compact = value.replaceAll(",", "");
+    if (/^-?\d+(?:\.\d+)?$/.test(compact)) return [name, Number(compact)];
+    if (/^-?\d+(?:\.\d+)?\/s$/.test(compact)) return [name, Number(compact.slice(0, -2))];
+    if (/^-?\d+(?:\.\d+)?s$/.test(compact)) return [name, Number(compact.slice(0, -1))];
+    return [name, value];
+  }));
+}
 function renderSearchLog() {
   $("search-log-count").textContent = searchLog.length.toLocaleString();
   const output = $("search-log-text");
@@ -104,7 +118,11 @@ function renderSearchLog() {
   output.scrollTop = output.scrollHeight;
 }
 function resetSearchLog() {
-  searchLog = []; searchStartedAt = performance.now(); renderSearchLog();
+  searchLog = [];
+  searchStartedAt = performance.now();
+  searchLogSequence = 0;
+  searchRunId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  renderSearchLog();
 }
 function appendSearchLog(category, message, stats = null) {
   if (searchStartedAt === null) searchStartedAt = performance.now();
@@ -114,7 +132,19 @@ function appendSearchLog(category, message, stats = null) {
     .map(([name, value]) => `${name}=${value}`)
     .join(" ") : "";
   const text = `[${formatTime(elapsedSeconds)}] ${category.toUpperCase()}  ${message}${detail ? ` | ${detail}` : ""}`;
-  searchLog.push({text, category, elapsedSeconds});
+  const event = {
+    schemaVersion: 1,
+    runId: searchRunId,
+    sequence: ++searchLogSequence,
+    timestamp: new Date().toISOString(),
+    elapsedMs: Math.round(elapsedSeconds * 1000),
+    build: SOLVER_BUILD,
+    level: levelKey,
+    category,
+    message,
+    stats: structuredSearchStats(stats),
+  };
+  searchLog.push({text, category, elapsedSeconds, event});
   renderSearchLog();
 }
 
@@ -541,6 +571,7 @@ function runBidirectionalSolver(purpose, analysis) {
     .map(plan => ({...plan, queuePriority: plan.phaseScope === "evacuation" ? 0 : 50,
       queueOrder: directOrder++}));
   const maxWorkerConcurrency = Math.max(2, Math.min(4, hardware));
+  const bridgeMaxOutstanding = Math.min(4, Math.max(1, maxWorkerConcurrency - 1));
   let activeDirectWorkers = 0, activeEvacuationWorkers = 0, activeBridgeWorkers = 0;
   let activeSideWorkers = 0;
   let lastQueuedDirectKind = null;
@@ -548,14 +579,19 @@ function runBidirectionalSolver(purpose, analysis) {
   const directCheckpoints = new Map();
   const reverseLandmarks = [], bridgePairs = new Set();
   const bridgeCampaignViable = new Map(), bridgeCampaignOutstanding = new Map();
+  const bridgeCampaignTracker = SokomindDirectorPolicy.createBridgeCampaignTracker();
+  const loggedExhaustedCampaigns = new Set();
   let bridgeOutstanding = 0, bridgeSerial = 0;
   const workerSides = new Map(), workerRecords = new Map(), workerProgress = new Map();
   const workerStarted = new Map(), workerLastMessage = new Map(), workerTelemetry = new Map();
   let expectedWorkers = reverseWorkers + 1 + directQueue.length;
+  const requiredWork = SokomindDirectorPolicy.createRequiredWorkTracker(expectedWorkers);
   let settled = false, totalVisited = 0, doneWorkers = 0;
   let targetedReverseQueued = false, exactShardsStarted = false, exactShardsExhausted = 0;
   let discardedExactIncumbent = false;
   const completedPhases = [];
+
+  const isRequiredPlan = plan => plan.handoffStage !== "bridge" && !plan.persistentExact;
 
   const enqueueDirectPlans = (plans, {priority = 10} = {}) => {
     if (!plans.length) return;
@@ -565,6 +601,7 @@ function runBidirectionalSolver(purpose, analysis) {
     directQueue.sort((left, right) =>
       left.queuePriority - right.queuePriority || left.queueOrder - right.queueOrder);
     expectedWorkers += plans.length;
+    requiredWork.schedule(plans.filter(isRequiredPlan).length);
     appendSearchLog("director", "Queued follow-up workers", {
       count: plans.length, priority: numericPriority,
       labels: plans.map(plan => plan.label).join(", "),
@@ -577,6 +614,7 @@ function runBidirectionalSolver(purpose, analysis) {
     if (!retired.length) return;
     directQueue.splice(0, directQueue.length, ...directQueue.filter(plan => !predicate(plan)));
     expectedWorkers -= retired.length;
+    requiredWork.retire(retired.filter(isRequiredPlan).length);
     for (const plan of retired.filter(plan => plan.handoffStage === "bridge")) {
       bridgeOutstanding = Math.max(0, bridgeOutstanding - 1);
       bridgeCampaignOutstanding.set(plan.bridgeCampaign,
@@ -589,13 +627,15 @@ function runBidirectionalSolver(purpose, analysis) {
   };
 
   const queueBridgePlans = () => {
-    if (!reverseLandmarks.length || bridgeOutstanding >= 12) return;
+    if (exactShardsStarted || !reverseLandmarks.length ||
+        bridgeOutstanding >= bridgeMaxOutstanding) return;
     const candidates = [];
     for (const [checkpointKey, checkpointRecord] of directCheckpoints) {
       if (!checkpointRecord.bridgeEligible) continue;
       const totalBound = checkpointRecord.totalBound ?? Infinity;
       for (const entry of reverseLandmarks) {
-        const campaign = `${entry.generation}|${checkpointRecord.generation}`;
+        const campaign = `${entry.generation}|${checkpointRecord.generation}|${checkpointKey}`;
+        if (!bridgeCampaignTracker.canSchedule(campaign)) continue;
         const pairKey = `${checkpointKey}=>${entry.generation}:${entry.landmark.id}`;
         if (bridgePairs.has(pairKey)) continue;
         const remaining = totalBound - checkpointRecord.pushCost - entry.landmark.cost;
@@ -610,13 +650,15 @@ function runBidirectionalSolver(purpose, analysis) {
     const plans = [];
     const plannedByCampaign = new Map();
     for (const candidate of candidates) {
-      if (bridgeOutstanding + plans.length >= 12) break;
+      if (bridgeOutstanding + plans.length >= bridgeMaxOutstanding) break;
       const viable = bridgeCampaignViable.get(candidate.campaign) || 0;
       const outstanding = bridgeCampaignOutstanding.get(candidate.campaign) || 0;
       const planned = plannedByCampaign.get(candidate.campaign) || 0;
-      if (viable + outstanding + planned >= 12) continue;
+      if (viable + outstanding + planned >= bridgeCampaignTracker.limits.maxProductive ||
+          !bridgeCampaignTracker.canSchedule(candidate.campaign)) continue;
       const {entry, checkpointRecord} = candidate;
       bridgePairs.add(candidate.pairKey);
+      bridgeCampaignTracker.recordScheduled(candidate.campaign);
       plannedByCampaign.set(candidate.campaign, planned + 1);
       plans.push({
         algorithm: "bridge-astar",
@@ -692,6 +734,7 @@ function runBidirectionalSolver(purpose, analysis) {
       if (!targetedReverseQueued) {
         targetedReverseQueued = true;
         expectedWorkers++;
+        requiredWork.schedule();
         launch({
           mode: "bidir-reverse",
           side: "reverse",
@@ -748,6 +791,7 @@ function runBidirectionalSolver(purpose, analysis) {
         const checkpoint = checkpoints[0];
         targetedReverseQueued = true;
         expectedWorkers++;
+        requiredWork.schedule();
         launch({
           mode: "bidir-reverse",
           side: "reverse",
@@ -900,29 +944,33 @@ function runBidirectionalSolver(purpose, analysis) {
     }
   };
 
-  const exactShardCount = Math.max(1, Math.min(4, hardware));
-  let exactRound = 0;
+  let exactRound = 0, exactRoundShardCount = 0;
   const launchExactShards = () => {
     if (exactShardsStarted) return;
     exactShardsStarted = true;
     exactShardsExhausted = 0;
+    retirePendingPlans(plan => plan.handoffStage === "bridge",
+      "persistent exact search reserved proof capacity");
+    const availableSlots = Math.max(1,
+      maxWorkerConcurrency - activeSideWorkers - activeDirectWorkers);
+    exactRoundShardCount = Math.max(1, Math.min(3, hardware, availableSlots));
     const round = ++exactRound;
     const exactBound = discardedExactIncumbent ? Infinity : currentUpperBound() ?? Infinity;
-    expectedWorkers += exactShardCount;
+    expectedWorkers += exactRoundShardCount;
     appendSearchLog("director", "Started persistent partitioned exact contour", {
-      round, shards: exactShardCount, shardDepth: 4,
+      round, shards: exactRoundShardCount, shardDepth: 4,
       bound: Number.isFinite(exactBound) ? exactBound : "unbounded",
       transpositionsPerShard: "160,000",
     });
-    for (let index = 0; index < exactShardCount; index++) {
+    for (let index = 0; index < exactRoundShardCount; index++) {
       launch({
         algorithm: "push-ida-star",
         side: "direct",
-        label: `Persistent Exact Shard ${index + 1}/${exactShardCount}`,
+        label: `Persistent Exact Shard ${index + 1}/${exactRoundShardCount}`,
         exhaustiveFallback: true,
         persistentExact: true,
         exactRound: round,
-        exactShard: {index, count: exactShardCount, depth: 4},
+        exactShard: {index, count: exactRoundShardCount, depth: 4},
         upperBound: exactBound,
         maxVisited: Number.MAX_SAFE_INTEGER,
         transpositionLimit: 160000,
@@ -945,6 +993,13 @@ function runBidirectionalSolver(purpose, analysis) {
       const nonBridge = eligible.find(({plan}) => plan.handoffStage !== "bridge");
       if (nonBridge && (activeBridgeWorkers > 0 || lastQueuedDirectKind === "bridge")) {
         selected = nonBridge;
+      }
+      if (selected.plan.handoffStage === "bridge" && activeBridgeWorkers >= 1) {
+        const requiredAlternative = directQueue
+          .map((plan, index) => ({plan, index}))
+          .find(({plan}) => plan.handoffStage !== "bridge");
+        if (!requiredAlternative) break;
+        selected = requiredAlternative;
       }
       const next = directQueue.splice(selected.index, 1)[0];
       lastQueuedDirectKind = next.handoffStage === "bridge" ? "bridge" : "other";
@@ -1007,15 +1062,17 @@ function runBidirectionalSolver(purpose, analysis) {
     const continuePortfolio = () => {
       if (settled) return;
       pumpDirectPlans();
-      if (doneWorkers === expectedWorkers) {
-        if (exactShardsStarted) {
-          exactShardsStarted = false;
-          appendSearchLog("director", "Restarting interrupted exact shard round");
-        }
+      if (requiredWork.isComplete() && !exactShardsStarted) {
+        const requiredSnapshot = requiredWork.snapshot();
         setStatus(
           `Heuristic portfolio complete; starting exact search after ` +
           `${totalVisited.toLocaleString()} states.`,
         );
+        appendSearchLog("director", "Required heuristic portfolio completed", {
+          requiredWorkers: requiredSnapshot.required,
+          opportunisticOutstanding: bridgeOutstanding,
+          states: totalVisited.toLocaleString(),
+        });
         launchExactShards();
       }
     };
@@ -1023,6 +1080,7 @@ function runBidirectionalSolver(purpose, analysis) {
       if (workerFinished || settled) return;
       workerFinished = true;
       doneWorkers++;
+      if (isRequiredPlan(plan)) requiredWork.finish();
       appendSearchLog(reason === "watchdog" ? "warning" : "error",
         `${plan.label} terminated`, {
           reason,
@@ -1031,7 +1089,35 @@ function runBidirectionalSolver(purpose, analysis) {
           file: error?.filename,
           line: error?.lineno,
         });
+      if (plan.handoffStage === "bridge") {
+        const campaign = bridgeCampaignTracker.recordFinished(plan.bridgeCampaign, {
+          terminationReason: reason,
+          visited: workerProgress.get(worker) || 0,
+          workerMs: performance.now() - (workerStarted.get(worker) || performance.now()),
+        });
+        if (campaign.exhaustedReason && !loggedExhaustedCampaigns.has(plan.bridgeCampaign)) {
+          loggedExhaustedCampaigns.add(plan.bridgeCampaign);
+          appendSearchLog("bridge", "Bridge campaign circuit breaker opened", {
+            campaign: plan.bridgeCampaign,
+            reason: campaign.exhaustedReason,
+            scheduled: campaign.scheduled,
+            incompatible: campaign.incompatible,
+            productive: campaign.productive,
+            visited: campaign.visited.toLocaleString(),
+          });
+        }
+      }
       releaseWorker();
+      if (plan.persistentExact) {
+        expectedWorkers++;
+        const recovery = {...plan, label: `${plan.label} Recovery`};
+        appendSearchLog("director", "Recovering interrupted exact shard", {
+          shard: `${plan.exactShard.index + 1}/${plan.exactShard.count}`,
+          reason,
+        });
+        launch(recovery);
+        return;
+      }
       continuePortfolio();
     };
     const telemetryTimer = setInterval(() => {
@@ -1139,14 +1225,41 @@ function runBidirectionalSolver(purpose, analysis) {
           );
           if (joined && finish(joined, plan.label)) return;
         }
+        let bridgeCampaignSnapshot = null;
+        if (plan.handoffStage === "bridge") {
+          bridgeCampaignSnapshot = bridgeCampaignTracker.recordFinished(plan.bridgeCampaign, {
+            terminationReason: data.terminationReason,
+            visited: data.visited,
+            workerMs: workerElapsedSeconds * 1000,
+          });
+          if (bridgeCampaignSnapshot.exhaustedReason &&
+              !loggedExhaustedCampaigns.has(plan.bridgeCampaign)) {
+            loggedExhaustedCampaigns.add(plan.bridgeCampaign);
+            appendSearchLog("bridge", "Bridge campaign circuit breaker opened", {
+              campaign: plan.bridgeCampaign,
+              reason: bridgeCampaignSnapshot.exhaustedReason,
+              scheduled: bridgeCampaignSnapshot.scheduled,
+              incompatible: bridgeCampaignSnapshot.incompatible,
+              productive: bridgeCampaignSnapshot.productive,
+              visited: bridgeCampaignSnapshot.visited.toLocaleString(),
+            });
+          }
+        }
         if (plan.handoffStage === "bridge" && data.terminationReason !== "target-incompatible") {
           bridgeCampaignViable.set(plan.bridgeCampaign,
             (bridgeCampaignViable.get(plan.bridgeCampaign) || 0) + 1);
         }
+        const continuationDecision = plan.handoffStage === "bridge" && data.checkpoint
+          ? SokomindDirectorPolicy.evaluateBridgeContinuation({
+            continuation: plan.bridgeContinuation || 0,
+            initialEstimate: data.initialEstimate,
+            bestEstimate: data.bestEstimate,
+            checkpointCost: data.checkpoint.cost,
+          }) : null;
         if (plan.handoffStage === "bridge" && data.cutoff && data.checkpoint?.path?.length &&
-            (plan.bridgeContinuation || 0) < 2 &&
-            data.bestEstimate + 2 < (data.initialEstimate ?? Infinity) &&
-            (bridgeCampaignViable.get(plan.bridgeCampaign) || 0) < 12) {
+            continuationDecision?.promote && !exactShardsStarted &&
+            bridgeOutstanding < bridgeMaxOutstanding &&
+            bridgeCampaignTracker.canSchedule(plan.bridgeCampaign)) {
           const checkpoint = data.checkpoint;
           const remaining = Number.isFinite(plan.upperBound)
             ? plan.upperBound - checkpoint.cost : checkpoint.estimate + 50;
@@ -1163,6 +1276,7 @@ function runBidirectionalSolver(purpose, analysis) {
               bridgePairKey: `${plan.bridgePairKey}:c${(plan.bridgeContinuation || 0) + 1}`,
               queuePriority: 5,
             };
+            bridgeCampaignTracker.recordScheduled(plan.bridgeCampaign);
             bridgeOutstanding++;
             bridgeCampaignOutstanding.set(plan.bridgeCampaign,
               (bridgeCampaignOutstanding.get(plan.bridgeCampaign) || 0) + 1);
@@ -1170,6 +1284,9 @@ function runBidirectionalSolver(purpose, analysis) {
             appendSearchLog("bridge", "Promising bridge checkpoint promoted", {
               source: plan.label, h: checkpoint.estimate,
               localPushes: checkpoint.cost, continuation: continuation.bridgeContinuation,
+              reason: continuationDecision.reason,
+              improvement: continuationDecision.improvement,
+              efficiency: continuationDecision.efficiency.toFixed(2),
             });
           }
         }
@@ -1185,7 +1302,7 @@ function runBidirectionalSolver(purpose, analysis) {
         const exhaustedExactShard = plan.persistentExact && !data.path && !data.cutoff;
         if (exhaustedExactShard) exactShardsExhausted++;
         const exactRoundComplete = exhaustedExactShard &&
-          exactShardsExhausted === exactShardCount;
+          exactShardsExhausted === exactRoundShardCount;
         const provedUnsolvable = exactRoundComplete && !Number.isFinite(effectiveUpperBound);
         if (exactRoundComplete && Number.isFinite(effectiveUpperBound)) {
           discardedExactIncumbent = true;
@@ -1195,6 +1312,7 @@ function runBidirectionalSolver(purpose, analysis) {
           });
         }
         doneWorkers++;
+        if (isRequiredPlan(plan)) requiredWork.finish();
         releaseWorker();
         if (provedUnsolvable) {
           settled = true;
@@ -1359,6 +1477,14 @@ $("copy-search-log").onclick = async () => {
     setStatus(`Copied ${searchLog.length.toLocaleString()} search log entries.`);
   } catch (_error) {
     setStatus("Could not copy search log.");
+  }
+};
+$("copy-search-json").onclick = async () => {
+  try {
+    await navigator.clipboard.writeText(searchLogJsonLines());
+    setStatus(`Copied ${searchLog.length.toLocaleString()} structured JSONL events.`);
+  } catch (_error) {
+    setStatus("Could not copy structured search log.");
   }
 };
 $("replay").onclick = () => { $("complete-dialog").close(); reset(); };

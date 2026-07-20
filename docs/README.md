@@ -17,6 +17,9 @@ Completion entries include elapsed time and an explicit termination reason plus
 generated-state, peak-frontier, compaction, and retained-state telemetry when the
 worker supplies it. The on-screen field renders the newest 1,500 entries, while
 Copy preserves the complete in-memory log for long-run analysis.
+The adjacent `{ }` control copies the complete run as newline-delimited JSON.
+Each event includes a schema version, run ID, sequence number, timestamp, elapsed
+milliseconds, solver build, level, category, message, and typed statistics.
 
 The default solver is **Ultimate Bidirectional**, an experimental Sokoban-aware
 search. It starts one forward Web Worker from the current board and one or more
@@ -89,7 +92,11 @@ Milestone landmark generations supersede queued opening bridges instead of shari
 a lifetime quota with them. Bridge candidates are ranked globally, and incompatible
 targets do not consume a campaign's viable-search quota. New packing checkpoints
 start fresh campaigns. Promising incomplete bridges publish replayable checkpoints
-for up to two bounded continuations. The director also retires opening workers once
+for up to two bounded continuations. Continuations must demonstrate efficient target
+progress or reach a credible near-target layout. Each checkpoint and landmark
+generation has circuit breakers for incompatible probes, productive workers, visited
+states, and cumulative worker time. Bridge exploration uses one execution lane and
+cannot replenish indefinitely. The director also retires opening workers once
 a packing checkpoint makes their phase stale, while bounded exact handoffs run only
 a small contour around each checkpoint.
 
@@ -110,6 +117,10 @@ union of the shards covers the contour, and an unsolvability proof is accepted o
 after every shard exhausts its partition. Search continues until it finds a solution,
 proves the state space unsolvable, or you press **Stop**; there is no fixed push-depth
 ceiling when no learned incumbent is available.
+Required phase work is tracked separately from opportunistic landmark bridges, so
+bridge churn cannot postpone exact search. When required handoffs finish, pending
+bridges are retired and remaining browser capacity is partitioned among up to three
+persistent exact shards while an already-running bridge may finish.
 
 Very large puzzles can still hit browser memory limits before the search space
 is exhausted. Ultimate Bidirectional uses compact parent records, caps each

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#111722">
   <title>Sokomind</title>
-  <link rel="stylesheet" href="styles.css?build=2026-07-20.3">
+  <link rel="stylesheet" href="styles.css?build=2026-07-20.4">
 </head>
 <body>
   <div class="app-shell">
@@ -78,7 +78,10 @@
           <summary><span>Search log</span><strong id="search-log-count">0</strong></summary>
           <div class="move-history-body">
             <textarea id="search-log-text" aria-label="Search log" readonly></textarea>
-            <button id="copy-search-log" title="Copy search log" aria-label="Copy search log">&#10697;</button>
+            <div class="search-log-actions">
+              <button id="copy-search-log" title="Copy readable search log" aria-label="Copy readable search log">&#10697;</button>
+              <button id="copy-search-json" title="Copy structured JSON Lines search log" aria-label="Copy structured JSON Lines search log">{ }</button>
+            </div>
           </div>
         </details>
       </section>
@@ -118,6 +121,7 @@
   </dialog>
 
   <script src="path-validation.js"></script>
-  <script src="app.js?build=2026-07-20.3"></script>
+  <script src="director-policy.js?build=2026-07-20.4"></script>
+  <script src="app.js?build=2026-07-20.4"></script>
 </body>
 </html>

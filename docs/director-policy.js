@@ -1,0 +1,115 @@
+(function attachDirectorPolicy(root, factory) {
+  const api = factory();
+  if (typeof module === "object" && module.exports) module.exports = api;
+  if (root) root.SokomindDirectorPolicy = api;
+})(typeof globalThis !== "undefined" ? globalThis : this, () => {
+  "use strict";
+
+  const DEFAULT_BRIDGE_LIMITS = Object.freeze({
+    maxScheduled: 32,
+    maxIncompatible: 16,
+    maxProductive: 12,
+    maxVisited: 1200000,
+    maxWorkerMs: 300000,
+  });
+
+  function createBridgeCampaignTracker(overrides = {}) {
+    const limits = {...DEFAULT_BRIDGE_LIMITS, ...overrides};
+    const campaigns = new Map();
+
+    const get = (campaign) => {
+      if (!campaigns.has(campaign)) campaigns.set(campaign, {
+        scheduled: 0,
+        incompatible: 0,
+        productive: 0,
+        visited: 0,
+        workerMs: 0,
+      });
+      return campaigns.get(campaign);
+    };
+
+    const exhaustedReason = (campaign) => {
+      const stats = get(campaign);
+      if (stats.incompatible >= limits.maxIncompatible) return "incompatible-limit";
+      if (stats.productive >= limits.maxProductive) return "productive-limit";
+      if (stats.visited >= limits.maxVisited) return "state-limit";
+      if (stats.workerMs >= limits.maxWorkerMs) return "time-limit";
+      if (stats.scheduled >= limits.maxScheduled) return "probe-limit";
+      return null;
+    };
+
+    return {
+      limits,
+      canSchedule: campaign => exhaustedReason(campaign) === null,
+      exhaustedReason,
+      recordScheduled(campaign) {
+        get(campaign).scheduled++;
+        return this.snapshot(campaign);
+      },
+      recordFinished(campaign, result = {}) {
+        const stats = get(campaign);
+        const incompatible = result.terminationReason === "target-incompatible";
+        if (incompatible) stats.incompatible++;
+        else stats.productive++;
+        stats.visited += Math.max(0, Number(result.visited) || 0);
+        stats.workerMs += Math.max(0, Number(result.workerMs) || 0);
+        return this.snapshot(campaign);
+      },
+      snapshot(campaign) {
+        return {...get(campaign), exhaustedReason: exhaustedReason(campaign)};
+      },
+    };
+  }
+
+  function createRequiredWorkTracker(initial = 0) {
+    let required = Math.max(0, initial);
+    let completed = 0;
+    return {
+      schedule(count = 1) {
+        required += Math.max(0, count);
+        return this.snapshot();
+      },
+      retire(count = 1) {
+        required = Math.max(completed, required - Math.max(0, count));
+        return this.snapshot();
+      },
+      finish(count = 1) {
+        completed = Math.min(required, completed + Math.max(0, count));
+        return this.snapshot();
+      },
+      isComplete: () => completed === required,
+      snapshot: () => ({required, completed, remaining: required - completed}),
+    };
+  }
+
+  function evaluateBridgeContinuation({
+    continuation = 0,
+    initialEstimate,
+    bestEstimate,
+    checkpointCost,
+  }) {
+    if (continuation >= 2) return {promote: false, reason: "continuation-limit"};
+    if (![initialEstimate, bestEstimate, checkpointCost].every(Number.isFinite)) {
+      return {promote: false, reason: "missing-metrics"};
+    }
+    const improvement = initialEstimate - bestEstimate;
+    const efficiency = improvement / Math.max(1, checkpointCost);
+    const nearTarget = bestEstimate <= 12 && improvement >= 1 && checkpointCost <= 40;
+    const efficientProgress = improvement >= 4 && efficiency >= 0.25 &&
+      checkpointCost <= 80 && bestEstimate <= 30;
+    return {
+      promote: nearTarget || efficientProgress,
+      reason: nearTarget ? "near-target" : efficientProgress ? "efficient-progress" : "weak-progress",
+      improvement,
+      efficiency,
+      projectedLocalCost: checkpointCost + bestEstimate,
+    };
+  }
+
+  return {
+    DEFAULT_BRIDGE_LIMITS,
+    createBridgeCampaignTracker,
+    createRequiredWorkTracker,
+    evaluateBridgeContinuation,
+  };
+});
