@@ -1392,6 +1392,7 @@ function beamSearch(payload) {
     path: null,
     visited,
     cutoff: beamCutoff,
+    terminationReason: beamCutoff ? "budget" : "frontier-exhausted",
     bestEstimate,
     bestPushes,
     trackedThrough,
@@ -1430,7 +1431,8 @@ function beamRestartSearch(payload) {
     }
     if (result.path) return {...result, visited, restart: restart + 1};
   }
-  return {path: null, visited, cutoff: true, bestEstimate, bestPushes, restarts: restartCount};
+  return {path: null, visited, cutoff: true, terminationReason: "restart-budget",
+    bestEstimate, bestPushes, restarts: restartCount};
 }
 
 function boundedPushDepthFirstSearch(payload) {
@@ -1564,6 +1566,7 @@ function boundedPushDepthFirstSearch(payload) {
     path: solution,
     visited,
     cutoff,
+    terminationReason: solution ? "solution" : cutoff ? "budget" : "profile-exhausted",
     bestEstimate,
     bestPushes,
     bound,
@@ -1596,7 +1599,8 @@ function pushIterativeDeepeningAStar(payload) {
   let bestEstimate = heuristic(initial.boxes, board), bestPushes = 0;
   let trackedThrough = payload.trackedSignatures ? 0 : undefined;
   if (!Number.isFinite(bestEstimate)) {
-    return {path: null, visited, cutoff: false, bestEstimate, bestPushes};
+    return {path: null, visited, cutoff: false, terminationReason: "infeasible-root",
+      bestEstimate, bestPushes};
   }
 
   const orderingScore = (state, cost) => {
@@ -1696,6 +1700,7 @@ function pushIterativeDeepeningAStar(payload) {
     path: solution,
     visited,
     cutoff,
+    terminationReason: solution ? "solution" : cutoff ? "budget" : "bound-exhausted",
     bestEstimate,
     bestPushes,
     threshold,
@@ -1729,7 +1734,10 @@ function bridgeAStarSearch(payload) {
   initial.reachable = reachablePaths(initial, board);
   initial.signature = pushKey(initial, initial.reachable);
   initial.estimate = targetLayoutHeuristic(initial.boxes, targetBoxes, board, heuristicMemo);
-  if (!Number.isFinite(initial.estimate)) return {path: null, visited};
+  if (!Number.isFinite(initial.estimate)) {
+    return {path: null, visited, cutoff: false,
+      terminationReason: "target-incompatible", bestEstimate: initial.estimate};
+  }
   delete initial.reachable;
   bestCost.set(initial.signature, 0);
   frontier.push([weight * initial.estimate, order++, initial]);
@@ -1743,6 +1751,7 @@ function bridgeAStarSearch(payload) {
       return {
         path: reconstructPath(cameFrom, current.signature),
         visited,
+        terminationReason: "target-reached",
         finalState: {
           rows: board.rows,
           robot: current.robot,
@@ -1789,7 +1798,11 @@ function bridgeAStarSearch(payload) {
     if (visited % 5000 === 0) postMessage({type: "progress", visited,
       bestEstimate, frontier: frontier.length, retained: bestCost.size});
   }
-  return {path: null, visited, cutoff: visited >= maxVisited, bestEstimate, checkpoint: bestCheckpoint};
+  const cutoff = visited >= maxVisited;
+  return {path: null, visited, cutoff,
+    terminationReason: cutoff ? "budget" : "frontier-exhausted",
+    bestEstimate, frontier: frontier.length, retained: bestCost.size,
+    checkpoint: bestCheckpoint};
 }
 
 function bidirectionalSide(payload) {
@@ -1797,8 +1810,23 @@ function bidirectionalSide(payload) {
   const initialBoxes = payload.state.boxes.map(([p, label]) => [...p.split(",").map(Number), label]);
   const initialTargets = targetMapFromBoxes(initialBoxes, board);
   const forward = payload.mode === "bidir-forward";
-  const frontier = new Heap(), bestCost = new Map(), closed = new Set(), records = [];
+  const frontier = new Heap(), closed = new Set(), records = [];
+  let bestCost = new Map();
+  const frontierLimit = payload.frontierLimit || 40000;
   let order = 0, visited = 0, reported = 0, bestLandmarkEstimate = Infinity;
+  let generated = 0, peakFrontier = 0, compactions = 0;
+  const compactFrontier = () => {
+    peakFrontier = Math.max(peakFrontier, frontier.length);
+    if (frontier.length <= frontierLimit * 2) return;
+    frontier.retainBest(frontierLimit);
+    const retainedCosts = new Map();
+    for (const [, , state] of frontier.items) {
+      const previous = retainedCosts.get(state.exactSignature) ?? Infinity;
+      if (state.cost < previous) retainedCosts.set(state.exactSignature, state.cost);
+    }
+    bestCost = retainedCosts;
+    compactions++;
+  };
   const landmarkCandidates = new Map();
   const emitLandmarks = () => {
     if (forward || !landmarkCandidates.size) return;
@@ -1821,6 +1849,7 @@ function bidirectionalSide(payload) {
     const topology = forward ? 0.2 * topologyPenalty(state.boxes, board) : 0;
     frontier.push([state.cost + estimate + topology, order++, state]);
   });
+  compactFrontier();
 
   while (frontier.length) {
     const current = frontier.pop()[2];
@@ -1886,8 +1915,10 @@ function bidirectionalSide(payload) {
       emitLandmarks();
       postMessage({type: "progress", visited, delta: visited - reported,
         bestEstimate: bestLandmarkEstimate, frontier: frontier.length,
-        retained: bestCost.size});
-      postMessage({type: "done", visited, cutoff: true});
+        retained: bestCost.size, generated, peakFrontier, compactions});
+      postMessage({type: "done", visited, cutoff: true, terminationReason: "budget",
+        bestEstimate: bestLandmarkEstimate, generated, peakFrontier, compactions,
+        frontier: frontier.length, retained: bestCost.size});
       return;
     }
     const nextStates = forward
@@ -1911,14 +1942,16 @@ function bidirectionalSide(payload) {
       if (!Number.isFinite(estimate)) continue;
       if (payload.upperBound && next.cost + estimate > payload.upperBound) continue;
       bestCost.set(next.exactSignature, next.cost);
+      generated++;
       const weightedEstimate = (forward ? 1.4 : 1.2) * estimate;
       const topology = forward ? 0.2 * topologyPenalty(next.boxes, board) : 0;
       frontier.push([next.cost + weightedEstimate + topology, order++, next]);
     }
+    compactFrontier();
     if (visited % 1000 === 0) {
       postMessage({type: "progress", visited, delta: visited - reported,
         bestEstimate: bestLandmarkEstimate, frontier: frontier.length,
-        retained: bestCost.size});
+        retained: bestCost.size, generated, peakFrontier, compactions});
       reported = visited;
     }
   }
@@ -1926,8 +1959,10 @@ function bidirectionalSide(payload) {
   emitLandmarks();
   postMessage({type: "progress", visited, delta: visited - reported,
     bestEstimate: bestLandmarkEstimate, frontier: frontier.length,
-    retained: bestCost.size});
-  postMessage({type: "done", visited});
+    retained: bestCost.size, generated, peakFrontier, compactions});
+  postMessage({type: "done", visited, cutoff: false, terminationReason: "exhausted",
+    bestEstimate: bestLandmarkEstimate, generated, peakFrontier, compactions,
+    frontier: frontier.length, retained: bestCost.size});
 }
 
 function search(payload) {

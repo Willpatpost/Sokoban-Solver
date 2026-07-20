@@ -579,6 +579,49 @@ test("bridge A star connects a forward state to a worker-supplied landmark", () 
   const result = worker.search({algorithm: "bridge-astar", state, targetState});
 
   assert.deepEqual(Array.from(result.path), Array.from(target.path));
+  assert.equal(result.terminationReason, "target-reached");
+});
+
+test("bridge A star identifies an incompatible landmark before searching", () => {
+  const worker = loadWorker();
+  const state = stateFromRows([
+    "OOOOO",
+    "O R O",
+    "O X O",
+    "O S O",
+    "OOOOO",
+  ]);
+  const targetState = {
+    rows: state.rows,
+    robot: state.robot,
+    boxes: [["3,2", "A"]],
+  };
+  const result = worker.search({algorithm: "bridge-astar", state, targetState});
+
+  assert.equal(result.path, null);
+  assert.equal(result.visited, 0);
+  assert.equal(result.terminationReason, "target-incompatible");
+});
+
+test("bidirectional frontier compaction reports bounded memory telemetry", () => {
+  const messages = [];
+  const worker = loadWorker(message => messages.push(message));
+  const state = stateFromRows(HUGE_ROWS);
+
+  worker.bidirectionalSide({
+    mode: "bidir-forward",
+    state,
+    maxVisited: 100,
+    frontierLimit: 2,
+  });
+
+  const done = messages.find(message => message.type === "done");
+  assert.ok(done);
+  assert.ok(done.compactions > 0);
+  assert.ok(done.frontier <= 4);
+  assert.ok(done.retained <= 4);
+  assert.ok(done.generated >= done.visited);
+  assert.ok(["budget", "exhausted"].includes(done.terminationReason));
 });
 
 test("all hard pruning preserves the known Huge solution", () => {

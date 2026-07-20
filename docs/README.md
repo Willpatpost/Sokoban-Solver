@@ -13,6 +13,8 @@ from player moves. It includes the derived phase plan, worker configuration,
 state budgets, expansion rates, heuristic improvements, frontier sizes,
 checkpoints, landmarks, bridge handoffs, completions, errors, and 30-second
 worker heartbeats. The complete log can be copied for performance comparisons.
+Completion entries include an explicit termination reason plus generated-state,
+peak-frontier, compaction, and retained-state telemetry when the worker supplies it.
 
 The default solver is **Ultimate Bidirectional**, an experimental Sokoban-aware
 search. It starts one forward Web Worker from the current board and one or more
@@ -81,6 +83,10 @@ The reverse worker publishes stratified landmarks, and bounded bridge workers tr
 to join compatible checkpoint/landmark pairs. A successful bridge is stitched to
 the forward prefix and reverse suffix and replay-validated before it is accepted.
 All milestones, targets, and worker assignments are derived from the loaded board.
+Milestone landmark generations supersede queued opening bridges instead of sharing
+a lifetime quota with them. The director also retires opening workers once a packing
+checkpoint makes their phase stale, while bounded exact handoffs run only a small
+contour around each checkpoint.
 
 The board analysis is puzzle-independent. It detects articulation gates and
 one-entrance rooms, derives farthest-first packing pressure and goal dependencies,
@@ -102,6 +108,10 @@ is exhausted. Ultimate Bidirectional uses compact parent records, caps each
 bidirectional side on complex boards, bounds worker transposition and memo
 tables, and automatically reduces its reverse-worker count. Finished workers
 release their frontiers while the sequential restart portfolio continues.
+Bidirectional heaps compact to their best 40,000 states when they grow past twice
+that size. A worker that produces no message for two minutes is terminated, logged,
+and replaced by the next portfolio assignment so a wedged worker cannot stall the
+director indefinitely.
 
 ## How to play
 

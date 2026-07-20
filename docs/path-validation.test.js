@@ -41,3 +41,16 @@ test("web UI exposes a separate copyable search log", () => {
   assert.match(app, /algorithm: "analyze-puzzle"/);
   assert.match(app, /copy-search-log/);
 });
+
+test("Ultimate scheduling retires stale phases and reclaims silent workers", () => {
+  const app = fs.readFileSync(path.join(__dirname, "app.js"), "utf8");
+
+  assert.match(app, /const directPlans = \[\.\.\.evacuationPlans, \.\.\.beamPlans/);
+  assert.match(app, /retirePendingPlans\(/);
+  assert.match(app, /packing checkpoint superseded opening exploration/);
+  assert.match(app, /silentSeconds >= 120/);
+  assert.match(app, /abandonWorker\("watchdog"\)/);
+  assert.match(app, /bridgeOutstanding = Math\.max\(0, bridgeOutstanding - 1\)/);
+  assert.match(app, /provedUnsolvable = exhaustedExactBound && !Number\.isFinite/);
+  assert.match(app, /discardedExactIncumbent \? Infinity/);
+});
