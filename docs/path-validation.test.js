@@ -1,4 +1,6 @@
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
 const test = require("node:test");
 
 const {validatePathToGoal} = require("./path-validation.js");
@@ -26,4 +28,16 @@ test("path validation rejects illegal and incomplete paths", () => {
     validatePathToGoal({position: 0}, ["Right"], cloneState, moveState, isGoal),
     null,
   );
+});
+
+test("web UI exposes a separate copyable search log", () => {
+  const html = fs.readFileSync(path.join(__dirname, "index.html"), "utf8");
+  const app = fs.readFileSync(path.join(__dirname, "app.js"), "utf8");
+
+  assert.match(html, /id="search-log-count"/);
+  assert.match(html, /id="search-log-text"/);
+  assert.match(html, /id="copy-search-log"/);
+  assert.match(app, /function appendSearchLog\(/);
+  assert.match(app, /algorithm: "analyze-puzzle"/);
+  assert.match(app, /copy-search-log/);
 });

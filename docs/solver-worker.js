@@ -458,6 +458,89 @@ function roomTransitionEvent(before, after, board) {
   return previous === current ? null : current;
 }
 
+function analyzePuzzleForSearch(data) {
+  const board = parse(data);
+  const boxes = data.boxes.map(([position, label]) => [
+    ...position.split(",").map(Number), label,
+  ]);
+  const initial = {robot: data.robot, boxes};
+  const labels = {};
+  boxes.forEach(([, , label]) => { labels[label] = (labels[label] || 0) + 1; });
+  const initialHeuristic = heuristic(boxes, board);
+  const evacuationPenalty = roomEvacuationPenalty(boxes, board);
+  const legalPushes = pushNeighbors(initial, board).length;
+  const solvedBoxes = boxes.filter(([y, x, label]) =>
+    board.goals.get(pkey(y, x)) === label).length;
+  const roomSummaries = board.topology.rooms.map(room => {
+    const inside = boxes.filter(([y, x]) => room.cells.has(pkey(y, x)));
+    const current = {}, target = {};
+    inside.forEach(([, , label]) => { current[label] = (current[label] || 0) + 1; });
+    room.goals.forEach(goal => {
+      const label = board.goals.get(goal);
+      target[label] = (target[label] || 0) + 1;
+    });
+    const surplus = Object.entries(current).reduce((sum, [label, count]) =>
+      sum + Math.max(0, count - (target[label] || 0)), 0);
+    return {
+      gate: room.gate,
+      cells: room.cells.size,
+      goals: room.goals.length,
+      boxes: inside.length,
+      surplus,
+      dependencies: room.dependencies.length,
+      maxDepth: Math.max(0, ...room.depths.values()),
+    };
+  });
+  const searchScale = boxes.length * board.floor.size;
+  const dependencyCount = roomSummaries.reduce((sum, room) => sum + room.dependencies, 0);
+  const surplusBoxes = roomSummaries.reduce((sum, room) => sum + room.surplus, 0);
+  const pressure = searchScale * (1 + 0.18 * board.topology.rooms.length) *
+    (1 + 0.08 * dependencyCount) * (1 + 0.06 * Math.max(0, legalPushes - 2));
+  const difficulty = pressure >= 1800 ? "extreme" : pressure >= 700 ? "complex" :
+    pressure >= 180 ? "moderate" : "small";
+  const phases = [];
+  if (surplusBoxes) phases.push({id: "evacuation", reason: `${surplusBoxes} surplus room box${surplusBoxes === 1 ? "" : "es"}`});
+  if (board.topology.rooms.length) phases.push({id: "room-packing", reason: `${board.topology.rooms.length} gated goal room${board.topology.rooms.length === 1 ? "" : "s"}`});
+  if (board.topology.tunnels.size) phases.push({id: "tunnel-macros", reason: `${board.topology.tunnels.size} tunnel cells`});
+  if (difficulty === "complex" || difficulty === "extreme") {
+    phases.push({id: "milestone-reverse", reason: "large canonical push space"});
+    phases.push({id: "landmark-bridges", reason: "connect forward phases to reverse layouts"});
+  }
+  phases.push({id: "exact-proof", reason: "complete fallback after heuristic workers"});
+  const recommendations = {
+    reverseWorkerLimit: difficulty === "extreme" ? 1 : difficulty === "complex" ? 2 : 3,
+    sideVisitedLimit: difficulty === "extreme" ? 100000 : difficulty === "complex" ? 200000 : 250000,
+    beamAttempts: difficulty === "small" ? 1 : 2,
+    beamWidth: difficulty === "extreme" ? 300 : difficulty === "complex" ? 700 : 1200,
+    beamVisited: difficulty === "extreme" ? 110000 : difficulty === "complex" ? 180000 : 250000,
+    useEvacuation: surplusBoxes > 0,
+    useSequenceMacros: board.topology.tunnels.size > 0 || board.topology.rooms.length > 0,
+    useMilestoneReverse: difficulty === "complex" || difficulty === "extreme",
+    checkpointLimit: difficulty === "extreme" ? 12 : 8,
+  };
+  return {
+    dimensions: {rows: data.rows.length, columns: Math.max(...data.rows.map(row => row.length))},
+    floorCells: board.floor.size,
+    boxes: boxes.length,
+    goals: board.goals.size,
+    labels,
+    solvedBoxes,
+    initialHeuristic,
+    legalPushes,
+    articulations: board.topology.articulations.size,
+    tunnelCells: board.topology.tunnels.size,
+    rooms: roomSummaries,
+    surplusBoxes,
+    evacuationPenalty,
+    dependencyCount,
+    searchScale,
+    pressure: Math.round(pressure),
+    difficulty,
+    phases,
+    recommendations,
+  };
+}
+
 function stratifiedCheckpoints(checkpoints) {
   const bands = new Map();
   for (const checkpoint of checkpoints) {
@@ -1171,7 +1254,8 @@ function beamSearch(payload) {
         }
       }
       if (visited - reported >= 5000) {
-        postMessage({type: "progress", visited: (payload.progressOffset || 0) + visited});
+        postMessage({type: "progress", visited: (payload.progressOffset || 0) + visited,
+          bestEstimate, bestPushes, frontier: beam.length, depth});
         reported = visited;
       }
     }
@@ -1380,7 +1464,8 @@ function boundedPushDepthFirstSearch(payload) {
       return;
     }
     if (visited - reported >= 5000) {
-      postMessage({type: "progress", visited: (payload.progressOffset || 0) + visited});
+      postMessage({type: "progress", visited: (payload.progressOffset || 0) + visited,
+        bestEstimate, bestPushes, depth: cost, retained: transpositions.size});
       reported = visited;
     }
     if (goal(state.boxes, board.goals)) {
@@ -1540,7 +1625,8 @@ function pushIterativeDeepeningAStar(payload) {
       return Infinity;
     }
     if (visited - reported >= 5000) {
-      postMessage({type: "progress", visited, threshold});
+      postMessage({type: "progress", visited, threshold, bestEstimate, bestPushes,
+        depth: cost});
       reported = visited;
     }
     const reachable = reachablePaths(state, board);
@@ -1700,7 +1786,8 @@ function bridgeAStarSearch(payload) {
       frontier.push([child.cost + weight * child.estimate, order++, child]);
     }
     if (frontier.length > frontierLimit * 2) frontier.retainBest(frontierLimit);
-    if (visited % 5000 === 0) postMessage({type: "progress", visited});
+    if (visited % 5000 === 0) postMessage({type: "progress", visited,
+      bestEstimate, frontier: frontier.length, retained: bestCost.size});
   }
   return {path: null, visited, cutoff: visited >= maxVisited, bestEstimate, checkpoint: bestCheckpoint};
 }
@@ -1797,7 +1884,9 @@ function bidirectionalSide(payload) {
     if (payload.maxVisited && visited >= payload.maxVisited) {
       flushRecords(records);
       emitLandmarks();
-      postMessage({type: "progress", visited, delta: visited - reported});
+      postMessage({type: "progress", visited, delta: visited - reported,
+        bestEstimate: bestLandmarkEstimate, frontier: frontier.length,
+        retained: bestCost.size});
       postMessage({type: "done", visited, cutoff: true});
       return;
     }
@@ -1827,17 +1916,24 @@ function bidirectionalSide(payload) {
       frontier.push([next.cost + weightedEstimate + topology, order++, next]);
     }
     if (visited % 1000 === 0) {
-      postMessage({type: "progress", visited, delta: visited - reported});
+      postMessage({type: "progress", visited, delta: visited - reported,
+        bestEstimate: bestLandmarkEstimate, frontier: frontier.length,
+        retained: bestCost.size});
       reported = visited;
     }
   }
   flushRecords(records);
   emitLandmarks();
-  postMessage({type: "progress", visited, delta: visited - reported});
+  postMessage({type: "progress", visited, delta: visited - reported,
+    bestEstimate: bestLandmarkEstimate, frontier: frontier.length,
+    retained: bestCost.size});
   postMessage({type: "done", visited});
 }
 
 function search(payload) {
+  if (payload.algorithm === "analyze-puzzle") {
+    return {path: null, visited: 0, analysis: analyzePuzzleForSearch(payload.state)};
+  }
   if (payload.algorithm === "bridge-astar") return bridgeAStarSearch(payload);
   if (payload.algorithm === "push-beam") return beamSearch(payload);
   if (payload.algorithm === "push-beam-restarts") return beamRestartSearch(payload);

@@ -8,12 +8,26 @@ Worker.
 The move-history panel records every direction, marks pushes, follows
 undo/reset, and can copy the complete numbered sequence for sharing.
 
+The search-log panel records the solver's analysis and decisions separately
+from player moves. It includes the derived phase plan, worker configuration,
+state budgets, expansion rates, heuristic improvements, frontier sizes,
+checkpoints, landmarks, bridge handoffs, completions, errors, and 30-second
+worker heartbeats. The complete log can be copied for performance comparisons.
+
 The default solver is **Ultimate Bidirectional**, an experimental Sokoban-aware
 search. It starts one forward Web Worker from the current board and one or more
 reverse Web Workers from different solved robot regions. The reverse workers
 "unsolve" the puzzle with legal reverse pulls; when the forward search and any
 reverse search reach the same canonical box layout and robot-reachability
 region, the browser stitches both halves into a playable solution.
+
+Before launching that portfolio, a planning worker reads the puzzle and returns
+a serializable analysis report. It measures initial push branching and assignment
+distance; detects articulation gates, tunnels, gated goal rooms, packing
+dependencies, and surplus room boxes; assigns a difficulty band; and recommends
+worker counts, beam widths, state budgets, macros, and ordered strategic phases.
+The browser director builds the portfolio from this report and records the
+rationale in the search log.
 
 The regular **Ultimate Search** mode is still available. It uses a multi-worker
 portfolio that races complementary strategies such as Push Greedy, Weighted Push

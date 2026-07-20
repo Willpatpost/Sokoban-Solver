@@ -213,6 +213,39 @@ test("room evacuation pressure is derived from surplus room contents", () => {
   );
 });
 
+test("puzzle analysis builds a board-derived worker plan", () => {
+  const worker = loadWorker();
+  const analysis = worker.search({
+    algorithm: "analyze-puzzle",
+    state: stateFromRows(HUGE_ROWS),
+  }).analysis;
+
+  assert.equal(analysis.difficulty, "extreme");
+  assert.equal(analysis.boxes, 17);
+  assert.ok(analysis.legalPushes > 1);
+  assert.ok(analysis.rooms.length > 0);
+  assert.ok(analysis.surplusBoxes > 0);
+  assert.equal(analysis.recommendations.useEvacuation, true);
+  assert.equal(analysis.recommendations.useSequenceMacros, true);
+  assert.deepEqual(
+    Array.from(analysis.phases, phase => phase.id).slice(0, 2),
+    ["evacuation", "room-packing"],
+  );
+});
+
+test("puzzle analysis keeps simple boards on a small portfolio", () => {
+  const worker = loadWorker();
+  const analysis = worker.search({
+    algorithm: "analyze-puzzle",
+    state: stateFromRows(["OOOOO", "O R O", "O A O", "O a O", "OOOOO"]),
+  }).analysis;
+
+  assert.equal(analysis.difficulty, "small");
+  assert.equal(analysis.recommendations.beamAttempts, 1);
+  assert.equal(analysis.recommendations.useEvacuation, false);
+  assert.equal(analysis.phases.at(-1).id, "exact-proof");
+});
+
 test("reverse search charges one unit per pull regardless of walking", () => {
   const worker = loadWorker();
   const board = worker.parse({rows: ["OOOOO", "O   O", "O   O", "O a O", "OOOOO"]});
