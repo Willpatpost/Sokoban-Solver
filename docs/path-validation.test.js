@@ -45,12 +45,21 @@ test("web UI exposes a separate copyable search log", () => {
 test("Ultimate scheduling retires stale phases and reclaims silent workers", () => {
   const app = fs.readFileSync(path.join(__dirname, "app.js"), "utf8");
 
-  assert.match(app, /const directPlans = \[\.\.\.evacuationPlans, \.\.\.beamPlans/);
+  assert.match(app, /const directQueue = \[\.\.\.evacuationPlans, \.\.\.beamPlans/);
   assert.match(app, /retirePendingPlans\(/);
   assert.match(app, /packing checkpoint superseded opening exploration/);
   assert.match(app, /silentSeconds >= 120/);
   assert.match(app, /abandonWorker\("watchdog"\)/);
   assert.match(app, /bridgeOutstanding = Math\.max\(0, bridgeOutstanding - 1\)/);
-  assert.match(app, /provedUnsolvable = exhaustedExactBound && !Number\.isFinite/);
+  assert.match(app, /bridgeCampaignViable/);
+  assert.match(app, /Candidate landmark bridges queued/);
+  assert.match(app, /Promising bridge checkpoint promoted/);
+  assert.match(app, /activeBridgeWorkers > 0 \|\| lastQueuedDirectKind === "bridge"/);
+  assert.match(app, /maxWorkerConcurrency - activeSideWorkers/);
+  assert.match(app, /persistent partitioned exact contour/);
+  assert.match(app, /exactShard: \{index, count: exactShardCount, depth: 4\}/);
+  assert.match(app, /provedUnsolvable = exactRoundComplete && !Number\.isFinite/);
   assert.match(app, /discardedExactIncumbent \? Infinity/);
+  assert.doesNotMatch(app, /searchLog\.splice\(0/);
+  assert.match(app, /searchLog\.slice\(-1500\)/);
 });

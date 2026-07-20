@@ -553,6 +553,50 @@ test("push IDA star honors an unbounded contour over a finite fallback bound", (
   assert.equal(result.path.every(move => move === "Right"), true);
 });
 
+test("persistent exact shards partition a contour without losing its solution", () => {
+  const worker = loadWorker();
+  const state = stateFromRows([
+    "OOOOO",
+    "OOROO",
+    "OOAOO",
+    "OO OO",
+    "OOaOO",
+    "OOOOO",
+  ]);
+  const results = [0, 1].map(index => worker.search({
+    algorithm: "push-ida-star",
+    state,
+    upperBound: Infinity,
+    maxVisited: 100,
+    exactShard: {index, count: 2, depth: 1},
+  }));
+
+  assert.equal(results.filter(result => result.path).length, 1);
+  assert.deepEqual(
+    Array.from(results.find(result => result.path).path),
+    ["Down", "Down"],
+  );
+  assert.equal(results.every(result => result.exactShard.count === 2), true);
+});
+
+test("Huge exact contour distributes useful work across four persistent shards", () => {
+  const worker = loadWorker();
+  const state = stateFromRows(HUGE_ROWS);
+  const results = [0, 1, 2, 3].map(index => worker.search({
+    algorithm: "push-ida-star",
+    state,
+    upperBound: Infinity,
+    maxVisited: 200,
+    transpositionLimit: 500,
+    exactShard: {index, count: 4, depth: 4},
+    seed: 911 + index * 104729,
+  }));
+
+  assert.equal(results.every(result => result.cutoff), true);
+  assert.equal(results.every(result => result.visited === 200), true);
+  assert.equal(results.every(result => result.threshold >= 208), true);
+});
+
 test("bridge A star connects a forward state to a worker-supplied landmark", () => {
   const worker = loadWorker();
   const state = stateFromRows([
@@ -601,6 +645,34 @@ test("bridge A star identifies an incompatible landmark before searching", () =>
   assert.equal(result.path, null);
   assert.equal(result.visited, 0);
   assert.equal(result.terminationReason, "target-incompatible");
+});
+
+test("bounded bridge search returns a replayable continuation checkpoint", () => {
+  const worker = loadWorker();
+  const state = stateFromRows([
+    "OOOOOOOOO",
+    "O R X S O",
+    "OOOOOOOOO",
+  ]);
+  const targetState = {
+    rows: state.rows,
+    robot: state.robot,
+    boxes: [["1,6", "X"]],
+  };
+  const result = worker.search({
+    algorithm: "bridge-astar",
+    state,
+    targetState,
+    maxVisited: 2,
+    forcedMacros: false,
+  });
+
+  assert.equal(result.path, null);
+  assert.equal(result.cutoff, true);
+  assert.ok(result.checkpoint);
+  assert.equal(result.checkpoint.cost, 1);
+  assert.ok(result.checkpoint.estimate < result.initialEstimate);
+  assert.ok(result.checkpoint.path.length > 0);
 });
 
 test("bidirectional frontier compaction reports bounded memory telemetry", () => {

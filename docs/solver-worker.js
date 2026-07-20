@@ -1598,6 +1598,7 @@ function pushIterativeDeepeningAStar(payload) {
   let visited = 0, reported = 0, solution = null, cutoff = false;
   let bestEstimate = heuristic(initial.boxes, board), bestPushes = 0;
   let trackedThrough = payload.trackedSignatures ? 0 : undefined;
+  const exactShard = payload.exactShard;
   if (!Number.isFinite(bestEstimate)) {
     return {path: null, visited, cutoff: false, terminationReason: "infeasible-root",
       bestEstimate, bestPushes};
@@ -1615,10 +1616,16 @@ function pushIterativeDeepeningAStar(payload) {
     return estimate + 0.6 * topology - 0.8 * packing;
   };
 
-  const searchContour = (state, cost, threshold, transpositions) => {
+  const searchContour = (state, cost, threshold, transpositions, shardAccepted = false) => {
     if (cutoff || solution) return Infinity;
     const estimate = heuristic(state.boxes, board);
     const total = cost + estimate;
+    let accepted = shardAccepted;
+    if (!accepted && exactShard && cost >= exactShard.depth) {
+      const bucket = Math.floor(signatureNoise(exactPushKey(state), 0) * exactShard.count);
+      if (bucket !== exactShard.index) return Infinity;
+      accepted = true;
+    }
     if (total > threshold) return total;
     if (goal(state.boxes, board.goals)) {
       solution = segments.flatMap(segment => segment);
@@ -1678,6 +1685,7 @@ function pushIterativeDeepeningAStar(payload) {
         candidate.cost,
         threshold,
         transpositions,
+        accepted,
       );
       segments.pop();
       nextThreshold = Math.min(nextThreshold, exceeded);
@@ -1689,6 +1697,7 @@ function pushIterativeDeepeningAStar(payload) {
 
   let threshold = bestEstimate;
   while (Number.isFinite(threshold) && threshold <= upperBound && !cutoff && !solution) {
+    postMessage({type: "contour", threshold, visited, exactShard});
     activePath.clear();
     const transpositions = new BoundedDepthMap(payload.transpositionLimit || 80000);
     const nextThreshold = searchContour(initial, 0, threshold, transpositions);
@@ -1706,6 +1715,7 @@ function pushIterativeDeepeningAStar(payload) {
     threshold,
     bound: upperBound,
     trackedThrough,
+    exactShard,
   };
 }
 
@@ -1725,15 +1735,18 @@ function bridgeAStarSearch(payload) {
   const targetReachable = reachablePaths(targetState, board);
   const targetKey = payload.targetId || pushKey(targetState, targetReachable);
   const heuristicMemo = new Map();
-  const frontier = new Heap(), bestCost = new Map(), closed = new Set(), cameFrom = new Map();
+  const frontier = new Heap(), bestCost = new Map(), closed = new Set();
+  let cameFrom = new Map();
   const weight = payload.weight || 1.4;
   const maxVisited = payload.maxVisited || 100000;
   const frontierLimit = payload.frontierLimit || 4000;
   let visited = 0, order = 0, bestEstimate = Infinity, bestCheckpoint = null;
+  let compactions = 0, peakFrontier = 0;
 
   initial.reachable = reachablePaths(initial, board);
   initial.signature = pushKey(initial, initial.reachable);
   initial.estimate = targetLayoutHeuristic(initial.boxes, targetBoxes, board, heuristicMemo);
+  const initialEstimate = initial.estimate;
   if (!Number.isFinite(initial.estimate)) {
     return {path: null, visited, cutoff: false,
       terminationReason: "target-incompatible", bestEstimate: initial.estimate};
@@ -1745,6 +1758,7 @@ function bridgeAStarSearch(payload) {
   while (frontier.length) {
     const current = frontier.pop()[2];
     if (bestCost.get(current.signature) !== current.cost || closed.has(current.signature)) continue;
+    bestCost.delete(current.signature);
     closed.add(current.signature);
     visited++;
     if (current.signature === targetKey) {
@@ -1752,6 +1766,11 @@ function bridgeAStarSearch(payload) {
         path: reconstructPath(cameFrom, current.signature),
         visited,
         terminationReason: "target-reached",
+        initialEstimate,
+        bestEstimate: 0,
+        bestPushes: current.cost,
+        peakFrontier,
+        compactions,
         finalState: {
           rows: board.rows,
           robot: current.robot,
@@ -1788,21 +1807,53 @@ function bridgeAStarSearch(payload) {
           },
           cost: child.cost,
           estimate: child.estimate,
+          signature: child.signature,
         };
       }
       bestCost.set(child.signature, child.cost);
       cameFrom.set(child.signature, {parent: current.signature, segment: next.path});
       frontier.push([child.cost + weight * child.estimate, order++, child]);
     }
-    if (frontier.length > frontierLimit * 2) frontier.retainBest(frontierLimit);
+    peakFrontier = Math.max(peakFrontier, frontier.length);
+    if (frontier.length > frontierLimit * 2) {
+      frontier.retainBest(frontierLimit);
+      const retainedCosts = new Map();
+      const ancestry = new Set([initial.signature]);
+      const pending = [];
+      for (const [, , state] of frontier.items) {
+        const previous = retainedCosts.get(state.signature) ?? Infinity;
+        if (state.cost < previous) retainedCosts.set(state.signature, state.cost);
+        pending.push(state.signature);
+      }
+      if (bestCheckpoint?.signature) pending.push(bestCheckpoint.signature);
+      while (pending.length) {
+        const signature = pending.pop();
+        if (ancestry.has(signature)) continue;
+        ancestry.add(signature);
+        const record = cameFrom.get(signature);
+        if (record?.parent) pending.push(record.parent);
+      }
+      cameFrom = new Map([...cameFrom].filter(([signature]) => ancestry.has(signature)));
+      bestCost.clear();
+      retainedCosts.forEach((cost, signature) => bestCost.set(signature, cost));
+      compactions++;
+    }
     if (visited % 5000 === 0) postMessage({type: "progress", visited,
-      bestEstimate, frontier: frontier.length, retained: bestCost.size});
+      bestEstimate, bestPushes: bestCheckpoint?.cost, frontier: frontier.length,
+      retained: bestCost.size, peakFrontier, compactions});
   }
   const cutoff = visited >= maxVisited;
+  const checkpoint = bestCheckpoint && {
+    state: bestCheckpoint.state,
+    path: reconstructPath(cameFrom, bestCheckpoint.signature),
+    cost: bestCheckpoint.cost,
+    estimate: bestCheckpoint.estimate,
+  };
   return {path: null, visited, cutoff,
     terminationReason: cutoff ? "budget" : "frontier-exhausted",
-    bestEstimate, frontier: frontier.length, retained: bestCost.size,
-    checkpoint: bestCheckpoint};
+    initialEstimate, bestEstimate, bestPushes: bestCheckpoint?.cost,
+    frontier: frontier.length, retained: bestCost.size, peakFrontier, compactions,
+    checkpoint};
 }
 
 function bidirectionalSide(payload) {
@@ -1854,6 +1905,7 @@ function bidirectionalSide(payload) {
   while (frontier.length) {
     const current = frontier.pop()[2];
     if (bestCost.get(current.exactSignature) !== current.cost) continue;
+    bestCost.delete(current.exactSignature);
     const reachable = reachablePaths(current, board);
     if (forward && createsSealedCorralDeadlock(current, board, reachable)) continue;
     const signature = pushKey(current, reachable);

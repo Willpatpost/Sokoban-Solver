@@ -13,8 +13,10 @@ from player moves. It includes the derived phase plan, worker configuration,
 state budgets, expansion rates, heuristic improvements, frontier sizes,
 checkpoints, landmarks, bridge handoffs, completions, errors, and 30-second
 worker heartbeats. The complete log can be copied for performance comparisons.
-Completion entries include an explicit termination reason plus generated-state,
-peak-frontier, compaction, and retained-state telemetry when the worker supplies it.
+Completion entries include elapsed time and an explicit termination reason plus
+generated-state, peak-frontier, compaction, and retained-state telemetry when the
+worker supplies it. The on-screen field renders the newest 1,500 entries, while
+Copy preserves the complete in-memory log for long-run analysis.
 
 The default solver is **Ultimate Bidirectional**, an experimental Sokoban-aware
 search. It starts one forward Web Worker from the current board and one or more
@@ -84,9 +86,12 @@ to join compatible checkpoint/landmark pairs. A successful bridge is stitched to
 the forward prefix and reverse suffix and replay-validated before it is accepted.
 All milestones, targets, and worker assignments are derived from the loaded board.
 Milestone landmark generations supersede queued opening bridges instead of sharing
-a lifetime quota with them. The director also retires opening workers once a packing
-checkpoint makes their phase stale, while bounded exact handoffs run only a small
-contour around each checkpoint.
+a lifetime quota with them. Bridge candidates are ranked globally, and incompatible
+targets do not consume a campaign's viable-search quota. New packing checkpoints
+start fresh campaigns. Promising incomplete bridges publish replayable checkpoints
+for up to two bounded continuations. The director also retires opening workers once
+a packing checkpoint makes their phase stale, while bounded exact handoffs run only
+a small contour around each checkpoint.
 
 The board analysis is puzzle-independent. It detects articulation gates and
 one-entrance rooms, derives farthest-first packing pressure and goal dependencies,
@@ -98,16 +103,23 @@ Boxes occupying the exterior approach to an unresolved one-entrance room add
 congestion pressure, encouraging the solver to clear staging gates before packing.
 
 Small searches remain exhaustive. Complex boards use explicit state and cache
-budgets. After the bounded heuristic portfolio finishes, an exact push-IDA*
-worker restarts with geometrically increasing state budgets. It continues until
-it finds a solution, proves the state space unsolvable, or you press **Stop**;
-there is no fixed push-depth ceiling when no learned incumbent is available.
+budgets. After the bounded heuristic portfolio finishes, persistent push-IDA*
+workers hash-partition the contour at a shallow push depth. Each shard keeps working
+instead of restarting from the root at geometrically increasing state budgets. The
+union of the shards covers the contour, and an unsolvability proof is accepted only
+after every shard exhausts its partition. Search continues until it finds a solution,
+proves the state space unsolvable, or you press **Stop**; there is no fixed push-depth
+ceiling when no learned incumbent is available.
 
 Very large puzzles can still hit browser memory limits before the search space
 is exhausted. Ultimate Bidirectional uses compact parent records, caps each
 bidirectional side on complex boards, bounds worker transposition and memo
-tables, and automatically reduces its reverse-worker count. Finished workers
-release their frontiers while the sequential restart portfolio continues.
+tables, and automatically reduces its reverse-worker count. A priority work queue
+keeps up to two direct-search lanes occupied when the browser reports enough hardware,
+while alternating bridge and exact-handoff work so one strategy cannot monopolize
+both lanes. Direct capacity expands when the opening forward and reverse workers
+finish, allowing later phases to reuse those processor slots. Finished workers
+release their frontiers while queued work continues.
 Bidirectional heaps compact to their best 40,000 states when they grow past twice
 that size. A worker that produces no message for two minutes is terminated, logged,
 and replaced by the next portfolio assignment so a wedged worker cannot stall the
