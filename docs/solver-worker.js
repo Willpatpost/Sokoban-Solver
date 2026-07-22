@@ -49,6 +49,12 @@ function exactPushKey(state, board = null) {
 }
 const HEURISTIC_MEMO_LIMIT = 20000;
 const DEADLOCK_MEMO_LIMIT = 10000;
+const COMMITMENT_MEMO_LIMIT = 10000;
+const GOAL_COMMITMENT = Object.freeze({
+  TEMPORARY: "temporary",
+  CONDITIONAL: "conditional",
+  PROVEN: "proven",
+});
 let activePerformance = null;
 
 const now = () => globalThis.performance?.now?.() ?? Date.now();
@@ -72,6 +78,9 @@ function createPerformanceMetrics() {
     heuristicCalls: 0,
     heuristicCacheHits: 0,
     heuristicMs: 0,
+    commitmentCalls: 0,
+    commitmentCacheHits: 0,
+    commitmentMs: 0,
     assignmentCalls: 0,
     pushDistanceCalls: 0,
     pushDistanceCacheHits: 0,
@@ -93,7 +102,7 @@ function performanceSnapshot(metrics) {
     totalMs: metrics._startedAt === null ? metrics.totalMs : now() - metrics._startedAt,
   };
   delete rounded._startedAt;
-  for (const key of ["totalMs", "parseMs", "graphCompileMs", "denseBuildMs", "signatureMs", "heuristicMs", "pushDistanceMs", "reachabilityMs"]) {
+  for (const key of ["totalMs", "parseMs", "graphCompileMs", "denseBuildMs", "signatureMs", "heuristicMs", "commitmentMs", "pushDistanceMs", "reachabilityMs"]) {
     rounded[key] = Math.round((rounded[key] || 0) * 1000) / 1000;
   }
   return rounded;
@@ -339,6 +348,8 @@ function hydratePreparedBoard(data, seed, metrics) {
     heuristicMemo: new Map(),
     playerPushDistances: new Map(),
     deadlockMemo: new Map(),
+    commitmentMemo: new Map(),
+    commitmentPushDistances: new Map(),
     boxSignatureMemo: new WeakMap(),
     metrics,
   };
@@ -419,7 +430,9 @@ function parse(data) {
   return {
     rows: data.rows, floor, walls, goals, goalsByLabel, pushDistances, goalPressure,
     topology, heuristicMemo: new Map(), playerPushDistances: new Map(),
-    deadlockMemo: new Map(), boxSignatureMemo: new WeakMap(), singleBoxGraph, dense, metrics,
+    deadlockMemo: new Map(), commitmentMemo: new Map(), commitmentPushDistances: new Map(),
+    boxSignatureMemo: new WeakMap(),
+    singleBoxGraph, dense, metrics,
   };
 }
 
@@ -918,10 +931,105 @@ function targetLayoutHeuristic(boxes, targetBoxes, board, memo) {
 function goal(boxes, goals) {
   return boxes.every(([y, x, label]) => goals.get(pkey(y, x)) === label);
 }
-function goalPackingBonus(boxes, board) {
-  return boxes.reduce((bonus, [y, x, label]) => {
+
+function staticallyImmovable(position, board) {
+  const [y, x] = position.split(",").map(Number);
+  return !Object.values(DIRS).some(([dy, dx]) =>
+    board.floor.has(pkey(y + dy, x + dx)) &&
+    board.floor.has(pkey(y - dy, x - dx)));
+}
+
+function commitmentPushDistances(board, fixedPosition, target) {
+  const key = `${fixedPosition}|${target}`;
+  board.commitmentPushDistances ??= new Map();
+  if (board.commitmentPushDistances.has(key)) return board.commitmentPushDistances.get(key);
+  const floor = new Set(board.floor);
+  floor.delete(fixedPosition);
+  const distances = reversePushDistances(floor, target);
+  board.commitmentPushDistances.set(key, distances);
+  return distances;
+}
+
+function residualMatchingSurvives(boxes, board, fixedIndex, fixedPosition) {
+  const remaining = boxes.filter((_, index) => index !== fixedIndex);
+  const boxesByLabel = new Map(), goalsByLabel = new Map();
+  for (const [y, x, label] of remaining) {
+    if (!boxesByLabel.has(label)) boxesByLabel.set(label, []);
+    boxesByLabel.get(label).push(pkey(y, x));
+  }
+  for (const [position, label] of board.goals) {
+    if (position === fixedPosition) continue;
+    if (!goalsByLabel.has(label)) goalsByLabel.set(label, []);
+    goalsByLabel.get(label).push(position);
+  }
+  const labels = new Set([...boxesByLabel.keys(), ...goalsByLabel.keys()]);
+  for (const label of labels) {
+    const positions = boxesByLabel.get(label) || [];
+    const targets = goalsByLabel.get(label) || [];
+    if (positions.length !== targets.length) return false;
+    const distances = targets.map(target =>
+      commitmentPushDistances(board, fixedPosition, target));
+    const costs = positions.map(position =>
+      distances.map(distance => distance.get(position) ?? Infinity));
+    if (!Number.isFinite(minimumAssignmentCost(costs))) return false;
+  }
+  return true;
+}
+
+function blocksPendingRoomWork(position, occupied, board) {
+  for (const room of board.topology.rooms) {
+    if (!room.cells.has(position) && room.gate !== position) continue;
+    const pending = room.goals.filter(goal =>
+      goal !== position && occupied.get(goal) !== board.goals.get(goal));
+    if (room.gate === position && pending.length) return true;
+    if (room.dependencies.some(([blocker, prerequisite]) =>
+      blocker === position &&
+      occupied.get(prerequisite) !== board.goals.get(prerequisite))) return true;
+  }
+  return false;
+}
+
+function goalCommitments(boxes, board) {
+  const metrics = board.metrics;
+  if (metrics) metrics.commitmentCalls++;
+  const signature = boxSignature(boxes, board);
+  if (board.commitmentMemo.has(signature)) {
+    if (metrics) metrics.commitmentCacheHits++;
+    return board.commitmentMemo.get(signature);
+  }
+  const started = metrics ? now() : 0;
+  const occupied = new Map(boxes.map(([y, x, label]) => [pkey(y, x), label]));
+  const commitments = new Map();
+  boxes.forEach(([y, x, label], index) => {
     const position = pkey(y, x);
-    return bonus + (board.goals.get(position) === label ? board.goalPressure.get(position) || 0 : 0);
+    if (board.goals.get(position) !== label) return;
+    const safeForRemaining = !blocksPendingRoomWork(position, occupied, board) &&
+      residualMatchingSurvives(boxes, board, index, position);
+    commitments.set(position, !safeForRemaining
+      ? GOAL_COMMITMENT.TEMPORARY
+      : staticallyImmovable(position, board)
+        ? GOAL_COMMITMENT.PROVEN
+        : GOAL_COMMITMENT.CONDITIONAL);
+  });
+  const result = memoizeBounded(
+    board.commitmentMemo,
+    signature,
+    commitments,
+    COMMITMENT_MEMO_LIMIT,
+  );
+  if (metrics) metrics.commitmentMs += now() - started;
+  return result;
+}
+
+function goalPackingBonus(boxes, board) {
+  const commitments = goalCommitments(boxes, board);
+  return boxes.reduce((bonus, [y, x]) => {
+    const position = pkey(y, x);
+    const commitment = commitments.get(position);
+    const safetyWeight = commitment === GOAL_COMMITMENT.PROVEN
+      ? 1
+      : commitment === GOAL_COMMITMENT.CONDITIONAL ? 0.25 : 0;
+    return bonus + safetyWeight * (board.goalPressure.get(position) || 0);
   }, 0);
 }
 function corner(y, x, board, label) {
@@ -1618,6 +1726,7 @@ function beamSearch(payload) {
           bestPushes = child.cost;
         }
         const topology = topologyPenalty(child.boxes, board);
+        const packing = goalPackingBonus(child.boxes, board);
         const evacuation = evacuationWeight
           ? roomEvacuationPenalty(child.boxes, board)
           : 0;
@@ -1633,10 +1742,10 @@ function beamSearch(payload) {
         const score = (payload.costWeight || 0) * child.cost +
           weight * estimate + topologyWeight * topology +
           evacuationWeight * evacuation -
-          goalPackingWeight * goalPackingBonus(child.boxes, board) +
+          goalPackingWeight * packing +
           diversity * signatureNoise(child.exactSignature, seed);
         const exploreScore = topologyWeight * topology + evacuationWeight * evacuation -
-          goalPackingWeight * goalPackingBonus(child.boxes, board) +
+          goalPackingWeight * packing +
           diversity * signatureNoise(child.exactSignature, seed + 7919);
         const existing = candidates.get(child.exactSignature);
         if (!existing || score < existing.score) {

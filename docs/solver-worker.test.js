@@ -153,6 +153,68 @@ test("Hungarian matching enforces distinct goals and detects Hall deadlocks", ()
   ]), Infinity);
 });
 
+test("goal commitment oracle distinguishes temporary, conditional, and proven placements", () => {
+  const worker = loadWorker();
+
+  const conditionalBoard = worker.parse(stateFromRows([
+    "OOOOO", "O R O", "O X O", "O S O", "OOOOO",
+  ]));
+  assert.equal(
+    worker.goalCommitments([[3, 2, "X"]], conditionalBoard).get("3,2"),
+    "conditional",
+  );
+
+  const provenBoard = worker.parse(stateFromRows([
+    "OOOOOO", "O RXSO", "O    O", "OOOOOO",
+  ]));
+  assert.equal(
+    worker.goalCommitments([[1, 4, "X"]], provenBoard).get("1,4"),
+    "proven",
+  );
+
+  const temporaryBoard = worker.parse(stateFromRows([
+    "OOOOOOO", "O R   O", "O XX  O", "O SS  O", "OOOOOOO",
+  ]));
+  temporaryBoard.topology.rooms = [{
+    gate: "1,1",
+    cells: new Set(["3,2", "3,3"]),
+    goals: ["3,2", "3,3"],
+    dependencies: [["3,2", "3,3"]],
+  }];
+  assert.equal(
+    worker.goalCommitments([[3, 2, "X"], [2, 3, "X"]], temporaryBoard).get("3,2"),
+    "temporary",
+  );
+
+  const corridor = {
+    floor: new Set(["1,1", "1,2", "1,3", "1,4", "1,5", "1,6", "1,7"]),
+    goals: new Map([["1,5", "X"], ["1,6", "X"]]),
+  };
+  assert.equal(
+    worker.residualMatchingSurvives(
+      [[1, 5, "X"], [1, 2, "X"]], corridor, 0, "1,5",
+    ),
+    false,
+  );
+});
+
+test("goal packing reserves its strongest reward for proven commitments", () => {
+  const worker = loadWorker();
+  const board = worker.parse(stateFromRows([
+    "OOOOOO", "O RXSO", "O    O", "OOOOOO",
+  ]));
+  const proven = [[1, 4, "X"]];
+  board.commitmentMemo.set(worker.boxSignature(proven, board), new Map([["1,4", "proven"]]));
+  const provenBonus = worker.goalPackingBonus(proven, board);
+  board.commitmentMemo.set(worker.boxSignature(proven, board), new Map([["1,4", "conditional"]]));
+  const conditionalBonus = worker.goalPackingBonus(proven, board);
+  board.commitmentMemo.set(worker.boxSignature(proven, board), new Map([["1,4", "temporary"]]));
+  const temporaryBonus = worker.goalPackingBonus(proven, board);
+
+  assert.equal(provenBonus, 4 * conditionalBonus);
+  assert.equal(temporaryBonus, 0);
+});
+
 test("player-aware push distances detect one-way chokepoints", () => {
   const worker = loadWorker();
   const board = worker.parse({rows: [

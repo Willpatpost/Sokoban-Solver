@@ -1309,8 +1309,10 @@ function runBidirectionalSolver(purpose, analysis) {
           signatureMs: data.performance?.signatureMs,
           signatureCacheHits: data.performance?.signatureCacheHits,
           heuristicMs: data.performance?.heuristicMs,
+          commitmentMs: data.performance?.commitmentMs,
           reachabilityMs: data.performance?.reachabilityMs,
           heuristicCacheHits: data.performance?.heuristicCacheHits,
+          commitmentCacheHits: data.performance?.commitmentCacheHits,
           pushDistanceCacheHits: data.performance?.pushDistanceCacheHits,
           corralPrunes: data.corralPrunes,
           cyclePrunes: data.cyclePrunes,
@@ -1373,8 +1375,10 @@ function runBidirectionalSolver(purpose, analysis) {
           signatureMs: data.performance?.signatureMs,
           signatureCacheHits: data.performance?.signatureCacheHits,
           heuristicMs: data.performance?.heuristicMs,
+          commitmentMs: data.performance?.commitmentMs,
           reachabilityMs: data.performance?.reachabilityMs,
           heuristicCacheHits: data.performance?.heuristicCacheHits,
+          commitmentCacheHits: data.performance?.commitmentCacheHits,
           pushDistanceCacheHits: data.performance?.pushDistanceCacheHits,
           reason: data.terminationReason || (data.path ? "solution" : data.cutoff ? "budget" : "exhausted"),
         });
@@ -1556,6 +1560,7 @@ function startSolver(purpose) {
           preparedBoardReuses: data.performance?.preparedBoardReuses,
           signatureMs: data.performance?.signatureMs,
           heuristicMs: data.performance?.heuristicMs,
+          commitmentMs: data.performance?.commitmentMs,
           reachabilityMs: data.performance?.reachabilityMs,
         });
         setStatus(`${active.size} worker${active.size === 1 ? "" : "s"} searching... ${plan.label}: ${data.visited.toLocaleString()} states`);
@@ -1576,6 +1581,7 @@ function startSolver(purpose) {
         signatureMs: data.performance?.signatureMs,
         signatureCacheHits: data.performance?.signatureCacheHits,
         heuristicMs: data.performance?.heuristicMs,
+        commitmentMs: data.performance?.commitmentMs,
         reachabilityMs: data.performance?.reachabilityMs,
       });
       if (data.path) {

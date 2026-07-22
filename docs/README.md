@@ -19,7 +19,7 @@ worker supplies it. The on-screen field renders the newest 1,500 entries, while
 Copy preserves the complete in-memory log for long-run analysis.
 Direct-search completions also report compiled-graph construction, dense-board
 index construction, heuristic, robot-reachability, cache-hit, push-generation,
-and pruning measurements. Robot flood fills and forward push generation use
+goal-commitment, and pruning measurements. Robot flood fills and forward push generation use
 immutable integer cell IDs and typed arrays while retaining string coordinates
 at module boundaries for compatible logs, checkpoints, and replay paths.
 Canonical box layouts and robot regions use collision-free dense base-36 keys.
@@ -126,6 +126,15 @@ corrals. Globally forced pushes in straight tunnels are collapsed into macros.
 Heuristic room ordering affects priority only; it never rejects a state.
 Boxes occupying the exterior approach to an unresolved one-entrance room add
 congestion pressure, encouraging the solver to clear staging gates before packing.
+
+Goal packing uses a conservative commitment oracle instead of rewarding every
+currently matched box equally. A placement is temporary when fixing it would
+block pending room dependencies, occupy a required gate, or destroy the remaining
+typed perfect matching and its static push/support routes. Movable placements that
+pass those checks are conditional and receive a reduced ordering reward. Only a
+statically immovable matched box that passes every residual check is classified as
+proven and receives the full packing reward. These classifications affect search
+ordering only; they are not an additional hard-pruning rule.
 
 Small searches remain exhaustive. Complex boards use explicit state and cache
 budgets. After the bounded heuristic portfolio finishes, persistent push-IDA*
