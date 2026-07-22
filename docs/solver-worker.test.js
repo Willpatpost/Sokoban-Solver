@@ -323,6 +323,84 @@ test("dynamic support dependencies identify blocker routes and enabling pushes",
   assert.equal(board.metrics.supportDependencyCacheHits, 1);
 });
 
+test("exact local room search packs small rooms and exposes optimal first pushes", () => {
+  const worker = loadWorker();
+  const parsed = stateFromRows([
+    "OOOOOOO", "O R   O", "OOO OOO", "O  S  O",
+    "O  X  O", "O     O", "OOOOOOO",
+  ]);
+  const board = worker.parse(parsed);
+  const state = {
+    robot: parsed.robot,
+    boxes: parsed.boxes.map(([position, label]) => [
+      ...position.split(",").map(Number), label,
+    ]),
+  };
+  const reachable = worker.reachablePaths(state, board);
+  const room = board.topology.rooms.find(candidate => candidate.goals.includes("3,3"));
+  const result = worker.exactLocalRoomSearch(state, board, room, reachable);
+
+  assert.equal(result.status, "solvable");
+  assert.equal(result.pushes, 1);
+  assert.equal(result.importsRequired, 0);
+  assert.equal(result.exportsRequired, 0);
+  assert.ok(result.viableBoundaries > 0);
+  assert.deepEqual(Array.from(result.firstPushes), ["4,3>3,3"]);
+  assert.ok(worker.localRoomOrderingDelta(
+    [result], {pushedFrom: "4,3", pushedTo: "3,3"},
+  ) < 0);
+  assert.ok(worker.localRoomOrderingDelta(
+    [result], {pushedFrom: "5,2", pushedTo: "5,3"},
+  ) > 0);
+
+  assert.equal(worker.exactLocalRoomSearch(state, board, room, reachable), result);
+  assert.equal(board.metrics.localRoomCacheHits, 1);
+});
+
+test("exact local room search reports exhausted and import-dependent abstractions safely", () => {
+  const worker = loadWorker();
+  const blockedParsed = stateFromRows([
+    "OOOOOOO", "O R   O", "OOO OOO", "O  S  O",
+    "O     O", "OX    O", "OOOOOOO",
+  ]);
+  const blockedBoard = worker.parse(blockedParsed);
+  const blockedState = {
+    robot: blockedParsed.robot,
+    boxes: [[5, 1, "X"]],
+  };
+  const blockedRoom = blockedBoard.topology.rooms.find(room => room.goals.includes("3,3"));
+  const exhausted = worker.exactLocalRoomSearch(blockedState, blockedBoard, blockedRoom);
+  assert.equal(exhausted.status, "exhausted");
+
+  const missingState = {robot: blockedParsed.robot, boxes: []};
+  const needsImport = worker.exactLocalRoomSearch(missingState, blockedBoard, blockedRoom);
+  assert.equal(needsImport.status, "needs-import");
+  assert.equal(needsImport.importsRequired, 1);
+  assert.equal(worker.localRoomOrderingDelta(
+    [needsImport], {pushedFrom: "1,1", pushedTo: "1,2"},
+  ), 0);
+});
+
+test("exact local corral search finds the push that reopens a small inaccessible region", () => {
+  const worker = loadWorker();
+  const parsed = stateFromRows(["OOOOOOO", "OR X SO", "OOOOOOO"]);
+  const board = worker.parse(parsed);
+  const state = {robot: parsed.robot, boxes: [[1, 3, "X"]]};
+  const reachable = worker.reachablePaths(state, board);
+  const analyses = worker.exactLocalCorralAnalyses(state, board, reachable);
+
+  assert.equal(analyses.length, 1);
+  assert.equal(analyses[0].status, "solvable");
+  assert.equal(analyses[0].pushes, 1);
+  assert.deepEqual(Array.from(analyses[0].firstPushes), ["1,3>1,4"]);
+  assert.ok(worker.localRoomOrderingDelta(
+    analyses, {pushedFrom: "1,3", pushedTo: "1,4"},
+  ) < 0);
+
+  assert.equal(worker.exactLocalCorralAnalyses(state, board, reachable)[0], analyses[0]);
+  assert.equal(board.metrics.localCorralCacheHits, 1);
+});
+
 test("compact box signatures are permutation-invariant and collision-free on a small board", () => {
   const worker = loadWorker();
   const board = worker.parse(stateFromRows([
@@ -375,6 +453,8 @@ test("prepared board seeds are clone-safe and preserve search results", () => {
   assert.notEqual(firstBoard.heuristicMemo, secondBoard.heuristicMemo);
   assert.notEqual(firstBoard.deadlockMemo, secondBoard.deadlockMemo);
   assert.notEqual(firstBoard.supportDependencyMemo, secondBoard.supportDependencyMemo);
+  assert.notEqual(firstBoard.localRoomMemo, secondBoard.localRoomMemo);
+  assert.notEqual(firstBoard.localCorralMemo, secondBoard.localCorralMemo);
   assert.notEqual(firstBoard.boxSignatureMemo, secondBoard.boxSignatureMemo);
   assert.equal(firstBoard.topology, secondBoard.topology);
   const baseline = worker.search({algorithm: "push-astar", state});
@@ -428,6 +508,8 @@ test("search results expose bounded hot-path performance telemetry", () => {
   assert.ok(result.performance.heuristicCalls > 0);
   assert.ok(result.performance.supportDependencyCalls > 0);
   assert.ok(result.performance.supportDependencyMs >= 0);
+  assert.ok(result.performance.localRoomMs >= 0);
+  assert.ok(result.performance.localCorralMs >= 0);
   assert.ok(result.performance.reachabilityCalls > 0);
   assert.ok(result.performance.pushNeighborCalls > 0);
   assert.ok(result.performance.pushesRetained > 0);

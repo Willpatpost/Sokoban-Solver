@@ -7,7 +7,8 @@ Sokoban-specific portfolio using push-level search, dead-square pruning, robot
 reachability canonicalization, exact distinct goal assignment, and push-distance
 heuristics. Its web search distinguishes temporary, conditional, and provably
 packed goal placements before applying packing rewards, and orders strategic
-pushes using dynamic robot support-square dependencies.
+pushes using dynamic robot support-square dependencies and cached exact searches
+of small rooms and corrals.
 
 - [Desktop application setup and usage](README-desktop.md)
 - [Web application documentation](docs/README.md)

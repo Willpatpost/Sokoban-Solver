@@ -51,6 +51,8 @@ const HEURISTIC_MEMO_LIMIT = 20000;
 const DEADLOCK_MEMO_LIMIT = 10000;
 const COMMITMENT_MEMO_LIMIT = 10000;
 const SUPPORT_DEPENDENCY_MEMO_LIMIT = 10000;
+const LOCAL_ROOM_MEMO_LIMIT = 5000;
+const LOCAL_CORRAL_MEMO_LIMIT = 5000;
 const GOAL_COMMITMENT = Object.freeze({
   TEMPORARY: "temporary",
   CONDITIONAL: "conditional",
@@ -87,6 +89,14 @@ function createPerformanceMetrics() {
     supportDependencyOptions: 0,
     supportDependencyBlockers: 0,
     supportDependencyMs: 0,
+    localRoomCalls: 0,
+    localRoomCacheHits: 0,
+    localRoomStates: 0,
+    localRoomMs: 0,
+    localCorralCalls: 0,
+    localCorralCacheHits: 0,
+    localCorralStates: 0,
+    localCorralMs: 0,
     assignmentCalls: 0,
     pushDistanceCalls: 0,
     pushDistanceCacheHits: 0,
@@ -108,7 +118,7 @@ function performanceSnapshot(metrics) {
     totalMs: metrics._startedAt === null ? metrics.totalMs : now() - metrics._startedAt,
   };
   delete rounded._startedAt;
-  for (const key of ["totalMs", "parseMs", "graphCompileMs", "denseBuildMs", "signatureMs", "heuristicMs", "commitmentMs", "supportDependencyMs", "pushDistanceMs", "reachabilityMs"]) {
+  for (const key of ["totalMs", "parseMs", "graphCompileMs", "denseBuildMs", "signatureMs", "heuristicMs", "commitmentMs", "supportDependencyMs", "localRoomMs", "localCorralMs", "pushDistanceMs", "reachabilityMs"]) {
     rounded[key] = Math.round((rounded[key] || 0) * 1000) / 1000;
   }
   return rounded;
@@ -357,6 +367,8 @@ function hydratePreparedBoard(data, seed, metrics) {
     commitmentMemo: new Map(),
     commitmentPushDistances: new Map(),
     supportDependencyMemo: new Map(),
+    localRoomMemo: new Map(),
+    localCorralMemo: new Map(),
     boxSignatureMemo: new WeakMap(),
     metrics,
   };
@@ -439,6 +451,8 @@ function parse(data) {
     topology, heuristicMemo: new Map(), playerPushDistances: new Map(),
     deadlockMemo: new Map(), commitmentMemo: new Map(), commitmentPushDistances: new Map(),
     supportDependencyMemo: new Map(),
+    localRoomMemo: new Map(),
+    localCorralMemo: new Map(),
     boxSignatureMemo: new WeakMap(),
     singleBoxGraph, dense, metrics,
   };
@@ -1336,9 +1350,183 @@ function supportDependencyDelta(graph, next) {
   return 1.25 * destroysAccess - enablesAccess;
 }
 
-function createsSealedCorralDeadlock(state, board, reachable) {
-  const occupied = new Map(state.boxes.map(([y, x, label]) => [pkey(y, x), label]));
+function localBoxSignature(boxes) {
+  return boxes.map(([position, label]) => `${position},${label}`).sort().join(";");
+}
+
+function localReachable(domain, boxes, start) {
+  const occupied = new Set(boxes.map(([position]) => position));
+  if (!domain.has(start) || occupied.has(start)) return new Set();
+  const reached = new Set([start]), queue = [start];
+  for (let head = 0; head < queue.length; head++) {
+    for (const next of floorNeighbors(queue[head], domain)) {
+      if (occupied.has(next) || reached.has(next)) continue;
+      reached.add(next);
+      queue.push(next);
+    }
+  }
+  return reached;
+}
+
+function exactLocalPushSearch({domain, boxes, robot, isGoal, gate, maxStates = 10000}) {
+  const initialBoxes = boxes.map(box => [...box]);
+  const queue = [{robot, boxes: initialBoxes, pushes: 0, firstPush: null}];
+  const seen = new Set(), firstPushes = new Set();
+  let visited = 0, viableBoundaries = 0, solutionPushes = Infinity;
+  for (let head = 0; head < queue.length; head++) {
+    if (visited >= maxStates) break;
+    const current = queue[head];
+    if (current.pushes > solutionPushes) break;
+    const reached = localReachable(domain, current.boxes, current.robot);
+    if (!reached.size) continue;
+    const region = [...reached].sort()[0];
+    const signature = `${region}|${localBoxSignature(current.boxes)}`;
+    if (seen.has(signature)) continue;
+    seen.add(signature);
+    visited++;
+    const occupied = new Map(current.boxes.map(([position, label], index) =>
+      [position, {label, index}]));
+    if (!occupied.has(gate) && reached.has(gate)) viableBoundaries++;
+    if (isGoal(occupied, reached)) {
+      solutionPushes = current.pushes;
+      if (current.firstPush) firstPushes.add(current.firstPush);
+      continue;
+    }
+    if (current.pushes >= solutionPushes) continue;
+    current.boxes.forEach(([position, label], index) => {
+      const [y, x] = position.split(",").map(Number);
+      for (const [, [dy, dx]] of DIRECTION_ENTRIES) {
+        const support = pkey(y - dy, x - dx);
+        const destination = pkey(y + dy, x + dx);
+        if (!reached.has(support) || !domain.has(destination) || occupied.has(destination)) continue;
+        const nextBoxes = current.boxes.map((box, boxIndex) =>
+          boxIndex === index ? [destination, label] : box);
+        const push = `${position}>${destination}`;
+        queue.push({
+          robot: position,
+          boxes: nextBoxes,
+          pushes: current.pushes + 1,
+          firstPush: current.firstPush || push,
+        });
+      }
+    });
+  }
+  const cutoff = visited >= maxStates && !Number.isFinite(solutionPushes);
+  return {
+    status: Number.isFinite(solutionPushes) ? (solutionPushes === 0 ? "packed" : "solvable")
+      : cutoff ? "cutoff" : "exhausted",
+    pushes: Number.isFinite(solutionPushes) ? solutionPushes : null,
+    firstPushes,
+    visited,
+    viableBoundaries,
+  };
+}
+
+function exactLocalRoomSearch(state, board, room, reachable = reachablePaths(state, board)) {
+  const metrics = board.metrics;
+  metrics.localRoomCalls++;
+  const roomIndex = board.topology.rooms.indexOf(room);
+  const domain = new Set([...room.cells, room.gate]);
+  for (const [position, distance] of room.approach) if (distance <= 2) domain.add(position);
+  const localBoxes = state.boxes
+    .map(([y, x, label]) => [pkey(y, x), label])
+    .filter(([position]) => domain.has(position));
+  const entries = [...domain].filter(position => reachable.has(position)).sort();
+  const entrySide = entries[0] || "sealed";
+  const cacheKey = `${roomIndex}|${entrySide}|${localBoxSignature(localBoxes)}`;
+  if (board.localRoomMemo.has(cacheKey)) {
+    metrics.localRoomCacheHits++;
+    return board.localRoomMemo.get(cacheKey);
+  }
+  const started = now();
+  const internalCounts = new Map(), localCounts = new Map(), targetCounts = new Map();
+  localBoxes.forEach(([position, label]) => {
+    localCounts.set(label, (localCounts.get(label) || 0) + 1);
+    if (room.cells.has(position)) internalCounts.set(label, (internalCounts.get(label) || 0) + 1);
+  });
+  room.goals.forEach(goal => {
+    const label = board.goals.get(goal);
+    targetCounts.set(label, (targetCounts.get(label) || 0) + 1);
+  });
+  let importsRequired = 0, exportsRequired = 0, missingLocalBox = false;
+  for (const [label, count] of targetCounts) {
+    importsRequired += Math.max(0, count - (internalCounts.get(label) || 0));
+    if ((localCounts.get(label) || 0) < count) missingLocalBox = true;
+  }
+  if (missingLocalBox) {
+      const result = {
+        status: "needs-import", importsRequired, exportsRequired,
+        doorwayOccupied: localBoxes.some(([position]) => position === room.gate),
+        entrySide, domain, firstPushes: new Set(), visited: 0, viableBoundaries: 0,
+      };
+      metrics.localRoomMs += now() - started;
+      return memoizeBounded(board.localRoomMemo, cacheKey, result, LOCAL_ROOM_MEMO_LIMIT);
+  }
+  for (const [label, count] of internalCounts) {
+    exportsRequired += Math.max(0, count - (targetCounts.get(label) || 0));
+  }
+  if (room.cells.size > 16 || domain.size > 24 || localBoxes.length > 5) {
+    const result = {
+      status: "oversized", importsRequired, exportsRequired,
+      doorwayOccupied: localBoxes.some(([position]) => position === room.gate),
+      entrySide, domain, firstPushes: new Set(), visited: 0, viableBoundaries: 0,
+    };
+    metrics.localRoomMs += now() - started;
+    return memoizeBounded(board.localRoomMemo, cacheKey, result, LOCAL_ROOM_MEMO_LIMIT);
+  }
+  if (!entries.length) {
+    const result = {
+      status: "inaccessible", importsRequired, exportsRequired,
+      doorwayOccupied: localBoxes.some(([position]) => position === room.gate),
+      entrySide, domain, firstPushes: new Set(), visited: 0, viableBoundaries: 0,
+    };
+    metrics.localRoomMs += now() - started;
+    return memoizeBounded(board.localRoomMemo, cacheKey, result, LOCAL_ROOM_MEMO_LIMIT);
+  }
+  const search = exactLocalPushSearch({
+    domain,
+    boxes: localBoxes,
+    robot: entries[0],
+    gate: room.gate,
+    isGoal: occupied => !occupied.has(room.gate) && room.goals.every(goal =>
+      occupied.get(goal)?.label === board.goals.get(goal)) &&
+      [...occupied].every(([position, {label}]) =>
+        !room.cells.has(position) || board.goals.get(position) === label),
+  });
+  const result = {
+    ...search,
+    importsRequired,
+    exportsRequired,
+    doorwayOccupied: localBoxes.some(([position]) => position === room.gate),
+    entrySide,
+    domain,
+  };
+  metrics.localRoomStates += search.visited;
+  metrics.localRoomMs += now() - started;
+  return memoizeBounded(board.localRoomMemo, cacheKey, result, LOCAL_ROOM_MEMO_LIMIT);
+}
+
+function exactLocalRoomAnalyses(state, board, reachable = reachablePaths(state, board)) {
+  return board.topology.rooms.map(room => exactLocalRoomSearch(state, board, room, reachable));
+}
+
+function localRoomOrderingDelta(analyses, next) {
+  const push = `${next.pushedFrom}>${next.pushedTo}`;
+  let delta = 0;
+  for (const analysis of analyses) {
+    if (analysis.status !== "solvable") continue;
+    const confidence = analysis.kind === "corral" ? 0.2 : 1;
+    if (analysis.firstPushes.has(push)) delta -= confidence;
+    else if (analysis.domain.has(next.pushedFrom) || analysis.domain.has(next.pushedTo)) {
+      delta += 0.2 * confidence;
+    }
+  }
+  return delta;
+}
+
+function inaccessibleFloorComponents(reachable, board) {
   const inaccessible = new Set([...board.floor].filter(position => !reachable.has(position)));
+  const components = [];
   while (inaccessible.size) {
     const start = inaccessible.values().next().value;
     const component = new Set([start]), queue = [start];
@@ -1351,6 +1539,78 @@ function createsSealedCorralDeadlock(state, board, reachable) {
         queue.push(next);
       }
     }
+    components.push(component);
+  }
+  return components;
+}
+
+function exactLocalCorralSearch(state, board, component, reachable) {
+  const metrics = board.metrics;
+  metrics.localCorralCalls++;
+  const occupied = new Map(state.boxes.map(([y, x, label]) => [pkey(y, x), label]));
+  const componentBoxes = [...component].filter(position => occupied.has(position));
+  if (componentBoxes.length === component.size) return null;
+  if (!componentBoxes.some(position => board.goals.get(position) !== occupied.get(position))) {
+    return null;
+  }
+  const boundary = new Set();
+  for (const position of component) {
+    for (const next of floorNeighbors(position, board.floor)) {
+      if (reachable.has(next)) boundary.add(next);
+    }
+  }
+  const domain = new Set([...component, ...boundary]);
+  const localBoxes = state.boxes
+    .map(([y, x, label]) => [pkey(y, x), label])
+    .filter(([position]) => domain.has(position));
+  const entrySide = [...boundary].sort()[0] || "sealed";
+  const componentKey = [...component].sort().join(".");
+  const cacheKey = `${componentKey}|${entrySide}|${localBoxSignature(localBoxes)}`;
+  if (board.localCorralMemo.has(cacheKey)) {
+    metrics.localCorralCacheHits++;
+    return board.localCorralMemo.get(cacheKey);
+  }
+  const started = now();
+  if (!boundary.size || component.size > 16 || domain.size > 24 || localBoxes.length > 5) {
+    const result = {
+      kind: "corral",
+      status: !boundary.size ? "sealed" : "oversized",
+      domain,
+      firstPushes: new Set(),
+      visited: 0,
+      viableBoundaries: 0,
+    };
+    metrics.localCorralMs += now() - started;
+    return memoizeBounded(board.localCorralMemo, cacheKey, result, LOCAL_CORRAL_MEMO_LIMIT);
+  }
+  const componentGoals = [...component].filter(position => board.goals.has(position));
+  const search = exactLocalPushSearch({
+    domain,
+    boxes: localBoxes,
+    robot: entrySide,
+    gate: entrySide,
+    isGoal: (localOccupied, reached) =>
+      [...reached].some(position => component.has(position)) ||
+      (componentGoals.every(goal =>
+        localOccupied.get(goal)?.label === board.goals.get(goal)) &&
+        [...localOccupied].every(([position, {label}]) =>
+          !component.has(position) || board.goals.get(position) === label)),
+  });
+  const result = {...search, kind: "corral", domain};
+  metrics.localCorralStates += search.visited;
+  metrics.localCorralMs += now() - started;
+  return memoizeBounded(board.localCorralMemo, cacheKey, result, LOCAL_CORRAL_MEMO_LIMIT);
+}
+
+function exactLocalCorralAnalyses(state, board, reachable = reachablePaths(state, board)) {
+  return inaccessibleFloorComponents(reachable, board)
+    .map(component => exactLocalCorralSearch(state, board, component, reachable))
+    .filter(Boolean);
+}
+
+function createsSealedCorralDeadlock(state, board, reachable) {
+  const occupied = new Map(state.boxes.map(([y, x, label]) => [pkey(y, x), label]));
+  for (const component of inaccessibleFloorComponents(reachable, board)) {
     const componentBoxes = [...component].filter(position => occupied.has(position));
     if (!componentBoxes.some(position => board.goals.get(position) !== occupied.get(position))) continue;
     const canOpen = componentBoxes.some(position => {
@@ -1783,6 +2043,7 @@ function beamSearch(payload) {
   const topologyWeight = payload.topologyWeight ?? 0.7;
   const evacuationWeight = payload.evacuationWeight ?? 0;
   const supportDependencyWeight = payload.supportDependencyWeight ?? 0.8;
+  const localRoomWeight = payload.localRoomWeight ?? 0.6;
   const beamProfile = payload.beamProfile || "balanced";
   const seed = payload.seed || 0;
   const transpositionLimit = payload.transpositionLimit || Math.max(12000, width * 60);
@@ -1824,6 +2085,10 @@ function beamSearch(payload) {
         break searchLayers;
       }
       const dependencyGraph = supportDependencyGraph(current, board, current.reachable);
+      const localRooms = [
+        ...exactLocalRoomAnalyses(current, board, current.reachable),
+        ...exactLocalCorralAnalyses(current, board, current.reachable),
+      ];
       for (const rawNext of pushNeighbors(current, board, current.reachable)) {
         const expansions = payload.straightMacros
           ? expandStraightPushes(rawNext, board, payload.straightMacroLimit || 8)
@@ -1858,6 +2123,7 @@ function beamSearch(payload) {
         const topology = topologyPenalty(child.boxes, board);
         const packing = goalPackingBonus(child.boxes, board);
         const dependencyDelta = supportDependencyDelta(dependencyGraph, next);
+        const localRoomDelta = localRoomOrderingDelta(localRooms, next);
         const evacuation = evacuationWeight
           ? roomEvacuationPenalty(child.boxes, board)
           : 0;
@@ -1875,10 +2141,12 @@ function beamSearch(payload) {
           evacuationWeight * evacuation -
           goalPackingWeight * packing +
           supportDependencyWeight * dependencyDelta +
+          localRoomWeight * localRoomDelta +
           diversity * signatureNoise(child.exactSignature, seed);
         const exploreScore = topologyWeight * topology + evacuationWeight * evacuation -
           goalPackingWeight * packing +
           supportDependencyWeight * dependencyDelta +
+          localRoomWeight * localRoomDelta +
           diversity * signatureNoise(child.exactSignature, seed + 7919);
         const existing = candidates.get(child.exactSignature);
         if (!existing || score < existing.score) {
@@ -1889,6 +2157,7 @@ function beamSearch(payload) {
             topology,
             evacuation,
             dependencyDelta,
+            localRoomDelta,
             score,
             exploreScore,
             pushClass: next.pushClass,
@@ -2182,6 +2451,10 @@ function boundedPushDepthFirstSearch(payload) {
     transpositions.set(signature, cost);
 
     const dependencyGraph = supportDependencyGraph(state, board, reachable);
+    const localRooms = [
+      ...exactLocalRoomAnalyses(state, board, reachable),
+      ...exactLocalCorralAnalyses(state, board, reachable),
+    ];
     const candidates = [];
     for (const rawNext of pushNeighbors(state, board, reachable)) {
       const next = expandPushMacro(rawNext, board, payload.forcedMacros !== false);
@@ -2231,12 +2504,14 @@ function boundedPushDepthFirstSearch(payload) {
       const evacuation = profile === "evacuation" ? roomEvacuationPenalty(next.boxes, board) : 0;
       const packing = goalPackingBonus(next.boxes, board);
       const dependencyDelta = supportDependencyDelta(dependencyGraph, next);
+      const localRoomDelta = localRoomOrderingDelta(localRooms, next);
       let score = 2.5 * estimate + topology - 0.8 * packing;
       if (profile === "detour") score = 1.5 * estimate + 1.4 * topology - packing;
       if (profile === "setup" && childCost <= 12) score = -estimate + topology - packing;
       if (profile === "room-flow") score = estimate + 6 * topology - packing;
       if (profile === "evacuation") score = estimate + 8 * evacuation + topology - packing;
       score += (payload.supportDependencyWeight ?? 0.8) * dependencyDelta;
+      score += (payload.localRoomWeight ?? 0.6) * localRoomDelta;
       score += (payload.diversity ?? 1.5) *
         signatureNoise(exactPushKey(next, board), seed + childCost);
       candidates.push({next, cost: childCost, score});
@@ -2382,6 +2657,10 @@ function pushIterativeDeepeningAStar(payload) {
     transpositions.set(signature, cost);
 
     const dependencyGraph = supportDependencyGraph(state, board, reachable);
+    const localRooms = [
+      ...exactLocalRoomAnalyses(state, board, reachable),
+      ...exactLocalCorralAnalyses(state, board, reachable),
+    ];
     let nextThreshold = Infinity;
     const candidates = [];
     for (const rawNext of pushNeighbors(state, board, reachable)) {
@@ -2409,6 +2688,7 @@ function pushIterativeDeepeningAStar(payload) {
         score: orderingScore(next, childCost) +
           (payload.supportDependencyWeight ?? 0.5) *
             supportDependencyDelta(dependencyGraph, next) +
+          (payload.localRoomWeight ?? 0.4) * localRoomOrderingDelta(localRooms, next) +
           (payload.diversity ?? 0.2) *
             signatureNoise(exactPushKey(next, board), seed + childCost),
       });
