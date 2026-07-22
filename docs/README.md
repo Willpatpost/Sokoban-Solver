@@ -19,7 +19,10 @@ worker supplies it. The on-screen field renders the newest 1,500 entries, while
 Copy preserves the complete in-memory log for long-run analysis.
 Direct-search completions also report compiled-graph construction, dense-board
 index construction, heuristic, robot-reachability, cache-hit, push-generation,
-goal-commitment, support-dependency, local-room/corral, typed doorway-flow, and pruning measurements. Robot flood fills and forward push generation use
+goal-commitment, support-dependency, local-room/corral, typed doorway-flow, heap,
+worker startup/wall-clock/termination, and pruning measurements. Unsupported
+browser heap APIs are omitted rather than displayed as zero. Robot flood fills
+and forward push generation use
 immutable integer cell IDs and typed arrays while retaining string coordinates
 at module boundaries for compatible logs, checkpoints, and replay paths.
 Canonical box layouts and robot regions use collision-free dense base-36 keys.

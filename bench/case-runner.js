@@ -48,6 +48,8 @@ function loadWorker(progress, streamProgress) {
     },
     onmessage: null,
     console,
+    performance,
+    __sokomindMemoryUsage: () => process.memoryUsage().heapUsed,
   };
   vm.runInNewContext(source, context, {filename: "solver-worker.js"});
   return context;
@@ -141,10 +143,14 @@ function progressSummary(messages) {
 }
 
 function runCase(caseSpec) {
+  const runStarted = performance.now();
+  const heapStartBytes = process.memoryUsage().heapUsed;
   const levelRows = caseSpec.rows || LEVELS[caseSpec.level];
   if (!levelRows) throw new Error(`Unknown benchmark level: ${caseSpec.level}`);
   const progress = [];
+  const loadStarted = performance.now();
   const worker = loadWorker(progress, Boolean(caseSpec.streamProgress));
+  const workerLoadMs = performance.now() - loadStarted;
   const payload = {
     algorithm: caseSpec.algorithm || "push-beam",
     state: stateFromRows(levelRows),
@@ -153,8 +159,11 @@ function runCase(caseSpec) {
   const started = performance.now();
   const result = worker.search(payload);
   const elapsedMs = Math.round(performance.now() - started);
+  const validationStarted = performance.now();
   const validation = validatePathToGoal(levelRows, result.path);
   const checkpointEvaluation = evaluateCheckpoints(levelRows, result);
+  const validationMs = performance.now() - validationStarted;
+  const heapEndBytes = process.memoryUsage().heapUsed;
   return {
     name: caseSpec.name || `${caseSpec.level}:${payload.algorithm}`,
     level: caseSpec.level || "custom",
@@ -172,6 +181,16 @@ function runCase(caseSpec) {
     checkpointCount: result.checkpoints?.length || 0,
     checkpointEvaluation,
     performance: result.performance,
+    runnerLifecycle: {
+      workerLoadMs: Math.round(workerLoadMs * 1000) / 1000,
+      searchMs: elapsedMs,
+      validationMs: Math.round(validationMs * 1000) / 1000,
+      totalMs: Math.round((performance.now() - runStarted) * 1000) / 1000,
+      heapStartBytes,
+      heapEndBytes,
+      heapDeltaBytes: heapEndBytes - heapStartBytes,
+      explicitGcAvailable: typeof global.gc === "function",
+    },
     progress: progressSummary(progress),
     validation,
   };

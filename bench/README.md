@@ -43,6 +43,9 @@ The final JSON object contains:
 - `solved`: replay-valid solutions found.
 - `valid`: false if any returned path failed replay validation.
 - `totalVisited`: total solver states visited across child processes.
+- `memorySupportedCases` and `peakHeapBytes`: suite-wide heap coverage and peak.
+- `totalChildProcessMs` and `totalShutdownMs`: aggregate isolated-runner lifecycle
+  and post-result process shutdown time.
 - `totalScore`: single scalar objective for evolutionary search.
 - `cases`: per-case timing, visited states, solution length, pushes, estimates,
   replay-validated checkpoint evaluation, cutoff reason, and compact progress
@@ -53,6 +56,10 @@ The final JSON object contains:
   pushes, compact-signature construction/cache behavior, and deadlock prunes.
   Prepared-board reuse and safe-fallback counts are included when a caller
   supplies a planner-generated immutable board seed.
+- Each case also includes `runnerLifecycle` for worker loading, search,
+  validation, total time, and heap delta, plus `processLifecycle` for first
+  output, result delivery, shutdown, and total child-process time. Heap fields
+  explicitly report unsupported hosts instead of substituting zero.
 
 For AlphaEvolve, optimize `totalScore` while treating any `valid: false` or
 non-zero `errors` as a hard rejection. The benchmark intentionally rewards a

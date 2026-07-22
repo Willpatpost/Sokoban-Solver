@@ -1310,6 +1310,10 @@ function runBidirectionalSolver(purpose, analysis) {
           signatureCacheHits: data.performance?.signatureCacheHits,
           heuristicMs: data.performance?.heuristicMs,
           commitmentMs: data.performance?.commitmentMs,
+          heapMB: data.performance?.heapSupported
+            ? (data.performance.heapUsedBytes / 1048576).toFixed(1) : undefined,
+          peakHeapMB: data.performance?.heapSupported
+            ? (data.performance.heapPeakBytes / 1048576).toFixed(1) : undefined,
           supportDependencyMs: data.performance?.supportDependencyMs,
           localRoomMs: data.performance?.localRoomMs,
           localCorralMs: data.performance?.localCorralMs,
@@ -1385,6 +1389,10 @@ function runBidirectionalSolver(purpose, analysis) {
           signatureCacheHits: data.performance?.signatureCacheHits,
           heuristicMs: data.performance?.heuristicMs,
           commitmentMs: data.performance?.commitmentMs,
+          heapMB: data.performance?.heapSupported
+            ? (data.performance.heapUsedBytes / 1048576).toFixed(1) : undefined,
+          peakHeapMB: data.performance?.heapSupported
+            ? (data.performance.heapPeakBytes / 1048576).toFixed(1) : undefined,
           supportDependencyMs: data.performance?.supportDependencyMs,
           localRoomMs: data.performance?.localRoomMs,
           localCorralMs: data.performance?.localCorralMs,
@@ -1560,12 +1568,14 @@ function startSolver(purpose) {
     const plan = queue.shift(), worker = new Worker(SOLVER_WORKER_URL);
     workers.push(worker); active.set(worker, plan);
     const launchedAt = performance.now();
+    let firstMessageMs = null;
     appendSearchLog("worker", `Started ${plan.label}`, {
       algorithm: plan.algorithm, budget: plan.maxVisited?.toLocaleString(),
       width: plan.beamWidth,
     });
     worker.onmessage = ({data}) => {
       if (settled) return;
+      if (firstMessageMs === null) firstMessageMs = performance.now() - launchedAt;
       if (data.type === "progress") {
         const seconds = Math.max(.001, (performance.now() - launchedAt) / 1000);
         appendSearchLog("progress", plan.label, {
@@ -1573,6 +1583,7 @@ function startSolver(purpose) {
           rate: `${Math.round(data.visited / seconds).toLocaleString()}/s`,
           h: Number.isFinite(data.bestEstimate) ? data.bestEstimate : undefined,
           depth: data.depth, threshold: data.threshold, frontier: data.frontier,
+          firstMessageMs: Math.round(firstMessageMs),
           graphMs: data.performance?.graphCompileMs,
           denseMs: data.performance?.denseBuildMs,
           preparedBoardReuses: data.performance?.preparedBoardReuses,
@@ -1580,6 +1591,10 @@ function startSolver(purpose) {
           heuristicMs: data.performance?.heuristicMs,
           commitmentMs: data.performance?.commitmentMs,
           commitmentBoxLocks: data.performance?.commitmentBoxLocks,
+          heapMB: data.performance?.heapSupported
+            ? (data.performance.heapUsedBytes / 1048576).toFixed(1) : undefined,
+          peakHeapMB: data.performance?.heapSupported
+            ? (data.performance.heapPeakBytes / 1048576).toFixed(1) : undefined,
           supportDependencyMs: data.performance?.supportDependencyMs,
           localRoomMs: data.performance?.localRoomMs,
           localCorralMs: data.performance?.localCorralMs,
@@ -1589,13 +1604,18 @@ function startSolver(purpose) {
         setStatus(`${active.size} worker${active.size === 1 ? "" : "s"} searching... ${plan.label}: ${data.visited.toLocaleString()} states`);
         return;
       }
+      const terminateStarted = performance.now();
       worker.terminate();
+      const terminateCallMs = performance.now() - terminateStarted;
       workers = workers.filter(item => item !== worker);
       active.delete(worker);
       totalVisited += data.visited || 0;
       appendSearchLog("worker", `Finished ${plan.label}`, {
         visited: (data.visited || 0).toLocaleString(), solved: Boolean(data.path),
         cutoff: Boolean(data.cutoff),
+        firstMessageMs: Math.round(firstMessageMs),
+        wallMs: Math.round(performance.now() - launchedAt),
+        terminateCallMs: Math.round(terminateCallMs * 1000) / 1000,
         h: Number.isFinite(data.bestEstimate) ? data.bestEstimate : undefined,
         profileMs: data.performance?.totalMs,
         graphMs: data.performance?.graphCompileMs,
@@ -1606,6 +1626,12 @@ function startSolver(purpose) {
         heuristicMs: data.performance?.heuristicMs,
         commitmentMs: data.performance?.commitmentMs,
         commitmentBoxLocks: data.performance?.commitmentBoxLocks,
+        heapMB: data.performance?.heapSupported
+          ? (data.performance.heapUsedBytes / 1048576).toFixed(1) : undefined,
+        peakHeapMB: data.performance?.heapSupported
+          ? (data.performance.heapPeakBytes / 1048576).toFixed(1) : undefined,
+        heapDeltaMB: data.performance?.heapSupported
+          ? (data.performance.heapDeltaBytes / 1048576).toFixed(1) : undefined,
         supportDependencyMs: data.performance?.supportDependencyMs,
         localRoomMs: data.performance?.localRoomMs,
         localCorralMs: data.performance?.localCorralMs,
@@ -1619,7 +1645,12 @@ function startSolver(purpose) {
           appendSearchLog("solution", `${plan.label} produced a replay-validated solution`, {
             moves: path.length, states: totalVisited.toLocaleString(),
           });
+          const cancellationStarted = performance.now(), cancelledWorkers = workers.length;
           workers.forEach(item => item.terminate()); workers = [];
+          appendSearchLog("lifecycle", "Stopped remaining portfolio workers", {
+            workers: cancelledWorkers,
+            terminateCallsMs: Math.round((performance.now() - cancellationStarted) * 1000) / 1000,
+          });
           setControlsBusy(false);
           if (purpose === "hint") {
             setStatus(path.length
@@ -1645,10 +1676,16 @@ function startSolver(purpose) {
     };
     worker.onerror = () => {
       if (settled) return;
+      const failedAt = performance.now(), terminateStarted = performance.now();
       worker.terminate();
+      const terminateCallMs = performance.now() - terminateStarted;
       workers = workers.filter(item => item !== worker);
       active.delete(worker);
-      appendSearchLog("error", `${plan.label} worker failed`);
+      appendSearchLog("error", `${plan.label} worker failed`, {
+        firstMessageMs: firstMessageMs === null ? undefined : Math.round(firstMessageMs),
+        wallMs: Math.round(failedAt - launchedAt),
+        terminateCallMs: Math.round(terminateCallMs * 1000) / 1000,
+      });
       finished.push({visited: 0});
       launchNext();
       if (!queue.length && active.size === 0) {

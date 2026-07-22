@@ -587,6 +587,11 @@ test("search results expose bounded hot-path performance telemetry", () => {
     state: stateFromRows(["OOOOO", "O R O", "O A O", "O a O", "OOOOO"]),
   });
   assert.ok(result.performance.totalMs >= 0);
+  assert.equal(result.performance.heapSupported, false);
+  assert.equal(result.performance.heapUsedBytes, null);
+  assert.equal(result.performance.heapPeakBytes, null);
+  assert.equal(result.performance.heapDeltaBytes, null);
+  assert.equal(result.performance.heapSamples, 0);
   assert.ok(result.performance.graphNodes > 0);
   assert.ok(result.performance.graphEdges > 0);
   assert.ok(result.performance.denseCells > 0);

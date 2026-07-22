@@ -169,10 +169,12 @@ function runChild(caseSpec) {
       JSON.stringify({...caseSpec, streamProgress: true}),
     ], {stdio: ["ignore", "pipe", "pipe"]});
     let stdout = "", stderr = "", settled = false, lastProgress = null, finalResult = null;
+    let firstOutputAt = null, resultAt = null;
     const timer = setTimeout(() => {
       if (!settled) child.kill();
     }, timeout);
     child.stdout.on("data", chunk => {
+      if (firstOutputAt === null) firstOutputAt = performance.now();
       stdout += chunk;
       const lines = stdout.split(/\r?\n/);
       stdout = lines.pop();
@@ -185,22 +187,29 @@ function runChild(caseSpec) {
           continue;
         }
         if (event.type === "progress") lastProgress = event.message;
-        else if (event.type === "result") finalResult = event.result;
-        else if (event.type === "error") finalResult = {
-          name: caseSpec.name,
-          level: caseSpec.level,
-          algorithm: caseSpec.algorithm,
-          error: event.error,
-          stack: event.stack,
-          valid: false,
-          solved: false,
-        };
+        else if (event.type === "result") {
+          finalResult = event.result;
+          resultAt = performance.now();
+        }
+        else if (event.type === "error") {
+          finalResult = {
+            name: caseSpec.name,
+            level: caseSpec.level,
+            algorithm: caseSpec.algorithm,
+            error: event.error,
+            stack: event.stack,
+            valid: false,
+            solved: false,
+          };
+          resultAt = performance.now();
+        }
       }
     });
     child.stderr.on("data", chunk => {
       stderr += chunk;
     });
     child.on("close", (code, signal) => {
+      const closedAt = performance.now();
       clearTimeout(timer);
       settled = true;
       if (signal) {
@@ -210,13 +219,20 @@ function runChild(caseSpec) {
           algorithm: caseSpec.algorithm,
           timeout: true,
           timeoutMs: timeout,
-          elapsedMs: Math.round(performance.now() - started),
+          elapsedMs: Math.round(closedAt - started),
           valid: true,
           solved: false,
           visited: lastProgress?.visited || 0,
           bestEstimate: lastProgress?.bestEstimate,
           bestPushes: lastProgress?.bestPushes,
           progress: {messages: lastProgress ? 1 : 0, last: lastProgress},
+          processLifecycle: {
+            spawnToFirstOutputMs: firstOutputAt === null ? null :
+              Math.round((firstOutputAt - started) * 1000) / 1000,
+            spawnToResultMs: null,
+            shutdownMs: null,
+            totalMs: Math.round((closedAt - started) * 1000) / 1000,
+          },
           stderr: stderr.trim(),
         });
         return;
@@ -225,6 +241,7 @@ function runChild(caseSpec) {
         try {
           const event = JSON.parse(stdout.trim());
           finalResult = event.type === "result" ? event.result : event;
+          resultAt = closedAt;
         } catch (parseError) {
           finalResult = {
             name: caseSpec.name,
@@ -250,6 +267,15 @@ function runChild(caseSpec) {
       };
       if (code && !result.error) result.error = `Case runner exited with code ${code}`;
       if (stderr.trim()) result.stderr = stderr.trim();
+      result.processLifecycle = {
+        spawnToFirstOutputMs: firstOutputAt === null ? null :
+          Math.round((firstOutputAt - started) * 1000) / 1000,
+        spawnToResultMs: resultAt === null ? null :
+          Math.round((resultAt - started) * 1000) / 1000,
+        shutdownMs: resultAt === null ? null :
+          Math.round((closedAt - resultAt) * 1000) / 1000,
+        totalMs: Math.round((closedAt - started) * 1000) / 1000,
+      };
       resolve(result);
     });
   });
@@ -300,6 +326,13 @@ async function main() {
     timeouts: results.filter(result => result.timeout).length,
     errors: results.filter(result => result.error).length,
     totalVisited: results.reduce((sum, result) => sum + (result.visited || 0), 0),
+    memorySupportedCases: results.filter(result => result.performance?.heapSupported).length,
+    peakHeapBytes: results.reduce((peak, result) =>
+      Math.max(peak, result.performance?.heapPeakBytes || 0), 0),
+    totalChildProcessMs: Math.round(results.reduce((sum, result) =>
+      sum + (result.processLifecycle?.totalMs || 0), 0) * 1000) / 1000,
+    totalShutdownMs: Math.round(results.reduce((sum, result) =>
+      sum + (result.processLifecycle?.shutdownMs || 0), 0) * 1000) / 1000,
     totalScore: results.reduce((sum, result) => sum + result.score, 0),
     cases: results,
   };
@@ -314,4 +347,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = {buildCases, caseScore, parseArgs, SUITES};
+module.exports = {buildCases, caseScore, parseArgs, runChild, SUITES};

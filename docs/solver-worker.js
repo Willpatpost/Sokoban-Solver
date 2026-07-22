@@ -63,10 +63,39 @@ let activePerformance = null;
 
 const now = () => globalThis.performance?.now?.() ?? Date.now();
 
+function currentHeapBytes() {
+  let injected = null;
+  try {
+    injected = globalThis.__sokomindMemoryUsage?.();
+  } catch (_error) {
+    injected = null;
+  }
+  if (Number.isFinite(injected) && injected >= 0) return Math.round(injected);
+  const browserHeap = globalThis.performance?.memory?.usedJSHeapSize;
+  return Number.isFinite(browserHeap) && browserHeap >= 0 ? Math.round(browserHeap) : null;
+}
+
+function samplePerformanceMemory(metrics) {
+  const heap = currentHeapBytes();
+  if (heap === null) return;
+  if (metrics._heapStartBytes === null) metrics._heapStartBytes = heap;
+  metrics.heapSupported = true;
+  metrics.heapUsedBytes = heap;
+  metrics.heapPeakBytes = Math.max(metrics.heapPeakBytes || 0, heap);
+  metrics.heapDeltaBytes = heap - metrics._heapStartBytes;
+  metrics.heapSamples++;
+}
+
 function createPerformanceMetrics() {
-  return {
+  const metrics = {
     _startedAt: now(),
+    _heapStartBytes: null,
     totalMs: 0,
+    heapSupported: false,
+    heapUsedBytes: null,
+    heapPeakBytes: null,
+    heapDeltaBytes: null,
+    heapSamples: 0,
     parseMs: 0,
     graphCompileMs: 0,
     graphNodes: 0,
@@ -115,14 +144,18 @@ function createPerformanceMetrics() {
     staticDeadPrunes: 0,
     dynamicDeadPrunes: 0,
   };
+  samplePerformanceMemory(metrics);
+  return metrics;
 }
 
 function performanceSnapshot(metrics) {
+  samplePerformanceMemory(metrics);
   const rounded = {
     ...metrics,
     totalMs: metrics._startedAt === null ? metrics.totalMs : now() - metrics._startedAt,
   };
   delete rounded._startedAt;
+  delete rounded._heapStartBytes;
   for (const key of ["totalMs", "parseMs", "graphCompileMs", "denseBuildMs", "signatureMs", "heuristicMs", "commitmentMs", "supportDependencyMs", "localRoomMs", "localCorralMs", "doorwayFlowMs", "pushDistanceMs", "reachabilityMs"]) {
     rounded[key] = Math.round((rounded[key] || 0) * 1000) / 1000;
   }
