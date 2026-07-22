@@ -7,8 +7,6 @@ on:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
   group: pages
@@ -26,10 +24,15 @@ jobs:
         with:
           node-version: "22"
       - run: python -m unittest discover -v
-      - run: node --test docs/solver-worker.test.js docs/path-validation.test.js
+      - run: node --test docs/solver-worker.test.js docs/path-validation.test.js docs/director-policy.test.js docs/keyboard-policy.test.js
+      - run: node bench/benchmark.js --suite smoke
 
   deploy:
     needs: test
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

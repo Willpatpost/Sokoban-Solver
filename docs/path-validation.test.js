@@ -40,10 +40,12 @@ test("web UI exposes a separate copyable search log", () => {
   assert.match(html, /id="copy-search-json"/);
   assert.match(html, /levels\.js\?build=[\s\S]*app\.js\?build=/);
   assert.match(html, /director-policy\.js/);
+  assert.match(html, /keyboard-policy\.js[\s\S]*app\.js/);
   assert.match(app, /function appendSearchLog\(/);
   assert.match(app, /algorithm: "analyze-puzzle"/);
   assert.match(app, /copy-search-log/);
   assert.match(app, /searchLogJsonLines/);
+  assert.match(app, /SokomindKeyboard\.shouldIgnoreGameShortcut\(event\.target\)/);
 });
 
 test("Ultimate scheduling retires stale phases and reclaims silent workers", () => {

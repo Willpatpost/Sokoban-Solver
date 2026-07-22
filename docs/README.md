@@ -176,7 +176,7 @@ Then open `http://localhost:8000`.
 From the repository root:
 
 ```powershell
-node --test docs/solver-worker.test.js docs/path-validation.test.js
+node --test docs/solver-worker.test.js docs/path-validation.test.js docs/director-policy.test.js docs/keyboard-policy.test.js
 node bench/benchmark.js --suite smoke
 ```
 

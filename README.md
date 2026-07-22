@@ -13,7 +13,7 @@ Run the automated solver tests with:
 
 ```powershell
 python -m unittest discover -v
-node --test docs/solver-worker.test.js docs/path-validation.test.js
+node --test docs/solver-worker.test.js docs/path-validation.test.js docs/director-policy.test.js docs/keyboard-policy.test.js
 node bench/benchmark.js --suite smoke
 ```
 
