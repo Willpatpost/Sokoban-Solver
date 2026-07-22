@@ -13,13 +13,18 @@ Run the automated solver tests with:
 
 ```powershell
 python -m unittest discover -v
-node --test docs/solver-worker.test.js docs/path-validation.test.js docs/director-policy.test.js docs/keyboard-policy.test.js
-node --test docs/pruning-differential.test.js bench/evaluator.test.js bench/generated-cases.test.js bench/benchmark.test.js
+node --test docs/solver-worker.test.js docs/path-validation.test.js docs/director-policy.test.js docs/keyboard-policy.test.js docs/conformance.test.js
+node --test docs/pruning-differential.test.js bench/evaluator.test.js bench/generated-cases.test.js bench/benchmark.test.js bench/conformance.test.js
 node bench/benchmark.js --suite smoke
 node bench/benchmark.js --suite validation
 ```
 
 On Windows, use `py -m unittest discover -v` if `python` is not on PATH.
+
+The canonical level catalog and cross-runtime parsing/rule cases live in
+`shared/sokomind-conformance.json`. Python loads its built-in levels from this
+file; browser-embedded levels and benchmark replay rules are checked against the
+same fixtures in CI.
 
 
 ## Proof that the huge puzzle is solvable:

@@ -1,0 +1,90 @@
+{
+  "schemaVersion": 1,
+  "levels": {
+    "ultra-tiny": ["OOOOO", "O R O", "O A O", "O a O", "OOOOO"],
+    "tiny": ["OOOOOO", "O R  O", "O XO O", "OO A O", "OSa  O", "OOOOOO"],
+    "medium": ["OOOOOOO", "Oa   bO", "O AXB O", "O XRX O", "OSCXDSO", "OcS SdO", "OOOOOOO"],
+    "large": ["OOOOOOOOOO", "OOOOOOOSSO", "OOOOO  abO", "OOOOO XSSO", "OOOOOO  OO", "OR     OOO", "OO A X X O", "OO BXO O O", "OO   O   O", "OOOOOOOOOO"],
+    "huge": ["OOOOOOOOOOOOOOO", "OaSS   S   SSbO", "OSCS  OOO  SDSO", "OX X  OOO  X XO", "O     OOO     O", "OOOO   X   OOOO", "O      O      O", "O G hOOOOOH g O", "O      O      O", "OOO         OOO", "OOO   X X   OOO", "OOOOOOOROOOOOOO", "O B X X X X A O", "O Sc       dS O", "OOOOOOOOOOOOOOO"]
+  },
+  "validCases": [
+    {
+      "id": "dedicated-one-push",
+      "rows": ["OOOOO", "O R O", "O A O", "O a O", "OOOOO"],
+      "expected": {
+        "width": 5,
+        "height": 5,
+        "floorCount": 9,
+        "robot": "1,2",
+        "boxes": [["2,2", "A"]],
+        "goals": [["3,2", "A"]],
+        "legalMoves": ["Down", "Left", "Right"],
+        "mechanicalMoves": ["Down", "Left", "Right"],
+        "solved": false
+      }
+    },
+    {
+      "id": "generic-dead-square",
+      "rows": ["OOOOOO", "O    O", "O RX O", "O  S O", "OOOOOO"],
+      "expected": {
+        "width": 6,
+        "height": 5,
+        "floorCount": 12,
+        "robot": "2,2",
+        "boxes": [["2,3", "X"]],
+        "goals": [["3,3", "X"]],
+        "legalMoves": ["Down", "Left", "Up"],
+        "mechanicalMoves": ["Down", "Left", "Right", "Up"],
+        "solved": false
+      }
+    },
+    {
+      "id": "ragged-missing-cells-are-walls",
+      "rows": ["OOOOO", "OR  O", "OOOO", "OaA O", "OOOOO"],
+      "expected": {
+        "width": 5,
+        "height": 5,
+        "floorCount": 6,
+        "robot": "1,1",
+        "boxes": [["3,2", "A"]],
+        "goals": [["3,1", "A"]],
+        "legalMoves": ["Right"],
+        "mechanicalMoves": ["Right"],
+        "solved": false,
+        "missingWall": "2,4"
+      }
+    }
+  ],
+  "invalidCases": [
+    {
+      "id": "unsupported-symbol",
+      "rows": ["OOO", "ORO", "O?O", "OOO"],
+      "errorKind": "symbol"
+    },
+    {
+      "id": "reserved-lowercase-goal",
+      "rows": ["OOOOO", "OR xO", "OOOOO"],
+      "errorKind": "symbol"
+    },
+    {
+      "id": "missing-robot",
+      "rows": ["OOO", "O O", "OOO"],
+      "errorKind": "robot-count"
+    },
+    {
+      "id": "duplicate-robot",
+      "rows": ["OOOO", "ORRO", "OOOO"],
+      "errorKind": "robot-count"
+    },
+    {
+      "id": "generic-count-mismatch",
+      "rows": ["OOO", "ORO", "OXO", "OOO"],
+      "errorKind": "box-goal-count"
+    },
+    {
+      "id": "dedicated-count-mismatch",
+      "rows": ["OOOOO", "OR AO", "OOOOO"],
+      "errorKind": "box-goal-count"
+    }
+  ]
+}

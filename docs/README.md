@@ -194,11 +194,16 @@ Then open `http://localhost:8000`.
 From the repository root:
 
 ```powershell
-node --test docs/solver-worker.test.js docs/path-validation.test.js docs/director-policy.test.js docs/keyboard-policy.test.js
-node --test docs/pruning-differential.test.js bench/evaluator.test.js bench/generated-cases.test.js bench/benchmark.test.js
+node --test docs/solver-worker.test.js docs/path-validation.test.js docs/director-policy.test.js docs/keyboard-policy.test.js docs/conformance.test.js
+node --test docs/pruning-differential.test.js bench/evaluator.test.js bench/generated-cases.test.js bench/benchmark.test.js bench/conformance.test.js
 node bench/benchmark.js --suite smoke
 node bench/benchmark.js --suite validation
 ```
+
+The shared conformance fixtures verify that Python, the browser worker, and the
+benchmark replay engine agree on the level catalog, symbols, typed and generic
+box/goal counts, ragged walls, goal semantics, mechanically legal moves, and
+deadlock-pruned search successors.
 
 ## Benchmarking
 

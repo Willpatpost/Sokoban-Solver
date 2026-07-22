@@ -344,6 +344,49 @@ function hydratePreparedBoard(data, seed, metrics) {
   };
 }
 
+function validatePuzzleRows(rows) {
+  if (!Array.isArray(rows) || !rows.length) throw new Error("Puzzle is empty.");
+  if (rows.some(row => typeof row !== "string")) {
+    throw new Error("Every puzzle row must be a string.");
+  }
+  const reserved = new Set(["O", "R", "S", "X"]);
+  const boxCounts = new Map(), goalCounts = new Map();
+  let robots = 0;
+  rows.forEach((row, y) => [...row].forEach((cell, x) => {
+    const uppercase = cell >= "A" && cell <= "Z";
+    const lowercase = cell >= "a" && cell <= "z";
+    const dedicatedBox = uppercase && !reserved.has(cell);
+    const dedicatedGoal = lowercase && !reserved.has(cell.toUpperCase());
+    if (!(cell === " " || reserved.has(cell) || dedicatedBox || dedicatedGoal)) {
+      throw new Error(`Unsupported symbol ${JSON.stringify(cell)} at row ${y + 1}, column ${x + 1}.`);
+    }
+    if (cell === "R") robots++;
+    if (cell === "X" || dedicatedBox) {
+      boxCounts.set(cell, (boxCounts.get(cell) || 0) + 1);
+    }
+    if (cell === "S") goalCounts.set("X", (goalCounts.get("X") || 0) + 1);
+    if (dedicatedGoal) {
+      const label = cell.toUpperCase();
+      goalCounts.set(label, (goalCounts.get(label) || 0) + 1);
+    }
+  }));
+  if (robots !== 1) {
+    throw new Error(`Puzzle must contain exactly one robot; found ${robots}.`);
+  }
+  const labels = new Set([...boxCounts.keys(), ...goalCounts.keys()]);
+  for (const label of [...labels].sort()) {
+    const boxes = boxCounts.get(label) || 0, goals = goalCounts.get(label) || 0;
+    if (boxes === goals) continue;
+    if (label === "X") {
+      throw new Error(`Generic boxes/goals mismatch: ${boxes} box(es), ${goals} goal(s).`);
+    }
+    throw new Error(
+      `Dedicated box ${JSON.stringify(label)} has ${boxes} box(es) but ${goals} goal(s).`,
+    );
+  }
+  return true;
+}
+
 function parse(data) {
   const parseStarted = now();
   const metrics = activePerformance || createPerformanceMetrics();
@@ -941,7 +984,7 @@ function createsDynamicDeadlock(boxes, board, movedBox) {
     createsFrozenComponentDeadlock(boxes, board, movedBox);
   return memoizeBounded(board.deadlockMemo, signature, deadlocked, DEADLOCK_MEMO_LIMIT);
 }
-function neighbors(state, board) {
+function neighbors(state, board, pruneDeadlocks = true) {
   const occupied = denseOccupancy(state, board), result = [];
   const robotId = board.dense.idByKey.get(pkey(state.robot[0], state.robot[1]));
   for (let direction = 0; direction < DIRECTION_ENTRIES.length; direction++) {
@@ -957,8 +1000,8 @@ function neighbors(state, board) {
       const by = board.dense.y[beyondId], bx = board.dense.x[beyondId];
       const index = occupied[nextId], label = boxes[index][2];
       boxes = boxes.map((b, i) => i === index ? [by, bx, label] : b);
-      if (staticDead(by, bx, board, label) ||
-          createsDynamicDeadlock(boxes, board, [by, bx])) continue;
+      if (pruneDeadlocks && (staticDead(by, bx, board, label) ||
+          createsDynamicDeadlock(boxes, board, [by, bx]))) continue;
     }
     result.push({robot: [ny, nx], boxes, move});
   }
@@ -2323,6 +2366,7 @@ function bridgeAStarSearch(payload) {
 }
 
 function bidirectionalSide(payload) {
+  validatePuzzleRows(payload.state.rows);
   const board = parse(payload.state);
   const initialBoxes = payload.state.boxes.map(([p, label]) => [...p.split(",").map(Number), label]);
   const initialTargets = targetMapFromBoxes(initialBoxes, board);
@@ -2599,6 +2643,7 @@ function search(payload) {
   const started = now();
   activePerformance = metrics;
   try {
+    if (payload.state?.rows) validatePuzzleRows(payload.state.rows);
     const result = searchCore(payload);
     if (rootSearch) {
       metrics.totalMs = now() - started;

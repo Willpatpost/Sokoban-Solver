@@ -6,6 +6,36 @@ const {LEVELS, stateFromRows} = require("../docs/levels.js");
 const {evaluateCheckpoints} = require("./evaluator.js");
 
 const DIRS = {Up: [-1, 0], Down: [1, 0], Left: [0, -1], Right: [0, 1]};
+const RESERVED = new Set(["O", "R", "S", "X"]);
+
+function validateRows(rows) {
+  if (!Array.isArray(rows) || !rows.length) throw new Error("Puzzle is empty.");
+  if (rows.some(row => typeof row !== "string")) {
+    throw new Error("Every puzzle row must be a string.");
+  }
+  const boxes = new Map(), goals = new Map();
+  let robots = 0;
+  rows.forEach((row, y) => [...row].forEach((cell, x) => {
+    const uppercase = cell >= "A" && cell <= "Z";
+    const lowercase = cell >= "a" && cell <= "z";
+    const dedicatedBox = uppercase && !RESERVED.has(cell);
+    const dedicatedGoal = lowercase && !RESERVED.has(cell.toUpperCase());
+    if (!(cell === " " || RESERVED.has(cell) || dedicatedBox || dedicatedGoal)) {
+      throw new Error(`Unsupported symbol ${JSON.stringify(cell)} at row ${y + 1}, column ${x + 1}.`);
+    }
+    if (cell === "R") robots++;
+    if (cell === "X" || dedicatedBox) boxes.set(cell, (boxes.get(cell) || 0) + 1);
+    const goalLabel = cell === "S" ? "X" : dedicatedGoal ? cell.toUpperCase() : null;
+    if (goalLabel) goals.set(goalLabel, (goals.get(goalLabel) || 0) + 1);
+  }));
+  if (robots !== 1) throw new Error(`Puzzle must contain exactly one robot; found ${robots}.`);
+  for (const label of new Set([...boxes.keys(), ...goals.keys()])) {
+    if ((boxes.get(label) || 0) !== (goals.get(label) || 0)) {
+      throw new Error(`Boxes/goals mismatch for ${label}.`);
+    }
+  }
+  return true;
+}
 
 function loadWorker(progress, streamProgress) {
   const source = fs.readFileSync(path.join(__dirname, "..", "docs", "solver-worker.js"), "utf8");
@@ -24,6 +54,7 @@ function loadWorker(progress, streamProgress) {
 }
 
 function parseRows(rows) {
+  validateRows(rows);
   const board = {rows, walls: new Set(), goals: new Map(), floor: new Set()};
   const boxes = new Map();
   let robot = null;
@@ -146,18 +177,22 @@ function runCase(caseSpec) {
   };
 }
 
-try {
-  const caseSpec = JSON.parse(process.argv[2] || "{}");
-  const result = runCase(caseSpec);
-  process.stdout.write(`${JSON.stringify(
-    caseSpec.streamProgress ? {type: "result", result} : result,
-  )}\n`);
-} catch (error) {
-  process.stdout.write(`${JSON.stringify(process.argv[2]?.includes("streamProgress")
-    ? {type: "error", error: error.message, stack: error.stack}
-    : {
-    error: error.message,
-    stack: error.stack,
-  })}\n`);
-  process.exitCode = 1;
+if (require.main === module) {
+  try {
+    const caseSpec = JSON.parse(process.argv[2] || "{}");
+    const result = runCase(caseSpec);
+    process.stdout.write(`${JSON.stringify(
+      caseSpec.streamProgress ? {type: "result", result} : result,
+    )}\n`);
+  } catch (error) {
+    process.stdout.write(`${JSON.stringify(process.argv[2]?.includes("streamProgress")
+      ? {type: "error", error: error.message, stack: error.stack}
+      : {
+      error: error.message,
+      stack: error.stack,
+    })}\n`);
+    process.exitCode = 1;
+  }
 }
+
+module.exports = {parseRows, moveState, runCase, validatePathToGoal, validateRows};

@@ -1,4 +1,5 @@
 import io
+import json
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -7,6 +8,7 @@ from threading import Event
 
 from Searches.Sokomind import (
     BUILTIN_PUZZLES,
+    CONFORMANCE_PATH,
     PuzzleError,
     apply_move,
     a_star_search,
@@ -21,6 +23,52 @@ from Searches.Sokomind import (
 
 
 class SokomindTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.conformance = json.loads(CONFORMANCE_PATH.read_text(encoding="utf-8"))
+
+    def test_shared_valid_conformance_cases(self):
+        for case in self.conformance["validCases"]:
+            with self.subTest(case=case["id"]):
+                expected = case["expected"]
+                state = parse_puzzle(case["rows"])
+                goals = [(position, "X") for position in state.board.generic_goals]
+                for label, positions in state.board.dedicated_goals:
+                    goals.extend((position, label) for position in positions)
+                boxes = sorted((f"{y},{x}", label) for label, (y, x) in state.boxes)
+                encoded_goals = sorted((f"{y},{x}", label) for (y, x), label in goals)
+
+                self.assertEqual(expected["width"], len(state.board.rows[0]))
+                self.assertEqual(expected["height"], len(state.board.rows))
+                self.assertEqual(expected["floorCount"], len(state.board.floor))
+                self.assertEqual(expected["robot"], ",".join(map(str, state.robot_pos)))
+                self.assertEqual(expected["boxes"], [list(item) for item in boxes])
+                self.assertEqual(expected["goals"], [list(item) for item in encoded_goals])
+                self.assertEqual(expected["legalMoves"], sorted(
+                    move for _next_state, move in get_neighbors(state)
+                ))
+                self.assertEqual(expected["mechanicalMoves"], sorted(
+                    move for _next_state, move in get_neighbors(
+                        state, prune_deadlocks=False
+                    )
+                ))
+                self.assertEqual(expected["solved"], state.is_goal())
+                if "missingWall" in expected:
+                    missing = tuple(map(int, expected["missingWall"].split(",")))
+                    self.assertNotIn(missing, state.board.floor)
+
+    def test_shared_invalid_conformance_cases(self):
+        patterns = {
+            "symbol": "Unsupported symbol",
+            "robot-count": "exactly one robot",
+            "box-goal-count": "mismatch|box\\(es\\)",
+        }
+        for case in self.conformance["invalidCases"]:
+            with self.subTest(case=case["id"]), self.assertRaisesRegex(
+                PuzzleError, patterns[case["errorKind"]]
+            ):
+                parse_puzzle(case["rows"])
+
     def test_every_builtin_puzzle_is_valid(self):
         self.assertEqual(
             {"ultra-tiny", "tiny", "medium", "large", "huge"},

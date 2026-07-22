@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import heapq
+import json
 import logging
 import math
 import time
@@ -31,26 +32,11 @@ RESERVED_SYMBOLS = frozenset("ORSX")
 DEDICATED_BOX_LABELS = frozenset(set("ABCDEFGHIJKLMNOPQRSTUVWXYZ") - RESERVED_SYMBOLS)
 DEDICATED_GOAL_LABELS = frozenset(label.lower() for label in DEDICATED_BOX_LABELS)
 
-BUILTIN_PUZZLES = {
-    "ultra-tiny": ["OOOOO", "O R O", "O A O", "O a O", "OOOOO"],
-    "tiny": ["OOOOOO", "O R  O", "O XO O", "OO A O", "OSa  O", "OOOOOO"],
-    "medium": [
-        "OOOOOOO", "Oa   bO", "O AXB O", "O XRX O",
-        "OSCXDSO", "OcS SdO", "OOOOOOO",
-    ],
-    "large": [
-        "OOOOOOOOOO", "OOOOOOOSSO", "OOOOO  abO", "OOOOO XSSO",
-        "OOOOOO  OO", "OR     OOO", "OO A X X O", "OO BXO O O",
-        "OO   O   O", "OOOOOOOOOO",
-    ],
-    "huge": [
-        "OOOOOOOOOOOOOOO", "OaSS   S   SSbO", "OSCS  OOO  SDSO",
-        "OX X  OOO  X XO", "O     OOO     O", "OOOO   X   OOOO",
-        "O      O      O", "O G hOOOOOH g O", "O      O      O",
-        "OOO         OOO", "OOO   X X   OOO", "OOOOOOOROOOOOOO",
-        "O B X X X X A O", "O Sc       dS O", "OOOOOOOOOOOOOOO",
-    ],
-}
+CONFORMANCE_PATH = (
+    Path(__file__).resolve().parents[1] / "shared" / "sokomind-conformance.json"
+)
+with CONFORMANCE_PATH.open(encoding="utf-8") as conformance_file:
+    BUILTIN_PUZZLES = json.load(conformance_file)["levels"]
 
 Position = tuple[int, int]
 Box = tuple[str, Position]
