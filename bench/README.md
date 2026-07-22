@@ -48,6 +48,8 @@ The final JSON object contains:
   replay-validated checkpoint evaluation, cutoff reason, and compact progress
   metadata. Unsolved partial credit uses only the harness's fixed evaluator;
   solver-reported estimates remain telemetry and do not affect the score.
+- `performance`: worker-owned hot-path timings, call counts, cache hits, compiled
+  graph size, generated push candidates, retained pushes, and deadlock prunes.
 
 For AlphaEvolve, optimize `totalScore` while treating any `valid: false` or
 non-zero `errors` as a hard rejection. The benchmark intentionally rewards a

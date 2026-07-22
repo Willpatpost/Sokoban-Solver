@@ -1,7 +1,7 @@
 const LEVELS = SokomindLevels.LEVELS;
 const DIRS = {Up: [-1, 0], Down: [1, 0], Left: [0, -1], Right: [0, 1]};
 const CODE_MOVE = {U: "Up", D: "Down", L: "Left", R: "Right"};
-const SOLVER_BUILD = "2026-07-22.7";
+const SOLVER_BUILD = "2026-07-22.8";
 const SOLVER_WORKER_URL = `solver-worker.js?build=${SOLVER_BUILD}`;
 const PUSH_BOUNDS_KEY = "sokomind-push-bounds-v1";
 const KEYS = {ArrowUp: "Up", ArrowDown: "Down", ArrowLeft: "Left", ArrowRight: "Right",
@@ -1301,6 +1301,12 @@ function runBidirectionalSolver(purpose, analysis) {
           nextThreshold: data.nextThreshold,
           thresholdPrunes: data.thresholdPrunes,
           upperBoundPrunes: data.upperBoundPrunes,
+          profileMs: data.performance?.totalMs,
+          graphMs: data.performance?.graphCompileMs,
+          heuristicMs: data.performance?.heuristicMs,
+          reachabilityMs: data.performance?.reachabilityMs,
+          heuristicCacheHits: data.performance?.heuristicCacheHits,
+          pushDistanceCacheHits: data.performance?.pushDistanceCacheHits,
           corralPrunes: data.corralPrunes,
           cyclePrunes: data.cyclePrunes,
           transpositionPrunes: data.transpositionPrunes,
@@ -1355,6 +1361,12 @@ function runBidirectionalSolver(purpose, analysis) {
           maxTranspositions: data.maxTranspositions,
           shardRejected: data.shardRejected,
           shardAccepted: data.shardAccepted,
+          profileMs: data.performance?.totalMs,
+          graphMs: data.performance?.graphCompileMs,
+          heuristicMs: data.performance?.heuristicMs,
+          reachabilityMs: data.performance?.reachabilityMs,
+          heuristicCacheHits: data.performance?.heuristicCacheHits,
+          pushDistanceCacheHits: data.performance?.pushDistanceCacheHits,
           reason: data.terminationReason || (data.path ? "solution" : data.cutoff ? "budget" : "exhausted"),
         });
         if (plan.handoffStage === "bridge" && data.path && data.finalState) {
@@ -1529,6 +1541,9 @@ function startSolver(purpose) {
           rate: `${Math.round(data.visited / seconds).toLocaleString()}/s`,
           h: Number.isFinite(data.bestEstimate) ? data.bestEstimate : undefined,
           depth: data.depth, threshold: data.threshold, frontier: data.frontier,
+          graphMs: data.performance?.graphCompileMs,
+          heuristicMs: data.performance?.heuristicMs,
+          reachabilityMs: data.performance?.reachabilityMs,
         });
         setStatus(`${active.size} worker${active.size === 1 ? "" : "s"} searching... ${plan.label}: ${data.visited.toLocaleString()} states`);
         return;
@@ -1541,6 +1556,10 @@ function startSolver(purpose) {
         visited: (data.visited || 0).toLocaleString(), solved: Boolean(data.path),
         cutoff: Boolean(data.cutoff),
         h: Number.isFinite(data.bestEstimate) ? data.bestEstimate : undefined,
+        profileMs: data.performance?.totalMs,
+        graphMs: data.performance?.graphCompileMs,
+        heuristicMs: data.performance?.heuristicMs,
+        reachabilityMs: data.performance?.reachabilityMs,
       });
       if (data.path) {
         const path = validatePathToGoal(data.path);

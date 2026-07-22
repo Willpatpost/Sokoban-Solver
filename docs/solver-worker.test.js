@@ -172,6 +172,45 @@ test("player-aware push distances detect one-way chokepoints", () => {
   assert.equal(aware.has("4,3"), true);
 });
 
+test("compiled single-box graph matches the reference search on medium and Huge samples", () => {
+  const worker = loadWorker();
+  const parsed = stateFromRows([
+    "OOOOOOO", "Oa   bO", "O AXB O", "O XRX O",
+    "OSCXDSO", "OcS SdO", "OOOOOOO",
+  ]);
+  const board = worker.parse(parsed);
+  for (const start of board.floor) {
+    const compiled = [...worker.playerAwarePushDistances(board, start)].sort();
+    const reference = [...worker.playerAwarePushDistancesReference(board.floor, start)].sort();
+    assert.deepEqual(compiled, reference, `distance mismatch from ${start}`);
+  }
+  const hugeBoard = worker.parse(stateFromRows(HUGE_ROWS));
+  const hugeFloor = [...hugeBoard.floor];
+  const sampleStride = Math.max(1, Math.floor(hugeFloor.length / 8));
+  for (let index = 0; index < hugeFloor.length; index += sampleStride) {
+    const start = hugeFloor[index];
+    const compiled = [...worker.playerAwarePushDistances(hugeBoard, start)].sort();
+    const reference = [...worker.playerAwarePushDistancesReference(hugeBoard.floor, start)].sort();
+    assert.deepEqual(compiled, reference, `Huge distance mismatch from ${start}`);
+  }
+});
+
+test("search results expose bounded hot-path performance telemetry", () => {
+  const worker = loadWorker();
+  const result = worker.search({
+    algorithm: "push-beam",
+    beamWidth: 20,
+    state: stateFromRows(["OOOOO", "O R O", "O A O", "O a O", "OOOOO"]),
+  });
+  assert.ok(result.performance.totalMs >= 0);
+  assert.ok(result.performance.graphNodes > 0);
+  assert.ok(result.performance.graphEdges > 0);
+  assert.ok(result.performance.heuristicCalls > 0);
+  assert.ok(result.performance.reachabilityCalls > 0);
+  assert.ok(result.performance.pushNeighborCalls > 0);
+  assert.ok(result.performance.pushesRetained > 0);
+});
+
 test("topology analysis prefers deeper goals in one-entrance rooms", () => {
   const worker = loadWorker();
   const board = worker.parse({rows: [
@@ -755,6 +794,8 @@ test("bidirectional frontier compaction reports bounded memory telemetry", () =>
   assert.ok(done.frontier <= 4);
   assert.ok(done.retained <= 4);
   assert.ok(done.generated >= done.visited);
+  assert.ok(done.performance.graphNodes > 0);
+  assert.ok(done.performance.reachabilityCalls > 0);
   assert.ok(["budget", "exhausted"].includes(done.terminationReason));
 });
 

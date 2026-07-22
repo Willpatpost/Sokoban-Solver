@@ -140,6 +140,7 @@ function runCase(caseSpec) {
     bestPushes: result.bestPushes,
     checkpointCount: result.checkpoints?.length || 0,
     checkpointEvaluation,
+    performance: result.performance,
     progress: progressSummary(progress),
     validation,
   };
