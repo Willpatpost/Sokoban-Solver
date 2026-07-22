@@ -1,0 +1,642 @@
+current optimal solution for Huge:
+
+1. Down
+2. Down
+3. Right
+4. Right
+5. Up
+6. Left (push)
+7. Down
+8. Left
+9. Up (push)
+10. Up (push)
+11. Up (push)
+12. Left (push)
+13. Left (push)
+14. Right
+15. Right
+16. Right (push)
+17. Right (push)
+18. Up
+19. Left
+20. Left (push)
+21. Left (push)
+22. Down
+23. Left
+24. Up (push)
+25. Right
+26. Up
+27. Left (push)
+28. Down
+29. Left
+30. Up (push)
+31. Up (push)
+32. Up (push)
+33. Up (push)
+34. Up (push)
+35. Left
+36. Left
+37. Left
+38. Up (push)
+39. Down
+40. Right
+41. Right
+42. Right
+43. Up (push)
+44. Up (push)
+45. Left
+46. Up
+47. Right (push)
+48. Right (push)
+49. Right (push)
+50. Left
+51. Left
+52. Left
+53. Left
+54. Down (push)
+55. Down (push)
+56. Up
+57. Right
+58. Right
+59. Down
+60. Down
+61. Down
+62. Down
+63. Down
+64. Down
+65. Down
+66. Right
+67. Right
+68. Right
+69. Down
+70. Down
+71. Down
+72. Down
+73. Right
+74. Right
+75. Right
+76. Right
+77. Up
+78. Left (push)
+79. Left (push)
+80. Left (push)
+81. Down
+82. Left
+83. Up (push)
+84. Up (push)
+85. Up (push)
+86. Right
+87. Up
+88. Left (push)
+89. Left (push)
+90. Down
+91. Left
+92. Up (push)
+93. Right
+94. Up
+95. Left (push)
+96. Down
+97. Left
+98. Up (push)
+99. Up (push)
+100. Up (push)
+101. Up (push)
+102. Up (push)
+103. Up (push)
+104. Right
+105. Up
+106. Left (push)
+107. Down
+108. Down
+109. Down
+110. Down
+111. Down
+112. Down
+113. Down
+114. Right
+115. Right
+116. Right
+117. Down
+118. Down
+119. Down
+120. Down
+121. Right
+122. Right
+123. Right
+124. Right
+125. Right
+126. Right
+127. Up
+128. Left (push)
+129. Left (push)
+130. Left (push)
+131. Left (push)
+132. Left (push)
+133. Down
+134. Left
+135. Up (push)
+136. Up (push)
+137. Up (push)
+138. Right
+139. Up
+140. Left (push)
+141. Left (push)
+142. Down
+143. Left
+144. Up (push)
+145. Right
+146. Up
+147. Left (push)
+148. Down
+149. Left
+150. Up (push)
+151. Up (push)
+152. Up (push)
+153. Up (push)
+154. Up (push)
+155. Up (push)
+156. Up (push)
+157. Right
+158. Up
+159. Left (push)
+160. Left (push)
+161. Left (push)
+162. Down
+163. Down
+164. Right (push)
+165. Up (push)
+166. Right
+167. Up
+168. Left (push)
+169. Down
+170. Down
+171. Down
+172. Right
+173. Right
+174. Up
+175. Left (push)
+176. Down
+177. Left
+178. Up (push)
+179. Up (push)
+180. Left
+181. Down
+182. Left
+183. Down
+184. Right (push)
+185. Right (push)
+186. Right (push)
+187. Down
+188. Down
+189. Down
+190. Down
+191. Down
+192. Right
+193. Right
+194. Right
+195. Down
+196. Down
+197. Down
+198. Down
+199. Left
+200. Left
+201. Up
+202. Right (push)
+203. Down
+204. Right
+205. Up (push)
+206. Up (push)
+207. Up (push)
+208. Right
+209. Up
+210. Left (push)
+211. Left (push)
+212. Down
+213. Left
+214. Up (push)
+215. Right
+216. Up
+217. Left (push)
+218. Down
+219. Left
+220. Up (push)
+221. Up (push)
+222. Up (push)
+223. Up (push)
+224. Up (push)
+225. Up (push)
+226. Right
+227. Up
+228. Left (push)
+229. Right
+230. Down
+231. Down (push)
+232. Down (push)
+233. Left
+234. Down
+235. Down
+236. Down
+237. Down
+238. Right
+239. Right
+240. Right
+241. Right
+242. Right
+243. Right
+244. Right
+245. Down
+246. Left (push)
+247. Left (push)
+248. Left (push)
+249. Up
+250. Left
+251. Down (push)
+252. Down (push)
+253. Down (push)
+254. Left
+255. Down
+256. Right (push)
+257. Right (push)
+258. Right (push)
+259. Right (push)
+260. Right (push)
+261. Left
+262. Left
+263. Left
+264. Left
+265. Left
+266. Left
+267. Left
+268. Left
+269. Up
+270. Right (push)
+271. Right (push)
+272. Right (push)
+273. Down
+274. Right
+275. Right
+276. Left
+277. Up (push)
+278. Up (push)
+279. Up (push)
+280. Left
+281. Up
+282. Right (push)
+283. Right (push)
+284. Right (push)
+285. Left
+286. Left
+287. Down
+288. Down
+289. Down
+290. Down
+291. Left
+292. Left
+293. Left
+294. Left
+295. Left
+296. Left
+297. Up
+298. Right (push)
+299. Right (push)
+300. Right (push)
+301. Right (push)
+302. Right (push)
+303. Down
+304. Right
+305. Up (push)
+306. Up (push)
+307. Up (push)
+308. Left
+309. Up
+310. Right (push)
+311. Right (push)
+312. Left
+313. Left
+314. Left
+315. Left
+316. Up
+317. Up
+318. Up
+319. Up
+320. Right
+321. Right
+322. Down
+323. Left (push)
+324. Up
+325. Left
+326. Down (push)
+327. Down (push)
+328. Down (push)
+329. Left
+330. Down
+331. Down
+332. Right (push)
+333. Right (push)
+334. Right (push)
+335. Up
+336. Right
+337. Down (push)
+338. Down (push)
+339. Down (push)
+340. Right
+341. Down
+342. Left (push)
+343. Left (push)
+344. Left (push)
+345. Left (push)
+346. Left (push)
+347. Right
+348. Right
+349. Right
+350. Right
+351. Up
+352. Up
+353. Up
+354. Left
+355. Left
+356. Left
+357. Left
+358. Up
+359. Up
+360. Right
+361. Down (push)
+362. Left
+363. Down
+364. Right (push)
+365. Right (push)
+366. Right (push)
+367. Up
+368. Right
+369. Down (push)
+370. Down (push)
+371. Down (push)
+372. Right
+373. Down
+374. Left (push)
+375. Left (push)
+376. Left (push)
+377. Left (push)
+378. Right
+379. Right
+380. Right
+381. Up
+382. Up
+383. Up
+384. Up
+385. Right
+386. Up
+387. Right
+388. Right
+389. Right
+390. Up
+391. Up
+392. Left
+393. Up
+394. Up
+395. Right
+396. Right
+397. Right
+398. Up (push)
+399. Down
+400. Left
+401. Left
+402. Up (push)
+403. Left
+404. Up
+405. Up
+406. Right
+407. Right
+408. Left
+409. Left
+410. Down
+411. Down
+412. Down
+413. Down
+414. Down
+415. Right
+416. Down
+417. Down
+418. Down
+419. Down
+420. Left
+421. Up (push)
+422. Left (push)
+423. Left (push)
+424. Left (push)
+425. Left (push)
+426. Left (push)
+427. Down
+428. Left
+429. Up (push)
+430. Up (push)
+431. Up (push)
+432. Up (push)
+433. Up (push)
+434. Right
+435. Right
+436. Right (push)
+437. Right (push)
+438. Right (push)
+439. Up
+440. Right
+441. Down (push)
+442. Left
+443. Left
+444. Left
+445. Left
+446. Left
+447. Up
+448. Up
+449. Left
+450. Left
+451. Down
+452. Right (push)
+453. Up
+454. Right
+455. Down (push)
+456. Left
+457. Down
+458. Right (push)
+459. Right (push)
+460. Right (push)
+461. Right (push)
+462. Right (push)
+463. Down
+464. Right (push)
+465. Up (push)
+466. Up (push)
+467. Up (push)
+468. Up (push)
+469. Left
+470. Up
+471. Right (push)
+472. Right (push)
+473. Right (push)
+474. Down (push)
+475. Down (push)
+476. Left
+477. Up (push)
+478. Left
+479. Up
+480. Right (push)
+481. Down
+482. Down
+483. Down
+484. Left
+485. Down
+486. Down
+487. Right (push)
+488. Down
+489. Down
+490. Left (push)
+491. Up (push)
+492. Up (push)
+493. Up (push)
+494. Up (push)
+495. Right
+496. Up
+497. Left (push)
+498. Up
+499. Left
+500. Down (push)
+501. Up
+502. Down
+503. Down (push)
+504. Right
+505. Down
+506. Left (push)
+507. Left (push)
+508. Left (push)
+509. Left (push)
+510. Left (push)
+511. Up
+512. Left
+513. Down (push)
+514. Down (push)
+515. Left
+516. Down
+517. Down
+518. Down
+519. Right
+520. Right
+521. Right
+522. Right
+523. Right
+524. Up
+525. Right (push)
+526. Down
+527. Right
+528. Up (push)
+529. Up (push)
+530. Up (push)
+531. Up (push)
+532. Up (push)
+533. Up (push)
+534. Up (push)
+535. Left
+536. Up
+537. Right (push)
+538. Down
+539. Down
+540. Down
+541. Down
+542. Down
+543. Down
+544. Right
+545. Right
+546. Right
+547. Up
+548. Left (push)
+549. Left (push)
+550. Down
+551. Left
+552. Up (push)
+553. Up (push)
+554. Up (push)
+555. Up (push)
+556. Left
+557. Up
+558. Right (push)
+559. Down
+560. Right
+561. Right
+562. Right
+563. Down
+564. Left (push)
+565. Left (push)
+566. Up
+567. Left
+568. Down (push)
+569. Down (push)
+570. Down (push)
+571. Down (push)
+572. Down (push)
+573. Down (push)
+574. Right
+575. Down
+576. Left (push)
+577. Left (push)
+578. Left (push)
+579. Up
+580. Left
+581. Down (push)
+582. Down (push)
+583. Down (push)
+584. Left
+585. Down
+586. Right (push)
+587. Right (push)
+588. Right (push)
+589. Right (push)
+590. Left
+591. Left
+592. Left
+593. Up
+594. Up
+595. Up
+596. Left
+597. Left
+598. Left
+599. Up
+600. Up
+601. Up (push)
+602. Left
+603. Up
+604. Left
+605. Left
+606. Down
+607. Right (push)
+608. Right (push)
+609. Up
+610. Right (push)
+611. Down (push)
+612. Down (push)
+613. Left
+614. Down
+615. Right (push)
+616. Right (push)
+617. Right (push)
+618. Right (push)
+619. Right (push)
+620. Right (push)
+621. Right (push)
+622. Down
+623. Right
+624. Up (push)
+625. Up (push)
+626. Left
+627. Up
+628. Right (push)
+629. Left
+630. Up
+631. Up
+632. Left
+633. Left
+634. Left
+635. Left
+636. Down
+637. Left (push)
+638. Up
+639. Left
+640. Down (push)

@@ -1,0 +1,240 @@
+Sokomind improvements and implementation status
+===============================================
+
+Status reviewed against the repository after the Sprint 16 memory and worker-
+lifecycle instrumentation work.
+
+The original item numbers and priority order are retained for traceability.
+"Done" means the stated outcome is implemented and adequately validated.
+"Strong, bounded" means the implementation is useful and well tested within a
+deliberate scope, but does not yet provide the complete capability originally
+described. "Partial" means meaningful foundations exist, but important parts of
+the stated outcome remain. Items in the final section have not been implemented
+as backlog capabilities; incidental overlap does not count as delivery.
+
+
+DONE
+----
+
+1. Prevent gameplay keyboard shortcuts from firing in editable controls.
+   Implemented for input, textarea, select, button, and contenteditable targets,
+   with policy tests and integration in the web application.
+
+2. Expand CI deployment gates.
+   docs/director-policy.test.js, the complete JavaScript suite, differential
+   tests, smoke benchmarks, and validation benchmarks run in GitHub Actions.
+
+4. Calculate benchmark partial credit independently.
+   The benchmark harness replays solver checkpoints and uses a fixed evaluator
+   rather than trusting solver-reported estimates. This behavior is tested.
+
+6. Restrict GitHub Pages credentials to deployment.
+   The test job is read-only. Pages write and ID-token permissions are scoped to
+   the deploy job.
+
+11. Add shared cross-implementation conformance fixtures.
+   Python, browser, worker, and benchmark code consume shared level and rule
+   fixtures, with conformance tests guarding parsing and puzzle-rule drift.
+
+
+STRONG IMPLEMENTATION, WITH BOUNDED LIMITATIONS
+-----------------------------------------------
+
+3. Add exhaustive differential tests for every hard pruning rule.
+   Implemented:
+   - A reference BFS checks every current hard pruning rule independently over
+     reachable states, including their combined successor behavior.
+   - The harness exhaustively enumerates all 780 box, goal, and robot placements
+     across every connected 2x3 floor layout. It independently identifies and
+     checks the 60 solvable configurations alongside four larger authored boards.
+   - It scans the complete corpus and retains the globally smallest false
+     positive by floor size, box count, board area, and state size for reporting.
+   Bounded limitations:
+   - Exhaustive generation does not yet cover larger floors, multiple boxes, or
+     typed-label combinations.
+   - Counterexamples are selected from the corpus but not structurally minimized.
+   - Coverage must continue to be extended whenever hard rejection rules change.
+
+7. Add detailed solver performance instrumentation.
+   Implemented:
+   - Counters and timings cover reachability, matching, hashing, successor
+     generation, pruning, caches, frontier behavior, and strategic reasoning.
+   - Capability-detected heap telemetry records current, peak, delta, and sample
+     counts. Node benchmarks inject a reliable heap sampler; unsupported browser
+     workers report that status explicitly instead of returning false zeroes.
+   - Isolated benchmark cases record worker loading, search, validation, first
+     output, result delivery, shutdown, total process time, and heap deltas.
+   - Browser portfolio logs expose first-message, wall-clock, termination-call,
+     heap, and cancelled-worker measurements.
+   Bounded limitations:
+   - Per-allocation profiling and exact GC event/pause counts are not portable to
+     ordinary browser workers; the runner reports explicit-GC availability but
+     does not force collection during scored searches.
+   - The specialized bidirectional director has less lifecycle detail than the
+     standard portfolio path, although worker-owned heap telemetry is shared.
+
+8. Replace repeated single-box searches with a compiled push graph.
+   Implemented:
+   - Static graph nodes encode a box cell and robot-region representative.
+   - Transitions and player-aware distances are compiled, cached, and tested
+     against the reference implementation.
+   Bounded limitations:
+   - The graph is geometry-based rather than intrinsically type-aware.
+   - It searches forward from box starts instead of reverse-searching from each
+     typed goal into reusable typed feasibility tables.
+
+10. Reuse immutable board analysis across web workers.
+    Implemented:
+    - Prepared board seeds share topology, push distances, compiled graphs, dense
+      board data, and other immutable analysis through structured cloning.
+    - Mutable caches remain worker-private.
+    Bounded limitations:
+    - Structured cloning still duplicates data in worker memory.
+    - SharedArrayBuffer is intentionally avoided because the current GitHub Pages
+      deployment is not cross-origin isolated.
+    - Future pattern and deadlock tables cannot be shared until they exist.
+
+13. Add a goal-commitment safety oracle.
+    Implemented:
+    - Goal boxes are classified as temporary, conditionally safe, or proven using
+      residual perfect matching, room dependencies, static immovability, dynamic
+      support demand, typed doorway flow, and bounded exact local analyses.
+    - State-complete evidence is cached by robot region and box signature. It can
+      downgrade placements that occupy required support or staging cells and can
+      prove movable boxes packed inside an exactly completed one-entry room.
+    - Beam, bounded DFS, and IDA search treat proven boxes as walls. Forced,
+      straight, and sequence macros re-evaluate commitment after every push.
+    - The lock is differentially checked over the exhaustive tiny corpus and all
+      252 pushes of the known Huge solution; it can be disabled diagnostically.
+    Bounded limitations:
+    - Movable proof is currently limited to completed bounded rooms; oversized
+      rooms and exact corrals cannot promote boxes to proven.
+    - Support dependencies are not yet assignment-aware or recursively proven.
+    - Baseline push A* and gameplay retain ordinary legal movement semantics.
+
+15. Add cached exact local searches for small rooms and corrals.
+    Implemented:
+    - Bounded exact room and corral searches are cached by local configuration.
+    - They reason about packing, import/export requirements, doorway restoration,
+      boundary viability, and reopening robot access.
+    Bounded limitations:
+    - Exactness applies only inside the selected local abstraction.
+    - Rooms, domains, or box sets over conservative size limits are skipped.
+    - Some large built-in puzzle regions therefore receive no local exact result.
+    - Corral conclusions are currently used conservatively as ordering signals.
+
+
+PARTIALLY DELIVERED
+-------------------
+
+5. Add hidden or generated benchmark families.
+   Delivered so far:
+   - Generated mirror, rotation, label permutation, and premature-goal cases.
+   - Typed doorway-import, exact room-packing, and corral-reopening seeds expand
+     into deterministic mirrored, rotated, and typed-label variants. The current
+     validation suite contains 13 replay-validated cases.
+   Remaining:
+   - Larger exhaustively solvable multi-box benchmark families.
+   - Broader typed bottleneck and staging-capacity interactions beyond geometric
+     transformations of the current strategic seeds.
+   - Broader held-out cases that reduce tuning against known repository levels.
+
+9. Replace string-heavy hot-path state data with dense representations.
+   Delivered so far:
+   - Integer cell IDs, dense neighbor/support tables, typed reachability arrays,
+     compact parent directions, and compact state signatures.
+   - Walking paths are reconstructed only when needed.
+   Remaining:
+   - Typed or packed box-position state storage instead of nested JavaScript arrays.
+   - Bitsets and incremental Zobrist or equivalent non-string hashing.
+   - Fewer box-array maps, clones, joins, and reconstructed string keys.
+
+12. Bring the Python/local solver closer to the JavaScript solver.
+    Delivered so far:
+    - Exact distinct box-to-goal matching, including larger assignments.
+    - Bounded heuristic caching.
+    - More compact robot-reachability parents and reduced path copying.
+    Remaining:
+    - Align Ultimate Search architecture and terminology with the browser solver.
+    - Port selected topology, macro, advanced deadlock, bounded-memory, beam/IDA,
+      portfolio, commitment, dependency, room, corral, and doorway capabilities.
+    - Remove or integrate remaining redundant priority/heuristic state machinery.
+
+14. Build dynamic support-square dependency graphs.
+    Delivered so far:
+    - Required standing squares, routes, blockers, support demand, and access loss
+      influence move ordering and are cached by state.
+    Remaining:
+    - Make dependencies assignment-aware so boxes do not independently select the
+      same nearest goal.
+    - Represent recursive prerequisite box moves and dependency chains.
+    - Track recent enabling actions and explicit staging-side requirements.
+    - Use contradictions for pruning only after they are proven and differentially
+      validated.
+
+16. Model typed doorway flow and staging capacity.
+    Delivered so far:
+    - Per-room label imports and exports, empty staging capacity, lane readiness,
+      diagnostics, penalties, and ordering deltas are computed.
+    Remaining:
+    - Model typed crossing sequences and time/order-dependent staging occupancy.
+    - Reason about particular boxes, multiple rooms, shared corridors, simultaneous
+      transfers, and restoration schedules.
+    - Confirm suspected contradictions with exact local reasoning.
+    - Promote only contradictions confirmed by exact reasoning into safe pruning;
+      current flow contradictions remain diagnostic and ordering-only.
+
+
+YET TO BE IMPLEMENTED AS BACKLOG CAPABILITIES
+----------------------------------------------
+
+17. Add reverse-proven goal-room packing tables that identify safe packing orders
+    and reject room arrangements that cannot be completed from the doorway.
+
+18. Add closed-diagonal deadlock detection and more complete freeze detection,
+    including mutually frozen box groups beyond the current local checks. Treat
+    new rejection rules as hard pruning only after differential validation.
+
+19. Add small deadlock pattern databases and use exhaustive local enumeration to
+    recognize additional unsalvageable box patterns safely.
+
+20. Build pattern databases for the lower chamber and other small, strategically
+    important rooms. Use exact local costs or dependency-aware conflict bounds to
+    capture interaction and ordering costs missing from assignment distance.
+
+21. Add admissible lower-bound terms where they can be proven, and otherwise
+    ordering penalties, for boxes competing over corridors, gates, staging cells,
+    or robot support squares. Existing doorway and support penalties are useful
+    foundations but do not yet constitute this general capability.
+
+22. Introduce true feature-space search queues rather than relying only on fixed
+    heuristic beam bands. Preserve candidates across dimensions such as room
+    progress, gate state, packing commitments, evacuation progress, mobility, and
+    controlled heuristic detours.
+
+23. Add comprehensive relevance-based move ordering connected to the current
+    bottleneck, unresolved goal, dependency chain, or recent enabling action while
+    retaining completeness in exact searches. Existing support, room, and doorway
+    deltas provide incidental foundations but not the full capability.
+
+24. Add partial-order reduction for independent pushes so equivalent interleavings
+    of noninteracting box moves are not explored repeatedly, without eliminating
+    sequences whose robot access or support dependencies differ.
+
+25. Add symmetry reduction where walls, goals, box labels, and the current state
+    genuinely permit it. Canonicalize mirrored/rotated or interchangeable-box
+    states only when typed-label semantics are preserved.
+
+26. Improve screen-reader support for the web board with an accessible board or
+    live description of the robot, boxes, goals, moves, and completion state.
+
+27. Split docs/app.js and docs/solver-worker.js into focused modules for game
+    rules, UI rendering, worker orchestration, telemetry, and search engines.
+    Perform this alongside or after well-tested functional changes so a large
+    refactor does not obscure solver regressions.
+
+28. Review desktop and mobile layouts for intuitive human formatting while
+    preserving the current color palette and theme. Improve desktop hierarchy and
+    controls, and substantially improve responsive phone layout, sizing,
+    navigation, logs, and touch interaction. This subjective presentation task
+    remains the lowest priority.
