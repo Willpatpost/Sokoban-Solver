@@ -1148,13 +1148,72 @@ function blocksPendingRoomWork(position, occupied, board) {
   return false;
 }
 
-function goalCommitments(boxes, board) {
+function commitmentPositionConflict(position, evidence) {
+  const dependencyGraph = evidence?.supportDependency;
+  if ((dependencyGraph?.supportDemand?.get(position) || 0) > 0 ||
+      (dependencyGraph?.prerequisiteDemand?.get(position) || 0) > 0) return true;
+  for (const flow of evidence?.doorway?.rooms || []) {
+    const crossings = flow.importTotal + flow.exportTotal;
+    if (crossings && position === flow.room.gate) return true;
+    if (flow.importTotal && flow.room.exteriorStaging.has(position)) return true;
+    if (flow.exportTotal && flow.room.interiorStaging.has(position)) return true;
+  }
+  for (const analysis of evidence?.localAnalyses || []) {
+    if (analysis.status !== "solvable" || !analysis.firstPushes?.size) continue;
+    const requiredSources = new Set(
+      [...analysis.firstPushes].map(push => push.split(">")[0]),
+    );
+    if (requiredSources.size === 1 && requiredSources.has(position)) return true;
+  }
+  return false;
+}
+
+function exactRoomCompletionProven(analysis, evidence) {
+  if (analysis.kind === "corral" || analysis.roomIndex === undefined) return false;
+  const transition = evidence?.transition;
+  if (analysis.status === "packed") {
+    return !transition ||
+      (!analysis.domain.has(transition.pushedFrom) && !analysis.domain.has(transition.pushedTo));
+  }
+  return analysis.status === "solvable" && analysis.pushes === 1 &&
+    transition?.pushes === 1 &&
+    analysis.firstPushes.has(`${transition.pushedFrom}>${transition.pushedTo}`);
+}
+
+function refineGoalCommitments(base, boxes, board, evidence) {
+  const commitments = new Map(base);
+  const occupied = new Map(boxes.map(([y, x, label]) => [pkey(y, x), label]));
+  for (const position of commitments.keys()) {
+    if (commitmentPositionConflict(position, evidence)) {
+      commitments.set(position, GOAL_COMMITMENT.TEMPORARY);
+    }
+  }
+  for (const analysis of evidence?.localAnalyses || []) {
+    if (!exactRoomCompletionProven(analysis, evidence)) continue;
+    const room = board.topology.rooms[analysis.roomIndex];
+    const flow = evidence?.doorway?.rooms?.find(candidate => candidate.index === analysis.roomIndex);
+    if (!room || !flow || flow.importTotal || flow.exportTotal || flow.contradictions.length ||
+        flow.gateLabel) continue;
+    for (const position of room.cells) {
+      const label = occupied.get(position);
+      if (label === undefined || board.goals.get(position) !== label ||
+          commitmentPositionConflict(position, evidence)) continue;
+      if (commitments.get(position) !== GOAL_COMMITMENT.TEMPORARY) {
+        commitments.set(position, GOAL_COMMITMENT.PROVEN);
+      }
+    }
+  }
+  return commitments;
+}
+
+function goalCommitments(boxes, board, evidence = null) {
   const metrics = board.metrics;
   if (metrics) metrics.commitmentCalls++;
   const signature = boxSignature(boxes, board);
   if (board.commitmentMemo.has(signature)) {
     if (metrics) metrics.commitmentCacheHits++;
-    return board.commitmentMemo.get(signature);
+    const cached = board.commitmentMemo.get(signature);
+    return evidence ? refineGoalCommitments(cached, boxes, board, evidence) : cached;
   }
   const started = metrics ? now() : 0;
   const occupied = new Map(boxes.map(([y, x, label]) => [pkey(y, x), label]));
@@ -1177,11 +1236,11 @@ function goalCommitments(boxes, board) {
     COMMITMENT_MEMO_LIMIT,
   );
   if (metrics) metrics.commitmentMs += now() - started;
-  return result;
+  return evidence ? refineGoalCommitments(result, boxes, board, evidence) : result;
 }
 
-function goalPackingBonus(boxes, board) {
-  const commitments = goalCommitments(boxes, board);
+function goalPackingBonus(boxes, board, evidence = null) {
+  const commitments = goalCommitments(boxes, board, evidence);
   return boxes.reduce((bonus, [y, x]) => {
     const position = pkey(y, x);
     const commitment = commitments.get(position);
@@ -1594,7 +1653,7 @@ function exactLocalRoomSearch(state, board, room, reachable = reachablePaths(sta
       const result = {
         status: "needs-import", importsRequired, exportsRequired,
         doorwayOccupied: localBoxes.some(([position]) => position === room.gate),
-        entrySide, domain, firstPushes: new Set(), visited: 0, viableBoundaries: 0,
+        entrySide, domain, roomIndex, firstPushes: new Set(), visited: 0, viableBoundaries: 0,
       };
       metrics.localRoomMs += now() - started;
       return memoizeBounded(board.localRoomMemo, cacheKey, result, LOCAL_ROOM_MEMO_LIMIT);
@@ -1606,7 +1665,7 @@ function exactLocalRoomSearch(state, board, room, reachable = reachablePaths(sta
     const result = {
       status: "oversized", importsRequired, exportsRequired,
       doorwayOccupied: localBoxes.some(([position]) => position === room.gate),
-      entrySide, domain, firstPushes: new Set(), visited: 0, viableBoundaries: 0,
+      entrySide, domain, roomIndex, firstPushes: new Set(), visited: 0, viableBoundaries: 0,
     };
     metrics.localRoomMs += now() - started;
     return memoizeBounded(board.localRoomMemo, cacheKey, result, LOCAL_ROOM_MEMO_LIMIT);
@@ -1615,7 +1674,7 @@ function exactLocalRoomSearch(state, board, room, reachable = reachablePaths(sta
     const result = {
       status: "inaccessible", importsRequired, exportsRequired,
       doorwayOccupied: localBoxes.some(([position]) => position === room.gate),
-      entrySide, domain, firstPushes: new Set(), visited: 0, viableBoundaries: 0,
+      entrySide, domain, roomIndex, firstPushes: new Set(), visited: 0, viableBoundaries: 0,
     };
     metrics.localRoomMs += now() - started;
     return memoizeBounded(board.localRoomMemo, cacheKey, result, LOCAL_ROOM_MEMO_LIMIT);
@@ -1637,6 +1696,7 @@ function exactLocalRoomSearch(state, board, room, reachable = reachablePaths(sta
     doorwayOccupied: localBoxes.some(([position]) => position === room.gate),
     entrySide,
     domain,
+    roomIndex,
   };
   metrics.localRoomStates += search.visited;
   metrics.localRoomMs += now() - started;
@@ -2260,10 +2320,15 @@ function beamSearch(payload) {
           bestPushes = child.cost;
         }
         const topology = topologyPenalty(child.boxes, board);
-        const packing = goalPackingBonus(child.boxes, board);
         const dependencyDelta = supportDependencyDelta(dependencyGraph, next);
         const localRoomDelta = localRoomOrderingDelta(localRooms, next);
         const doorway = typedDoorwayFlow(child.boxes, board);
+        const packing = goalPackingBonus(child.boxes, board, {
+          doorway,
+          supportDependency: dependencyGraph,
+          localAnalyses: localRooms,
+          transition: next,
+        });
         const doorwayDelta = doorwayFlowDelta(doorwayBefore, current, next);
         const evacuation = evacuationWeight
           ? roomEvacuationPenalty(child.boxes, board)
@@ -2648,10 +2713,15 @@ function boundedPushDepthFirstSearch(payload) {
       }
       const topology = topologyPenalty(next.boxes, board);
       const evacuation = profile === "evacuation" ? roomEvacuationPenalty(next.boxes, board) : 0;
-      const packing = goalPackingBonus(next.boxes, board);
       const dependencyDelta = supportDependencyDelta(dependencyGraph, next);
       const localRoomDelta = localRoomOrderingDelta(localRooms, next);
       const doorway = typedDoorwayFlow(next.boxes, board);
+      const packing = goalPackingBonus(next.boxes, board, {
+        doorway,
+        supportDependency: dependencyGraph,
+        localAnalyses: localRooms,
+        transition: next,
+      });
       const doorwayDelta = doorwayFlowDelta(doorwayBefore, state, next);
       let score = 2.5 * estimate + topology - 0.8 * packing;
       if (profile === "detour") score = 1.5 * estimate + 1.4 * topology - packing;
@@ -2736,10 +2806,10 @@ function pushIterativeDeepeningAStar(payload) {
       bestEstimate, bestPushes};
   }
 
-  const orderingScore = (state, cost) => {
+  const orderingScore = (state, cost, commitmentEvidence = null) => {
     const estimate = heuristic(state.boxes, board);
     const topology = topologyPenalty(state.boxes, board);
-    const packing = goalPackingBonus(state.boxes, board);
+    const packing = goalPackingBonus(state.boxes, board, commitmentEvidence);
     if (profile === "milestone") {
       return estimate + 2.5 * topology - packing +
         0.35 * signatureNoise(roomFlowSignature(state.boxes, board), seed + cost);
@@ -2832,16 +2902,23 @@ function pushIterativeDeepeningAStar(payload) {
         bestEstimate = childEstimate;
         bestPushes = childCost;
       }
+      const doorway = typedDoorwayFlow(next.boxes, board);
+      const commitmentEvidence = {
+        doorway,
+        supportDependency: dependencyGraph,
+        localAnalyses: localRooms,
+        transition: next,
+      };
       candidates.push({
         next,
         cost: childCost,
         total: childCost + childEstimate,
-        score: orderingScore(next, childCost) +
+        score: orderingScore(next, childCost, commitmentEvidence) +
           (payload.supportDependencyWeight ?? 0.5) *
             supportDependencyDelta(dependencyGraph, next) +
           (payload.localRoomWeight ?? 0.4) * localRoomOrderingDelta(localRooms, next) +
           (payload.doorwayFlowWeight ?? 0.25) * (
-            0.2 * typedDoorwayFlow(next.boxes, board).penalty +
+            0.2 * doorway.penalty +
             doorwayFlowDelta(doorwayBefore, state, next)
           ) +
           (payload.diversity ?? 0.2) *

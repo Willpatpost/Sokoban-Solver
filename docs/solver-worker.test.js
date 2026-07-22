@@ -215,6 +215,59 @@ test("goal packing reserves its strongest reward for proven commitments", () => 
   assert.equal(temporaryBonus, 0);
 });
 
+test("goal commitment integrates support, doorway, and exact room evidence conservatively", () => {
+  const worker = loadWorker();
+  const conditionalBoard = worker.parse(stateFromRows([
+    "OOOOO", "O R O", "O X O", "O S O", "OOOOO",
+  ]));
+  const placed = [[3, 2, "X"]];
+  assert.equal(
+    worker.goalCommitments(placed, conditionalBoard, {
+      supportDependency: {
+        supportDemand: new Map([["3,2", 1]]),
+        prerequisiteDemand: new Map(),
+      },
+    }).get("3,2"),
+    "temporary",
+  );
+  assert.equal(
+    worker.goalCommitments(placed, conditionalBoard, {
+      doorway: {rooms: [{
+        index: 0,
+        importTotal: 1,
+        exportTotal: 0,
+        contradictions: [],
+        gateLabel: null,
+        room: {
+          gate: "1,1",
+          exteriorStaging: new Set(["3,2"]),
+          interiorStaging: new Set(),
+        },
+      }]},
+    }).get("3,2"),
+    "temporary",
+  );
+
+  const parsed = stateFromRows([
+    "OOOOOOO", "O R   O", "OOO OOO", "O  S  O",
+    "O  X  O", "O     O", "OOOOOOO",
+  ]);
+  const board = worker.parse(parsed);
+  const state = {robot: parsed.robot, boxes: [[4, 3, "X"]]};
+  const room = board.topology.rooms.find(candidate => candidate.goals.includes("3,3"));
+  const analysis = worker.exactLocalRoomSearch(state, board, room);
+  const packed = [[3, 3, "X"]];
+  assert.equal(
+    worker.goalCommitments(packed, board, {
+      doorway: worker.typedDoorwayFlow(packed, board),
+      supportDependency: {supportDemand: new Map(), prerequisiteDemand: new Map()},
+      localAnalyses: [analysis],
+      transition: {pushedFrom: "4,3", pushedTo: "3,3", pushes: 1},
+    }).get("3,3"),
+    "proven",
+  );
+});
+
 test("player-aware push distances detect one-way chokepoints", () => {
   const worker = loadWorker();
   const board = worker.parse({rows: [

@@ -58,6 +58,47 @@ const GENERATED_CASES = [
     weight: 2,
     payload: {maxVisited: 60000},
   },
+  {
+    name: "generated typed doorway import",
+    rows: [
+      "OOOOOOOOO",
+      "O R X S O",
+      "O       O",
+      "O       O",
+      "OOOOXOOOO",
+      "O   S   O",
+      "O       O",
+      "OOOOOOOOO",
+    ],
+    algorithm: "push-beam",
+    timeoutMs: 10000,
+    weight: 2,
+    payload: {maxVisited: 60000, beamWidth: 120, maxDepth: 40},
+  },
+  {
+    name: "generated exact room packing",
+    rows: [
+      "OOOOOOO",
+      "O R   O",
+      "OOO OOO",
+      "O S S O",
+      "O X X O",
+      "O     O",
+      "OOOOOOO",
+    ],
+    algorithm: "push-beam",
+    timeoutMs: 10000,
+    weight: 2,
+    payload: {maxVisited: 60000, beamWidth: 120, maxDepth: 40},
+  },
+  {
+    name: "generated corral reopening",
+    rows: ["OOOOOOO", "OR X SO", "OOOOOOO"],
+    algorithm: "push-beam",
+    timeoutMs: 10000,
+    weight: 2,
+    payload: {maxVisited: 60000, beamWidth: 120, maxDepth: 40},
+  },
 ];
 
 module.exports = {GENERATED_CASES, mirrorRows, permuteLabels, rotateRows};

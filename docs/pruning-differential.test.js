@@ -128,10 +128,32 @@ const DIFFERENTIAL_BOARDS = [
   ],
 ];
 
+function generatedSolvableBoards() {
+  const boards = [];
+  for (const width of [6, 7, 8]) {
+    for (const height of [5, 6]) {
+      for (let column = 2; column <= width - 3; column++) {
+        const rows = Array.from({length: height}, (_, y) =>
+          y === 0 || y === height - 1 ? "O".repeat(width) : `O${" ".repeat(width - 2)}O`);
+        const replace = (row, cell) => {
+          rows[row] = rows[row].slice(0, column) + cell + rows[row].slice(column + 1);
+        };
+        replace(1, "S");
+        replace(2, "X");
+        replace(height - 2, "R");
+        boards.push(rows);
+      }
+    }
+  }
+  return boards;
+}
+
 test("hard pruning never rejects an exhaustively proven solvable small state", () => {
   let checkedStates = 0;
   let checkedPushes = 0;
-  for (const rows of DIFFERENTIAL_BOARDS) {
+  const generatedBoards = generatedSolvableBoards();
+  assert.ok(generatedBoards.length >= 10);
+  for (const rows of [...DIFFERENTIAL_BOARDS, ...generatedBoards]) {
     const {worker, board, states, edges, solvable} = enumerateReachable(rows);
     assert.ok(solvable.size > 0, `test board has no solvable reachable states:\n${rows.join("\n")}`);
 
