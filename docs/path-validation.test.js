@@ -41,6 +41,11 @@ test("web UI exposes a separate copyable search log", () => {
   assert.match(html, /levels\.js\?build=[\s\S]*app\.js\?build=/);
   assert.match(html, /director-policy\.js/);
   assert.match(html, /keyboard-policy\.js[\s\S]*app\.js/);
+  assert.match(html, /id="solver-build"/);
+  const build = app.match(/const SOLVER_BUILD = "([^"]+)";/)?.[1];
+  assert.ok(build);
+  assert.match(app, /\$\("solver-build"\)\.textContent = SOLVER_BUILD/);
+  assert.match(html, new RegExp(`app\\.js\\?build=${build.replaceAll(".", "\\.")}`));
   assert.match(app, /function appendSearchLog\(/);
   assert.match(app, /algorithm: "analyze-puzzle"/);
   assert.match(app, /copy-search-log/);

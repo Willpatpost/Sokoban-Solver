@@ -1,12 +1,14 @@
 const LEVELS = SokomindLevels.LEVELS;
 const DIRS = {Up: [-1, 0], Down: [1, 0], Left: [0, -1], Right: [0, 1]};
 const CODE_MOVE = {U: "Up", D: "Down", L: "Left", R: "Right"};
-const SOLVER_BUILD = "2026-07-22.13";
+const SOLVER_BUILD = "2026-07-22.14";
 const SOLVER_WORKER_URL = `solver-worker.js?build=${SOLVER_BUILD}`;
 const PUSH_BOUNDS_KEY = "sokomind-push-bounds-v1";
 const KEYS = {ArrowUp: "Up", ArrowDown: "Down", ArrowLeft: "Left", ArrowRight: "Right",
   w: "Up", W: "Up", s: "Down", S: "Down", a: "Left", A: "Left", d: "Right", D: "Right"};
 const $ = (id) => document.getElementById(id);
+
+$("solver-build").textContent = SOLVER_BUILD;
 
 let levelKey = "ultra-tiny", state, initialState, history = [], moveHistory = [], moves = 0;
 let workers = [], animation = [], timer = null, solvedShown = false;

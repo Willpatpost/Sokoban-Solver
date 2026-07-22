@@ -161,6 +161,14 @@ budget-cutoff abstractions are reported but never used as global hard-pruning pr
 Only an exactly completed room can support proven-box locking; corral-opening hints
 receive lower confidence and remain ordering-only.
 
+Bounded one-entrance goal rooms also compile a reusable reverse packing table from
+the fully packed typed-goal arrangement. Reverse-legal pushes retain the robot's
+reachable-region identity, so table hits provide an exact remaining push count and
+all optimal next packing pushes. Tables are limited by room, domain, box, and state
+budgets; unsupported or cutoff rooms fall back to the forward local search. A missing
+entry is diagnostic for the bounded doorway abstraction and is never treated as an
+unconditional global deadlock, since moving farther outside the abstraction may help.
+
 One-entrance room topology now compiles doorway lanes and nearby interior/exterior
 staging sets. A cached typed-flow analysis compares each room's current labels with
 its target labels, records required imports and exports, checks whether the geometry

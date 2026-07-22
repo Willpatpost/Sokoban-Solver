@@ -170,6 +170,9 @@ function createPerformanceMetrics() {
     localRoomCalls: 0,
     localRoomCacheHits: 0,
     localRoomStates: 0,
+    reversePackingBuilds: 0,
+    reversePackingStates: 0,
+    reversePackingHits: 0,
     localRoomMs: 0,
     localCorralCalls: 0,
     localCorralCacheHits: 0,
@@ -487,6 +490,7 @@ function hydratePreparedBoard(data, seed, metrics) {
     commitmentPushDistances: new Map(),
     supportDependencyMemo: new Map(),
     localRoomMemo: new Map(),
+    goalRoomPackingTables: new Map(),
     localCorralMemo: new Map(),
     doorwayFlowMemo: new Map(),
     boxSignatureMemo: new WeakMap(),
@@ -574,6 +578,7 @@ function parse(data) {
     commitmentPushDistances: new Map(),
     supportDependencyMemo: new Map(),
     localRoomMemo: new Map(),
+    goalRoomPackingTables: new Map(),
     localCorralMemo: new Map(),
     doorwayFlowMemo: new Map(),
     boxSignatureMemo: new WeakMap(),
@@ -1737,6 +1742,78 @@ function localReachable(domain, boxes, start) {
   return reached;
 }
 
+function canonicalLocalState(domain, boxes, robot) {
+  const reached = localReachable(domain, boxes, robot);
+  if (!reached.size) return null;
+  const region = [...reached].sort()[0];
+  return {region, signature: `${region}|${localBoxSignature(boxes)}`, reached};
+}
+
+function reverseGoalRoomPackingTable(board, room, maxStates = 20000) {
+  const roomIndex = board.topology.rooms.indexOf(room);
+  if (board.goalRoomPackingTables.has(roomIndex)) {
+    return board.goalRoomPackingTables.get(roomIndex);
+  }
+  const domain = new Set([...room.cells, room.gate]);
+  for (const [position, distance] of room.approach) if (distance <= 2) domain.add(position);
+  const targetBoxes = room.goals.map(position => [position, board.goals.get(position)]);
+  if (roomIndex < 0 || room.cells.size > 16 || domain.size > 24 || targetBoxes.length > 4) {
+    const skipped = {status: "oversized", complete: false, domain, states: new Map(), visited: 0};
+    board.goalRoomPackingTables.set(roomIndex, skipped);
+    return skipped;
+  }
+
+  const started = now(), states = new Map(), queue = [];
+  const targetOccupied = new Set(targetBoxes.map(([position]) => position));
+  for (const robot of domain) {
+    if (targetOccupied.has(robot)) continue;
+    const canonical = canonicalLocalState(domain, targetBoxes, robot);
+    if (!canonical || states.has(canonical.signature)) continue;
+    const entry = {pushes: 0, nextPushes: new Set()};
+    states.set(canonical.signature, entry);
+    queue.push({robot: canonical.region, boxes: targetBoxes, pushes: 0});
+  }
+
+  let visited = 0, head = 0;
+  for (; head < queue.length && visited < maxStates; head++) {
+    const current = queue[head];
+    const canonical = canonicalLocalState(domain, current.boxes, current.robot);
+    if (!canonical) continue;
+    visited++;
+    const occupied = new Set(current.boxes.map(([position]) => position));
+    current.boxes.forEach(([destination, label], boxIndex) => {
+      const [y, x] = destination.split(",").map(Number);
+      for (const [, [dy, dx]] of DIRECTION_ENTRIES) {
+        const previous = pkey(y - dy, x - dx);
+        const support = pkey(y - 2 * dy, x - 2 * dx);
+        if (!domain.has(previous) || !domain.has(support) ||
+            occupied.has(previous) || occupied.has(support) ||
+            !canonical.reached.has(previous)) continue;
+        const predecessorBoxes = current.boxes.map((box, index) =>
+          index === boxIndex ? [previous, label] : box);
+        const predecessor = canonicalLocalState(domain, predecessorBoxes, support);
+        if (!predecessor) continue;
+        const pushes = current.pushes + 1;
+        const forwardPush = `${previous}>${destination}`;
+        const known = states.get(predecessor.signature);
+        if (!known) {
+          states.set(predecessor.signature, {pushes, nextPushes: new Set([forwardPush])});
+          queue.push({robot: predecessor.region, boxes: predecessorBoxes, pushes});
+        } else if (known.pushes === pushes) {
+          known.nextPushes.add(forwardPush);
+        }
+      }
+    });
+  }
+  const complete = head >= queue.length;
+  const result = {status: complete ? "ready" : "cutoff", complete, domain, states, visited};
+  board.metrics.reversePackingBuilds++;
+  board.metrics.reversePackingStates += visited;
+  board.metrics.localRoomMs += now() - started;
+  board.goalRoomPackingTables.set(roomIndex, result);
+  return result;
+}
+
 function exactLocalPushSearch({domain, boxes, robot, isGoal, gate, maxStates = 10000}) {
   const initialBoxes = boxes.map(box => [...box]);
   const queue = [{robot, boxes: initialBoxes, pushes: 0, firstPush: null}];
@@ -1829,7 +1906,7 @@ function exactLocalRoomSearch(state, board, room, reachable = reachablePaths(sta
         entrySide, domain, roomIndex, firstPushes: new Set(), visited: 0, viableBoundaries: 0,
       };
       metrics.localRoomMs += now() - started;
-      return memoizeBounded(board.localRoomMemo, cacheKey, result, LOCAL_ROOM_MEMO_LIMIT);
+    return memoizeBounded(board.localRoomMemo, cacheKey, result, LOCAL_ROOM_MEMO_LIMIT);
   }
   for (const [label, count] of internalCounts) {
     exportsRequired += Math.max(0, count - (targetCounts.get(label) || 0));
@@ -1848,6 +1925,32 @@ function exactLocalRoomSearch(state, board, room, reachable = reachablePaths(sta
       status: "inaccessible", importsRequired, exportsRequired,
       doorwayOccupied: localBoxes.some(([position]) => position === room.gate),
       entrySide, domain, roomIndex, firstPushes: new Set(), visited: 0, viableBoundaries: 0,
+    };
+    metrics.localRoomMs += now() - started;
+      return memoizeBounded(board.localRoomMemo, cacheKey, result, LOCAL_ROOM_MEMO_LIMIT);
+  }
+  const packingTable = reverseGoalRoomPackingTable(board, room);
+  const localCanonical = canonicalLocalState(domain, localBoxes, entries[0]);
+  const hasSingleLocalEntryRegion = localCanonical &&
+    entries.every(position => localCanonical.reached.has(position));
+  const tableEntry = localBoxes.length === room.goals.length && exportsRequired === 0 &&
+    hasSingleLocalEntryRegion ? packingTable.states.get(localCanonical.signature) : null;
+  if (tableEntry) {
+    metrics.reversePackingHits++;
+    const result = {
+      status: tableEntry.pushes === 0 ? "packed" : "solvable",
+      pushes: tableEntry.pushes,
+      firstPushes: new Set(tableEntry.nextPushes),
+      visited: 0,
+      viableBoundaries: entries.includes(room.gate) ? 1 : 0,
+      importsRequired,
+      exportsRequired,
+      doorwayOccupied: localBoxes.some(([position]) => position === room.gate),
+      entrySide,
+      domain,
+      roomIndex,
+      source: "reverse-packing-table",
+      reverseTableComplete: packingTable.complete,
     };
     metrics.localRoomMs += now() - started;
     return memoizeBounded(board.localRoomMemo, cacheKey, result, LOCAL_ROOM_MEMO_LIMIT);

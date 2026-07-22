@@ -467,6 +467,38 @@ test("exact local room search packs small rooms and exposes optimal first pushes
   assert.equal(board.metrics.localRoomCacheHits, 1);
 });
 
+test("reverse goal-room packing tables preserve typed labels and optimal doorway choices", () => {
+  const worker = loadWorker();
+  const parsed = stateFromRows([
+    "OOOOOOOOOOOOO", "O R         O", "OOOOOO OOOOOO", "OOOOa b OOOOO",
+    "OOOOA B OOOOO", "OOOO    OOOOO", "OOOOOOOOOOOOO",
+  ]);
+  const board = worker.parse(parsed);
+  const state = {
+    robot: parsed.robot,
+    boxes: parsed.boxes.map(([position, label]) => [
+      ...position.split(",").map(Number), label,
+    ]),
+  };
+  const room = board.topology.rooms.find(candidate =>
+    candidate.goals.includes("3,4") && candidate.goals.includes("3,6"));
+  assert.ok(room);
+  assert.equal(room.cells.size, 13);
+  assert.equal(board.topology.rooms.indexOf(room) >= 0, true);
+  const table = worker.reverseGoalRoomPackingTable(board, room);
+  assert.equal(table.status, "ready");
+  assert.ok(table.states.size > 0);
+
+  const result = worker.exactLocalRoomSearch(state, board, room);
+  assert.equal(result.source, "reverse-packing-table");
+  assert.equal(result.status, "solvable");
+  assert.equal(result.pushes, 2);
+  assert.deepEqual(
+    [...result.firstPushes].sort(),
+    ["4,4>3,4", "4,6>3,6"],
+  );
+});
+
 test("exact local room search reports exhausted and import-dependent abstractions safely", () => {
   const worker = loadWorker();
   const blockedParsed = stateFromRows([

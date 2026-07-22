@@ -187,6 +187,12 @@ dialog > p:not(.eyebrow) { color: var(--muted); line-height: 1.55; }
 }
 .home-card > h2 { font-size: clamp(2.8rem, 9vw, 5.2rem); line-height: 1; margin: .4rem 0; }
 .tagline { color: var(--muted); font-size: 1.1rem; }
+.solver-build-badge {
+  display: inline-flex; gap: .4rem; margin-top: .9rem; padding: .38rem .65rem;
+  border: 1px solid var(--line); border-radius: 6px; background: var(--panel);
+  color: var(--muted); font: .72rem ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+.solver-build-badge strong { color: var(--green); }
 .how-to {
   margin: 2rem 0 1.4rem; padding: 1.4rem; text-align: left;
   border: 1px solid var(--line); border-radius: 8px; background: #161d28dd;

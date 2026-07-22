@@ -1,8 +1,8 @@
 Sokomind improvements and implementation status
 ===============================================
 
-Status reviewed against the repository after Improvement Sprint 2: conservative
-closed-diagonal hard pruning in both solver runtimes.
+Status reviewed against the repository after Improvement Sprint 3: bounded
+reverse-proven goal-room packing tables and a visible homepage build badge.
 
 Standing maintenance rules
 --------------------------
@@ -240,6 +240,30 @@ PARTIALLY DELIVERED
     - Promote only contradictions confirmed by exact reasoning into safe pruning;
       current flow contradictions remain diagnostic and ordering-only.
 
+17. Add reverse-proven goal-room packing tables that identify safe packing orders
+    and reject room arrangements that cannot be completed from the doorway.
+    Delivered so far:
+    - Bounded one-entrance rooms compile a reusable reverse push-state table from
+      the fully packed, label-correct goal arrangement.
+    - Reverse states retain canonical robot-reachability regions, exact typed box
+      layouts, remaining push distance, and every equally optimal next push.
+    - Exact local-room analysis consults the table before repeating its forward
+      search. Typed two-box tests verify label preservation and multiple optimal
+      doorway choices.
+    - Tables are puzzle-independent and bounded to rooms of at most 16 cells,
+      local domains of at most 24 cells, four boxes, and 20,000 reverse states.
+      Oversized and cutoff cases retain the existing forward-search fallback.
+    - A missing entry is only a proof about the bounded doorway abstraction. It
+      remains diagnostic/ordering evidence and is not promoted to global hard
+      pruning because a box may need to travel farther outside that abstraction.
+    Remaining:
+    - Prove when leaving and re-entering a one-entry room cannot help, allowing a
+      complete table miss to become a safe hard rejection in those cases.
+    - Extend table construction to larger rooms with compact state storage,
+      decomposed subrooms, or on-disk/generated pattern data.
+    - Share compiled immutable tables across workers once construction cost and
+      structured-clone size are shown to be beneficial.
+
 18. Add closed-diagonal deadlock detection and more complete freeze detection.
     Delivered so far:
     - Browser and Python searches reject a conservative two-row wall-ended
@@ -273,12 +297,23 @@ PARTIALLY DELIVERED
     - Keep the authoritative implementation and browser/Python capability
       differences explicit as parity work continues.
 
+34. Replace manually synchronized browser build strings with one generated or
+    centrally defined solver/build version.
+    Delivered so far:
+    - The homepage now displays a compact solver-build badge populated directly
+      from the same SOLVER_BUILD constant used to version the worker URL and
+      search-log events. Build 2026-07-22.14 is visible without opening developer
+      tools, making a stale cached application immediately recognizable.
+    - A policy test requires the badge, binding, and app.js cache-busting query to
+      agree with the loaded solver build.
+    Remaining:
+    - Generate or centrally inject the version into index.html so styles,
+      levels, policy modules, the application, and worker cannot drift.
+    - Add a release/deploy check that rejects mismatched cache revisions.
+
 
 YET TO BE IMPLEMENTED AS BACKLOG CAPABILITIES
 ----------------------------------------------
-
-17. Add reverse-proven goal-room packing tables that identify safe packing orders
-    and reject room arrangements that cannot be completed from the doorway.
 
 19. Add small deadlock pattern databases and use exhaustive local enumeration to
     recognize additional unsalvageable box patterns safely.
@@ -344,9 +379,3 @@ YET TO BE IMPLEMENTED AS BACKLOG CAPABILITIES
     range instead of only Python 3.12, retain the supported Node version check,
     and add formatting, linting, type checking, and coverage reporting with
     explicit thresholds appropriate to the dependency-free project.
-
-34. Replace manually synchronized browser build strings with one generated or
-    centrally defined solver/build version. Ensure app.js, solver-worker.js,
-    levels.js, policy modules, styles, and index.html cannot ship incompatible
-    cached revisions. The standing version rule above applies even before this
-    automation exists.
