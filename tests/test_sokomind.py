@@ -17,10 +17,12 @@ from Searches.Sokomind import (
     _reconstruct_walk,
     apply_move,
     a_star_search,
+    collapse_forced_pushes,
     get_push_neighbors,
     get_neighbors,
     main,
     parse_puzzle,
+    push_beam_search,
     push_a_star_search,
     render_puzzle,
     solve,
@@ -91,6 +93,7 @@ class SokomindTests(unittest.TestCase):
             "bfs",
             "dfs",
             "push-astar",
+            "push-beam",
             "fast",
             "ultimate",
         ):
@@ -246,6 +249,36 @@ class SokomindTests(unittest.TestCase):
         ])
         segments = [segment for _next_state, segment in get_push_neighbors(state)]
         self.assertIn(["Down", "Left", "Down", "Right"], segments)
+
+    def test_forced_push_macro_preserves_the_complete_replay_path(self):
+        state = parse_puzzle(["OOOOOOO", "OR X SO", "OOOOOOO"])
+        first_state, first_segment = get_push_neighbors(state)[0]
+        final, segment = collapse_forced_pushes(first_state, first_segment)
+
+        replay = state
+        for move in segment:
+            replay = apply_move(replay, move)
+        self.assertTrue(final.is_goal())
+        self.assertEqual(final.boxes, replay.boxes)
+        self.assertEqual(2, final.cost)
+        self.assertEqual(["Right", "Right", "Right"], segment)
+
+    def test_push_beam_solves_with_forced_macros_and_honors_state_budget(self):
+        state = parse_puzzle(["OOOOOOO", "OR X SO", "OOOOOOO"])
+        path, final, _elapsed, visited = push_beam_search(state, beam_width=4)
+        self.assertTrue(final.is_goal())
+        self.assertEqual(["Right", "Right", "Right"], [move for move, _ in path])
+        self.assertLessEqual(visited, 2)
+
+        branching = parse_puzzle([
+            "OOOOOOO", "O SS  O", "O     O", "O XXR O", "O     O", "OOOOOOO",
+        ])
+        path, final, _elapsed, visited = push_beam_search(
+            branching, beam_width=4, max_visited=1,
+        )
+        self.assertIsNone(path)
+        self.assertIsNone(final)
+        self.assertEqual(1, visited)
 
     def test_push_astar_returns_replayable_step_path(self):
         state = parse_puzzle([

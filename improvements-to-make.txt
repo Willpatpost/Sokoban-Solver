@@ -1,8 +1,8 @@
 Sokomind improvements and implementation status
 ===============================================
 
-Status reviewed against the repository after the Sprint 18 packed dense-state
-identity and transposition-key work.
+Status reviewed against the repository after the Sprint 19 Python forced-macro
+and bounded push-beam portfolio work.
 
 The original item numbers and priority order are retained for traceability.
 "Done" means the stated outcome is implemented and adequately validated.
@@ -169,10 +169,16 @@ PARTIALLY DELIVERED
     - Exact distinct box-to-goal matching, including larger assignments.
     - Bounded heuristic caching.
     - More compact robot-reachability parents and reduced path copying.
+    - Replay-safe globally forced push chains collapse into one search edge in
+      every push-level search while preserving all GUI movement steps.
+    - A deterministic push-beam search has explicit frontier, push-depth, state,
+      cancellation, and wall-clock limits. It is exposed through the CLI and
+      desktop GUI, and is now the opening phase of local Ultimate Search before
+      weighted and exact push A* fallbacks.
     Remaining:
-    - Align Ultimate Search architecture and terminology with the browser solver.
-    - Port selected topology, macro, advanced deadlock, bounded-memory, beam/IDA,
-      portfolio, commitment, dependency, room, corral, and doorway capabilities.
+    - Align more Ultimate Search phases and telemetry with the browser director.
+    - Port selected topology, sequence macros, advanced deadlock, IDA, commitment,
+      dependency, room, corral, and doorway capabilities.
     - Remove or integrate remaining redundant priority/heuristic state machinery.
 
 14. Build dynamic support-square dependency graphs.

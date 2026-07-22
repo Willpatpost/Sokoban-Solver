@@ -63,6 +63,7 @@ The timer begins only after the first legal move.
 ```powershell
 python Searches/Sokomind.py --puzzle medium --algorithm ultimate
 python Searches/Sokomind.py --puzzle large --algorithm push-greedy
+python Searches/Sokomind.py --puzzle medium --algorithm push-beam
 python Searches/Sokomind.py --puzzle medium --algorithm astar
 python Searches/Sokomind.py --file path/to/puzzle.txt --show-steps
 python Searches/Sokomind.py --help
@@ -71,11 +72,14 @@ python Searches/Sokomind.py --help
 Recommended algorithms:
 
 - `ultimate`: recommended mode; combines Sokoban-specific mechanics including
-  push-level search, dead-square pruning, robot-reachability canonicalization,
-  exact distinct label-aware goal matching, and push-distance heuristics.
+  a bounded push-beam opening, forced-push macros, dead-square pruning,
+  robot-reachability canonicalization, exact distinct label-aware goal matching,
+  and push-distance heuristics.
 - `fast` / `portfolio`: older aliases for the same recommended portfolio.
 - `push-greedy`: usually the quickest way to find a playable solution on big
   levels, though it may not be shortest.
+- `push-beam`: bounded push-level best-first layers; this is the first phase used
+  by local Ultimate Search and is also available as Push Beam in the GUI selector.
 - `push-astar`: searches at the box-push level instead of every walking step.
 - `astar`, `greedy`, `bfs`, `dfs`: classic step-by-step searches, mostly useful
   for comparison and small puzzles.
@@ -88,7 +92,9 @@ The local solver uses exact polynomial assignment for every box count, including
 Hall-failure detection when no distinct box-to-goal matching exists. Its bounded
 layout-only heuristic cache avoids retaining complete search states, and
 push-level reachability stores compact parent directions so walking paths are
-reconstructed only for legal retained pushes.
+reconstructed only for legal retained pushes. Globally forced push chains are
+collapsed into one search edge while retaining every walking and pushing move
+needed for GUI replay.
 
 Puzzle symbols are `O` wall, `R` robot, `X` generic box, `S` generic goal,
 and spaces for floor. Other uppercase letters are dedicated boxes and their

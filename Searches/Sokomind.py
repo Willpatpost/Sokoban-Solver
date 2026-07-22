@@ -507,6 +507,32 @@ def _push_signature(
     return min(reachable), state.boxes
 
 
+def collapse_forced_pushes(
+    state: State,
+    segment: Sequence[str],
+    limit: int = 32,
+) -> tuple[State, list[str]]:
+    """Collapse a globally forced chain while preserving its replayable walk path."""
+    current = state
+    moves = list(segment)
+    seen = {_push_signature(current)}
+    pushes = 1
+    while pushes < limit and not current.is_goal():
+        reachable = _reachable_parents(current)
+        choices = get_push_neighbors(current, reachable)
+        if len(choices) != 1:
+            break
+        next_state, next_segment = choices[0]
+        signature = _push_signature(next_state)
+        if signature in seen:
+            break
+        seen.add(signature)
+        current = next_state
+        moves.extend(next_segment)
+        pushes += 1
+    return current, moves
+
+
 def reconstruct_path(
     came_from: dict[State, tuple[State, list[str]]],
     end_state: State,
@@ -602,9 +628,13 @@ def _search(
             elapsed = time.perf_counter() - started
             return reconstruct_path(came_from, current, initial), current, elapsed, len(expanded)
 
-        children = get_push_neighbors(current, current_reachable) if push_macro else [
-            (neighbor, [move]) for neighbor, move in get_neighbors(current)
-        ]
+        if push_macro:
+            children = [
+                collapse_forced_pushes(neighbor, segment)
+                for neighbor, segment in get_push_neighbors(current, current_reachable)
+            ]
+        else:
+            children = [(neighbor, [move]) for neighbor, move in get_neighbors(current)]
         if algorithm == "dfs":
             children.reverse()
         for neighbor, segment in children:
@@ -670,19 +700,87 @@ def push_greedy_search(
     return _search(initial_state, "greedy", cancel_event, push_macro=True, max_seconds=max_seconds)
 
 
+def push_beam_search(
+    initial_state: State,
+    cancel_event: Event | None = None,
+    *,
+    beam_width: int = 300,
+    max_depth: int = 200,
+    max_visited: int = 60_000,
+    max_seconds: float | None = None,
+):
+    """Bounded best-first layers over canonical push states.
+
+    This intentionally remains smaller than the browser portfolio, but shares
+    its push-level beam terminology, deterministic budgets, and forced macros.
+    """
+    if beam_width < 1 or max_depth < 0 or max_visited < 1:
+        raise ValueError("Beam width and state budget must be positive.")
+    initial = State(initial_state.robot_pos, initial_state.boxes, initial_state.board)
+    started = time.perf_counter()
+    frontier = [initial]
+    came_from: dict[State, tuple[State, list[str]]] = {}
+    best_cost: dict[object, int] = {_push_signature(initial): 0}
+    visited = 0
+    order = 0
+
+    while frontier:
+        candidates: dict[object, tuple[float, int, State, State, list[str]]] = {}
+        for current in frontier:
+            if cancel_event is not None and cancel_event.is_set():
+                return None, None, time.perf_counter() - started, visited
+            if max_seconds is not None and time.perf_counter() - started >= max_seconds:
+                return None, None, time.perf_counter() - started, visited
+            if current.is_goal():
+                return (
+                    reconstruct_path(came_from, current, initial),
+                    current,
+                    time.perf_counter() - started,
+                    visited,
+                )
+            if visited >= max_visited:
+                return None, None, time.perf_counter() - started, visited
+            visited += 1
+            reachable = _reachable_parents(current)
+            for raw_state, raw_segment in get_push_neighbors(current, reachable):
+                neighbor, segment = collapse_forced_pushes(raw_state, raw_segment)
+                if neighbor.cost > max_depth:
+                    continue
+                estimate = neighbor.heuristic
+                if not math.isfinite(estimate):
+                    continue
+                signature = _push_signature(neighbor)
+                if neighbor.cost >= best_cost.get(signature, math.inf):
+                    continue
+                order += 1
+                candidate = (estimate + 0.15 * neighbor.cost, order,
+                             neighbor, current, segment)
+                previous = candidates.get(signature)
+                if previous is None or candidate[:2] < previous[:2]:
+                    candidates[signature] = candidate
+
+        ranked = sorted(candidates.items(), key=lambda item: item[1][:2])[:beam_width]
+        frontier = []
+        for signature, (_score, _order, neighbor, parent, segment) in ranked:
+            best_cost[signature] = neighbor.cost
+            came_from[neighbor] = (parent, segment)
+            frontier.append(neighbor)
+
+    return None, None, time.perf_counter() - started, visited
+
+
 def ultimate_search(initial_state: State, cancel_event: Event | None = None):
     """Best-effort Sokoban-aware solver portfolio.
 
-    This combines the project's current Sokoban-specific mechanics:
-    push-level search, robot reachability canonicalization, static dead-square
-    pruning, label-aware goal matching, and push-distance heuristics. The first
-    two attempts are bounded so the GUI/browser stay responsive before falling
-    back to a bounded push-optimal A* attempt.
+    This combines the project's current Sokoban-specific mechanics: a bounded
+    push beam, forced-push macros, robot reachability canonicalization, static
+    dead-square pruning, label-aware goal matching, and push-distance heuristics.
+    Guided attempts are bounded before a final push-optimal A* attempt.
     """
     started = time.perf_counter()
     total_visited = 0
     attempts = (
-        lambda: push_greedy_search(initial_state, cancel_event, max_seconds=8),
+        lambda: push_beam_search(initial_state, cancel_event, max_seconds=8),
         lambda: weighted_push_a_star_search(initial_state, cancel_event, max_seconds=20),
         lambda: push_a_star_search(initial_state, cancel_event, max_seconds=30),
     )
@@ -745,6 +843,7 @@ def solve(puzzle: Sequence[str], algorithm: str = "astar"):
         "push-astar": push_a_star_search,
         "push-a*": push_a_star_search,
         "push-greedy": push_greedy_search,
+        "push-beam": push_beam_search,
         "weighted-push-astar": weighted_push_a_star_search,
         "ultimate": ultimate_search,
         "portfolio": portfolio_search,
@@ -767,7 +866,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--algorithm",
         choices=(
             "astar", "greedy", "bfs", "dfs", "push-astar",
-            "push-greedy", "weighted-push-astar", "ultimate", "portfolio", "fast",
+            "push-greedy", "push-beam", "weighted-push-astar",
+            "ultimate", "portfolio", "fast",
         ),
         default="ultimate",
     )
