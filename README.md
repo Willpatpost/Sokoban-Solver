@@ -14,6 +14,7 @@ lane direction, and staging capacity.
 
 - [Desktop application setup and usage](README-desktop.md)
 - [Web application documentation](docs/README.md)
+- [Solver architecture and puzzle-independence rules](docs/ARCHITECTURE.md)
 
 Run the automated solver tests with:
 
@@ -33,6 +34,14 @@ file; browser-embedded levels and benchmark replay rules are checked against the
 same fixtures in CI.
 
 
-## Proof that the huge puzzle is solvable:
+## Saved Huge diagnostic solution
+
+The saved route is a replay-valid regression artifact used to study difficult
+states and pruning behavior. It is never consumed by the solver and is not a
+puzzle-specific shortcut. Verify it with:
+
+```powershell
+node bench/verify-solution.js huge docs/optimalForHuge.txt
+```
 
 ![Huge Solution Proof](data/images/HugeSolutionProof.png)

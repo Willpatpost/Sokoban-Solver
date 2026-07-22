@@ -1,4 +1,4 @@
-current optimal solution for Huge:
+Best saved solution for Huge (diagnostic replay; never solver input):
 
 1. Down
 2. Down

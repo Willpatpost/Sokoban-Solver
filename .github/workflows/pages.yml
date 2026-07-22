@@ -3,6 +3,7 @@ name: Deploy GitHub Pages
 on:
   push:
     branches: ["main"]
+  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -25,12 +26,14 @@ jobs:
           node-version: "22"
       - run: python -m unittest discover -v
       - run: node --test docs/solver-worker.test.js docs/path-validation.test.js docs/director-policy.test.js docs/keyboard-policy.test.js docs/conformance.test.js
-      - run: node --test docs/pruning-differential.test.js bench/evaluator.test.js bench/generated-cases.test.js bench/benchmark.test.js bench/conformance.test.js
+      - run: node --test docs/pruning-differential.test.js bench/evaluator.test.js bench/generated-cases.test.js bench/benchmark.test.js bench/conformance.test.js bench/verify-solution.test.js bench/solver-generality.test.js
+      - run: node bench/verify-solution.js huge docs/optimalForHuge.txt
       - run: node bench/benchmark.js --suite smoke
       - run: node bench/benchmark.js --suite validation
 
   deploy:
     needs: test
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     permissions:
       contents: read
       pages: write

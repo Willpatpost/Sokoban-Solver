@@ -1,8 +1,18 @@
 Sokomind improvements and implementation status
 ===============================================
 
-Status reviewed against the repository after the Sprint 20 Python frozen-box
-component detection and exhaustive differential validation work.
+Status reviewed against the repository after Improvement Sprint 1: general-purpose
+solver guardrails, pull-request CI, and machine-verifiable solution artifacts.
+
+Standing maintenance rules
+--------------------------
+
+- After every change to solver behavior, search strategy, pruning, state
+  representation, worker protocol, or solver orchestration, increment the
+  solver version ID and keep every browser cache-busting reference synchronized.
+- At the end of every sprint, review this file against the repository, update
+  the sprint/status heading, move completed work to the appropriate section,
+  and record any newly discovered limitations or follow-up work.
 
 The original item numbers and priority order are retained for traceability.
 "Done" means the stated outcome is implemented and adequately validated.
@@ -36,6 +46,19 @@ DONE
    Python, browser, worker, and benchmark code consume shared level and rule
    fixtures, with conformance tests guarding parsing and puzzle-rule drift.
 
+29. Run CI before merge.
+    The complete test and benchmark workflow now runs on pull requests. The deploy
+    job is explicitly excluded from pull requests and remains restricted to main.
+    Repository branch-protection settings can now require the test job.
+
+35. Make saved solution evidence machine-verifiable without specializing search.
+    A generic level-and-file verifier replays numbered solution artifacts against
+    the independent benchmark rules and checks the final goal state. The saved
+    Huge route is verified in CI as a 640-move, 250-push diagnostic replay and is
+    explicitly documented as evidence that is never consumed by production search.
+    A source guard rejects saved-route consumption and built-in-level branches in
+    both production solver implementations.
+
 
 STRONG IMPLEMENTATION, WITH BOUNDED LIMITATIONS
 -----------------------------------------------
@@ -54,6 +77,12 @@ STRONG IMPLEMENTATION, WITH BOUNDED LIMITATIONS
      typed-label combinations.
    - Counterexamples are selected from the corpus but not structurally minimized.
    - Coverage must continue to be extended whenever hard rejection rules change.
+   Remaining validation expansion:
+   - Add exhaustive or systematically sampled 3x3 and 3x4 floor layouts.
+   - Cover multiple typed boxes, interacting doorways, corrals, and closed
+     diagonals as those pruning rules are introduced.
+   - Add property-based state generation and automatic counterexample shrinking
+     so failures produce the smallest practical reproducible puzzle.
 
 5. Add hidden or generated benchmark families.
    Implemented:
@@ -211,6 +240,15 @@ PARTIALLY DELIVERED
     - Promote only contradictions confirmed by exact reasoning into safe pruning;
       current flow contradictions remain diagnostic and ordering-only.
 
+32. Complete project and release hygiene.
+    Delivered so far:
+    - Added concise architecture documentation defining the general-purpose search
+      rule, runtime boundaries, and the proper diagnostic role of saved solutions.
+    Remaining:
+    - Add a LICENSE, CONTRIBUTING.md, and a changelog or release-note convention.
+    - Keep the authoritative implementation and browser/Python capability
+      differences explicit as parity work continues.
+
 
 YET TO BE IMPLEMENTED AS BACKLOG CAPABILITIES
 ----------------------------------------------
@@ -254,9 +292,13 @@ YET TO BE IMPLEMENTED AS BACKLOG CAPABILITIES
 
 26. Improve screen-reader support for the web board with an accessible board or
     live description of the robot, boxes, goals, moves, and completion state.
+    Add live status announcements and a reduced-motion mode for transitions and
+    solver playback.
 
 27. Split docs/app.js and docs/solver-worker.js into focused modules for game
     rules, UI rendering, worker orchestration, telemetry, and search engines.
+    Extract a reusable rules/state core where practical so the UI, worker,
+    benchmark validator, and tests do not maintain parallel implementations.
     Perform this alongside or after well-tested functional changes so a large
     refactor does not obscure solver regressions.
 
@@ -265,3 +307,26 @@ YET TO BE IMPLEMENTED AS BACKLOG CAPABILITIES
     controls, and substantially improve responsive phone layout, sizing,
     navigation, logs, and touch interaction. This subjective presentation task
     remains the lowest priority.
+
+30. Add real-browser integration tests, preferably with Playwright, for loading a
+    level, keyboard and touch play, hints, solver start/stop, worker failures,
+    stale worker messages, undo/reset during animation, completion flow, stored
+    bounds, and responsive layouts. Run a small browser matrix in CI rather than
+    relying only on Node-hosted worker and policy tests.
+
+31. Add deterministic performance and memory regression gates. Track visited
+    states, generated states, peak retained states, and heap use separately from
+    machine-sensitive elapsed time. Store reviewed baselines with tolerances,
+    fail CI on material regressions in representative smoke cases, and run the
+    expensive Huge suite on a scheduled or explicitly requested workflow.
+
+33. Expand compatibility and quality checks. Test the documented Python 3.10+
+    range instead of only Python 3.12, retain the supported Node version check,
+    and add formatting, linting, type checking, and coverage reporting with
+    explicit thresholds appropriate to the dependency-free project.
+
+34. Replace manually synchronized browser build strings with one generated or
+    centrally defined solver/build version. Ensure app.js, solver-worker.js,
+    levels.js, policy modules, styles, and index.html cannot ship incompatible
+    cached revisions. The standing version rule above applies even before this
+    automation exists.
