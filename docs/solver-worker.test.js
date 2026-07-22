@@ -227,10 +227,45 @@ test("puzzle analysis builds a board-derived worker plan", () => {
   assert.ok(analysis.surplusBoxes > 0);
   assert.equal(analysis.recommendations.useEvacuation, true);
   assert.equal(analysis.recommendations.useSequenceMacros, true);
+  assert.equal(analysis.recommendations.reverseWorkerLimit, 2);
+  assert.ok(analysis.reverseStartRegions >= 1);
+  assert.ok(analysis.productiveReverseStartRegions >= 1);
+  assert.ok(analysis.reverseStartPulls >= analysis.productiveReverseStartRegions);
   assert.deepEqual(
     Array.from(analysis.phases, phase => phase.id).slice(0, 2),
     ["evacuation", "room-packing"],
   );
+});
+
+test("reverse workers receive disjoint first-pull branches from every solved-side region", () => {
+  const worker = loadWorker();
+  const state = stateFromRows(HUGE_ROWS);
+  const board = worker.parse(state);
+  const boxes = state.boxes.map(([position, label]) => [
+    ...position.split(",").map(Number), label,
+  ]);
+  const all = worker.reverseStartStates(board, boxes, {index: 0, count: 1});
+  const first = worker.reverseStartStates(board, boxes, {index: 0, count: 2});
+  const second = worker.reverseStartStates(board, boxes, {index: 1, count: 2});
+  assert.equal(first.length, all.length);
+  assert.equal(second.length, all.length);
+  assert.equal(first.portfolioStats.totalRegions, all.length);
+  assert.equal(second.portfolioStats.totalRegions, all.length);
+  assert.equal(
+    first.portfolioStats.assignedPullOptions + second.portfolioStats.assignedPullOptions,
+    all.portfolioStats.totalPullOptions,
+  );
+  assert.ok(first.portfolioStats.assignedPullOptions > 0);
+  assert.ok(second.portfolioStats.assignedPullOptions > 0);
+  const portfolio = worker.reverseStartPortfolio(board, boxes);
+  for (const entry of portfolio) {
+    for (const signature of entry.pullSignatures) {
+      assert.notEqual(
+        worker.reverseShardOwns(signature, {index: 0, count: 2}),
+        worker.reverseShardOwns(signature, {index: 1, count: 2}),
+      );
+    }
+  }
 });
 
 test("puzzle analysis keeps simple boards on a small portfolio", () => {

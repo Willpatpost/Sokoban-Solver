@@ -1,7 +1,7 @@
 const LEVELS = SokomindLevels.LEVELS;
 const DIRS = {Up: [-1, 0], Down: [1, 0], Left: [0, -1], Right: [0, 1]};
 const CODE_MOVE = {U: "Up", D: "Down", L: "Left", R: "Right"};
-const SOLVER_BUILD = "2026-07-20.5";
+const SOLVER_BUILD = "2026-07-22.6";
 const SOLVER_WORKER_URL = `solver-worker.js?build=${SOLVER_BUILD}`;
 const PUSH_BOUNDS_KEY = "sokomind-push-bounds-v1";
 const KEYS = {ArrowUp: "Up", ArrowDown: "Down", ArrowLeft: "Left", ArrowRight: "Right",
@@ -440,7 +440,11 @@ function runBidirectionalSolver(purpose, analysis) {
   const advancedPortfolio = ["complex", "extreme"].includes(analysis.difficulty);
   const reverseLimit = recommendations.reverseWorkerLimit;
   const sideVisitedLimit = recommendations.sideVisitedLimit;
-  const reverseWorkers = Math.max(1, Math.min(hardware - 1, reverseLimit));
+  const reverseWorkers = Math.max(1, Math.min(
+    hardware - 1,
+    reverseLimit,
+    Math.max(1, analysis.reverseStartPulls || analysis.reverseStartRegions || 1),
+  ));
   appendSearchLog("analysis", `${analysis.difficulty} puzzle analyzed`, {
     size: `${analysis.dimensions.columns}x${analysis.dimensions.rows}`,
     boxes: analysis.boxes,
@@ -451,6 +455,9 @@ function runBidirectionalSolver(purpose, analysis) {
     tunnels: analysis.tunnelCells,
     surplus: analysis.surplusBoxes,
     pressure: analysis.pressure,
+    reverseRegions: analysis.reverseStartRegions,
+    productiveReverseRegions: analysis.productiveReverseStartRegions,
+    reversePulls: analysis.reverseStartPulls,
   });
   analysis.phases.forEach((phase, index) => appendSearchLog(
     "plan", `Phase ${index + 1}: ${phase.id}`, {reason: phase.reason},
@@ -1103,7 +1110,9 @@ function runBidirectionalSolver(purpose, analysis) {
       profile: plan.beamProfile || plan.dfsProfile,
       bound: Number.isFinite(effectiveUpperBound) ? effectiveUpperBound : "unbounded",
       shard: plan.exactShard
-        ? `${plan.exactShard.index + 1}/${plan.exactShard.count}` : undefined,
+        ? `${plan.exactShard.index + 1}/${plan.exactShard.count}`
+        : plan.reverseShard
+          ? `${plan.reverseShard.index + 1}/${plan.reverseShard.count}` : undefined,
       round: plan.exactRound,
       checkpoint: plan.sourceCheckpointId ? shortStateId(plan.sourceCheckpointId) : undefined,
     });
@@ -1241,6 +1250,17 @@ function runBidirectionalSolver(purpose, analysis) {
       }
       if (data.type === "landmarks") {
         registerLandmarks(data.landmarks || [], worker, plan);
+        return;
+      }
+      if (data.type === "reverse-starts") {
+        appendSearchLog("reverse", `${plan.label} assigned solved-side branches`, {
+          shard: `${data.shard.index + 1}/${data.shard.count}`,
+          anchors: data.assignedRegions,
+          productiveAnchors: data.assignedProductiveRegions,
+          assignedPulls: data.assignedPullOptions,
+          totalPulls: data.totalPullOptions,
+          totalAnchors: data.totalRegions,
+        });
         return;
       }
       if (data.type === "contour") {
@@ -1468,7 +1488,7 @@ function runBidirectionalSolver(purpose, analysis) {
     launch({
       mode: "bidir-reverse",
       side: "reverse",
-      label: `Reverse Unsolver ${index + 1}`,
+      label: `Reverse Branch Shard ${index + 1}/${reverseWorkers}`,
       landmarkGeneration: `initial-${index + 1}`,
       maxVisited: sideVisitedLimit,
       frontierLimit: 40000,

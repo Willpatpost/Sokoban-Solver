@@ -498,6 +498,8 @@ function analyzePuzzleForSearch(data) {
   const searchScale = boxes.length * board.floor.size;
   const dependencyCount = roomSummaries.reduce((sum, room) => sum + room.dependencies, 0);
   const surplusBoxes = roomSummaries.reduce((sum, room) => sum + room.surplus, 0);
+  const reversePortfolio = reverseStartPortfolio(board, boxes);
+  const productiveReverseRegions = reversePortfolio.filter(entry => entry.pullOptions > 0);
   const pressure = searchScale * (1 + 0.18 * board.topology.rooms.length) *
     (1 + 0.08 * dependencyCount) * (1 + 0.06 * Math.max(0, legalPushes - 2));
   const difficulty = pressure >= 1800 ? "extreme" : pressure >= 700 ? "complex" :
@@ -512,7 +514,7 @@ function analyzePuzzleForSearch(data) {
   }
   phases.push({id: "exact-proof", reason: "complete fallback after heuristic workers"});
   const recommendations = {
-    reverseWorkerLimit: difficulty === "extreme" ? 1 : difficulty === "complex" ? 2 : 3,
+    reverseWorkerLimit: difficulty === "extreme" ? 2 : difficulty === "complex" ? 2 : 3,
     sideVisitedLimit: difficulty === "extreme" ? 100000 : difficulty === "complex" ? 200000 : 250000,
     beamAttempts: difficulty === "small" ? 1 : 2,
     beamWidth: difficulty === "extreme" ? 300 : difficulty === "complex" ? 700 : 1200,
@@ -537,6 +539,9 @@ function analyzePuzzleForSearch(data) {
     surplusBoxes,
     evacuationPenalty,
     dependencyCount,
+    reverseStartRegions: reversePortfolio.length,
+    productiveReverseStartRegions: productiveReverseRegions.length,
+    reverseStartPulls: reversePortfolio.reduce((sum, entry) => sum + entry.pullOptions, 0),
     searchScale,
     pressure: Math.round(pressure),
     difficulty,
@@ -963,7 +968,7 @@ function solvedBoxes(board, initialBoxes) {
   return boxes.sort((a, b) => a.join(",").localeCompare(b.join(",")));
 }
 
-function reverseStartStates(board, initialBoxes, shard) {
+function reverseStartPortfolio(board, initialBoxes, initialTargets = null) {
   const boxes = solvedBoxes(board, initialBoxes);
   const occupied = new Set(boxes.map(([y, x]) => pkey(y, x)));
   const unique = new Map();
@@ -973,9 +978,52 @@ function reverseStartStates(board, initialBoxes, shard) {
     const state = {robot, boxes, cost: 0};
     const reachable = reachablePaths(state, board);
     const signature = pushKey(state, reachable);
-    if (!unique.has(signature)) unique.set(signature, state);
+    if (!unique.has(signature)) unique.set(signature, {state, signature, reachable});
   }
-  return [...unique.values()].filter((_state, index) => index % shard.count === shard.index);
+  const targets = initialTargets || targetMapFromBoxes(initialBoxes, board);
+  return [...unique.values()].map(entry => {
+    const pulls = reversePullNeighbors(entry.state, board, entry.reachable);
+    const nextEstimate = pulls.reduce((best, next) =>
+      Math.min(best, homeHeuristic(next.boxes, targets)), Infinity);
+    const gateAccess = [...board.topology.articulations]
+      .filter(position => entry.reachable.has(position)).length;
+    return {
+      ...entry,
+      pullOptions: pulls.length,
+      pullSignatures: pulls.map(next => exactPushKey(next)),
+      nextEstimate,
+      reachableCells: entry.reachable.size,
+      gateAccess,
+    };
+  }).sort((left, right) =>
+    Number(right.pullOptions > 0) - Number(left.pullOptions > 0) ||
+    right.pullOptions - left.pullOptions ||
+    left.nextEstimate - right.nextEstimate ||
+    right.gateAccess - left.gateAccess ||
+    right.reachableCells - left.reachableCells ||
+    left.signature.localeCompare(right.signature));
+}
+
+function reverseStartStates(board, initialBoxes, shard, initialTargets = null) {
+  const portfolio = reverseStartPortfolio(board, initialBoxes, initialTargets);
+  const states = portfolio.map(entry => entry.state);
+  const assignedPullOptions = portfolio.reduce((sum, entry) => sum +
+    entry.pullSignatures.filter(signature => reverseShardOwns(signature, shard)).length, 0);
+  states.portfolioStats = {
+    totalRegions: portfolio.length,
+    productiveRegions: portfolio.filter(entry => entry.pullOptions > 0).length,
+    totalPullOptions: portfolio.reduce((sum, entry) => sum + entry.pullOptions, 0),
+    assignedRegions: states.length,
+    assignedProductiveRegions: portfolio.filter(entry => entry.pullSignatures
+      .some(signature => reverseShardOwns(signature, shard))).length,
+    assignedPullOptions,
+  };
+  return states;
+}
+
+function reverseShardOwns(signature, shard) {
+  if (!shard || shard.count <= 1) return true;
+  return Math.floor(signatureNoise(signature, 0x51f15e) * shard.count) === shard.index;
 }
 
 function flushRecords(records) {
@@ -1945,7 +1993,17 @@ function bidirectionalSide(payload) {
   };
   const starts = forward
     ? [{robot: payload.state.robot, boxes: initialBoxes, cost: 0, path: []}]
-    : reverseStartStates(board, initialBoxes, payload.reverseShard || {index: 0, count: 1});
+    : reverseStartStates(
+      board,
+      initialBoxes,
+      payload.reverseShard || {index: 0, count: 1},
+      initialTargets,
+    );
+  if (!forward) postMessage({
+    type: "reverse-starts",
+    shard: payload.reverseShard || {index: 0, count: 1},
+    ...starts.portfolioStats,
+  });
   starts.forEach(state => {
     state.exactSignature = exactPushKey(state);
     const estimate = forward
@@ -2030,7 +2088,7 @@ function bidirectionalSide(payload) {
         frontier: frontier.length, retained: bestCost.size});
       return;
     }
-    const nextStates = forward
+    let nextStates = forward
       ? pushNeighbors(current, board, reachable).map(next => ({
           robot: next.robot,
           boxes: next.boxes,
@@ -2042,6 +2100,10 @@ function bidirectionalSide(payload) {
           ...next,
           parent: signature,
         }));
+    if (!forward && current.cost === 0 && payload.reverseShard?.count > 1) {
+      nextStates = nextStates.filter(next =>
+        reverseShardOwns(exactPushKey(next), payload.reverseShard));
+    }
     for (const next of nextStates) {
       next.exactSignature = exactPushKey(next);
       if (next.cost >= (bestCost.get(next.exactSignature) ?? Infinity)) continue;
