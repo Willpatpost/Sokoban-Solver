@@ -268,6 +268,41 @@ test("goal commitment integrates support, doorway, and exact room evidence conse
   );
 });
 
+test("state-complete commitment locks only boxes proven packed in a finished room", () => {
+  const worker = loadWorker();
+  const parsed = stateFromRows([
+    "OOOOOOO", "O R   O", "OOO OOO", "O  S  O",
+    "O     O", "O     O", "OOOOOOO",
+  ]);
+  const board = worker.parse(parsed);
+  const packedState = {robot: [4, 3], boxes: [[3, 3, "X"]]};
+  const reachable = worker.reachablePaths(packedState, board);
+  const commitments = worker.stateGoalCommitments(packedState, board, reachable);
+  assert.equal(commitments.get("3,3"), "proven");
+  assert.ok(worker.pushNeighbors(packedState, board, reachable).length > 0);
+  assert.equal(
+    worker.pushNeighbors(packedState, board, reachable, {lockProven: true}).length,
+    0,
+  );
+  assert.equal(worker.stateGoalCommitments(packedState, board, reachable), commitments);
+  assert.ok(board.metrics.commitmentBoxLocks > 0);
+
+  const openBoard = worker.parse({rows: [
+    "OOOOOOO", "O     O", "O  R  O", "O  S  O",
+    "O     O", "O     O", "OOOOOOO",
+  ]});
+  const conditionalState = {robot: [2, 3], boxes: [[3, 3, "X"]]};
+  const openReachable = worker.reachablePaths(conditionalState, openBoard);
+  assert.equal(
+    worker.stateGoalCommitments(conditionalState, openBoard, openReachable).get("3,3"),
+    "conditional",
+  );
+  assert.equal(
+    worker.pushNeighbors(conditionalState, openBoard, openReachable, {lockProven: true}).length,
+    worker.pushNeighbors(conditionalState, openBoard, openReachable).length,
+  );
+});
+
 test("player-aware push distances detect one-way chokepoints", () => {
   const worker = loadWorker();
   const board = worker.parse({rows: [
@@ -505,6 +540,8 @@ test("prepared board seeds are clone-safe and preserve search results", () => {
   const secondBoard = worker.parse({...state, preparedBoard});
   assert.notEqual(firstBoard.heuristicMemo, secondBoard.heuristicMemo);
   assert.notEqual(firstBoard.deadlockMemo, secondBoard.deadlockMemo);
+  assert.notEqual(firstBoard.commitmentMemo, secondBoard.commitmentMemo);
+  assert.notEqual(firstBoard.stateCommitmentMemo, secondBoard.stateCommitmentMemo);
   assert.notEqual(firstBoard.supportDependencyMemo, secondBoard.supportDependencyMemo);
   assert.notEqual(firstBoard.localRoomMemo, secondBoard.localRoomMemo);
   assert.notEqual(firstBoard.localCorralMemo, secondBoard.localCorralMemo);
@@ -1223,11 +1260,20 @@ test("all hard pruning preserves the known Huge solution", () => {
     const before = signature(state.boxes);
     const next = worker.neighbors(state, board).find(candidate => candidate.move === move);
     assert.ok(next, `known solution move ${move} must remain legal`);
-    state = next;
-    if (signature(state.boxes) !== before) {
+    const after = signature(next.boxes);
+    if (after !== before) {
+      const reachableBefore = worker.reachablePaths(state, board);
+      const retained = worker.pushNeighbors(
+        state,
+        board,
+        reachableBefore,
+        {lockProven: true},
+      ).some(candidate => signature(candidate.boxes) === after);
+      assert.equal(retained, true, `proven commitment must retain known push ${pushes + 1}`);
       pushes++;
-      assert.ok(pushes + worker.heuristic(state.boxes, board) <= 252);
+      assert.ok(pushes + worker.heuristic(next.boxes, board) <= 252);
     }
+    state = next;
     const reachable = worker.reachablePaths(state, board);
     assert.equal(worker.createsSealedCorralDeadlock(state, board, reachable), false);
   }

@@ -84,6 +84,7 @@ function createPerformanceMetrics() {
     heuristicMs: 0,
     commitmentCalls: 0,
     commitmentCacheHits: 0,
+    commitmentBoxLocks: 0,
     commitmentMs: 0,
     supportDependencyCalls: 0,
     supportDependencyCacheHits: 0,
@@ -402,6 +403,7 @@ function hydratePreparedBoard(data, seed, metrics) {
     playerPushDistances: new Map(),
     deadlockMemo: new Map(),
     commitmentMemo: new Map(),
+    stateCommitmentMemo: new Map(),
     commitmentPushDistances: new Map(),
     supportDependencyMemo: new Map(),
     localRoomMemo: new Map(),
@@ -487,7 +489,8 @@ function parse(data) {
   return {
     rows: data.rows, floor, walls, goals, goalsByLabel, pushDistances, goalPressure,
     topology, heuristicMemo: new Map(), playerPushDistances: new Map(),
-    deadlockMemo: new Map(), commitmentMemo: new Map(), commitmentPushDistances: new Map(),
+    deadlockMemo: new Map(), commitmentMemo: new Map(), stateCommitmentMemo: new Map(),
+    commitmentPushDistances: new Map(),
     supportDependencyMemo: new Map(),
     localRoomMemo: new Map(),
     localCorralMemo: new Map(),
@@ -1250,6 +1253,34 @@ function goalPackingBonus(boxes, board, evidence = null) {
     return bonus + safetyWeight * (board.goalPressure.get(position) || 0);
   }, 0);
 }
+
+function stateCommitmentEvidence(state, board, reachable = reachablePaths(state, board)) {
+  return {
+    doorway: typedDoorwayFlow(state.boxes, board),
+    supportDependency: supportDependencyGraph(state, board, reachable),
+    localAnalyses: [
+      ...exactLocalRoomAnalyses(state, board, reachable),
+      ...exactLocalCorralAnalyses(state, board, reachable),
+    ],
+  };
+}
+
+function stateGoalCommitments(state, board, reachable = reachablePaths(state, board)) {
+  const region = reachable.regionId ?? [...reachable.keys()].sort()[0] ?? "sealed";
+  const key = `${region}|${boxSignature(state.boxes, board)}`;
+  if (board.stateCommitmentMemo.has(key)) return board.stateCommitmentMemo.get(key);
+  const commitments = goalCommitments(
+    state.boxes,
+    board,
+    stateCommitmentEvidence(state, board, reachable),
+  );
+  return memoizeBounded(
+    board.stateCommitmentMemo,
+    key,
+    commitments,
+    COMMITMENT_MEMO_LIMIT,
+  );
+}
 function corner(y, x, board, label) {
   if (board.goals.get(pkey(y, x)) === label) return false;
   const wall = (dy, dx) => board.walls.has(pkey(y + dy, x + dx));
@@ -1822,12 +1853,20 @@ function createsSealedCorralDeadlock(state, board, reachable) {
   return false;
 }
 
-function pushNeighbors(state, board, reachable = reachablePaths(state, board)) {
+function pushNeighbors(state, board, reachable = reachablePaths(state, board), options = {}) {
   board.metrics.pushNeighborCalls++;
   const occupied = reachable.occupied || denseOccupancy(state, board);
+  const commitments = options.commitments || (options.lockProven && board.topology.rooms.length
+    ? stateGoalCommitments(state, board, reachable)
+    : null);
   const result = [];
   state.boxes.forEach(([y, x, label], index) => {
-    const boxId = board.dense.idByKey.get(pkey(y, x));
+    const boxPosition = pkey(y, x);
+    if (commitments?.get(boxPosition) === GOAL_COMMITMENT.PROVEN) {
+      board.metrics.commitmentBoxLocks++;
+      return;
+    }
+    const boxId = board.dense.idByKey.get(boxPosition);
     for (let direction = 0; direction < DIRECTION_ENTRIES.length; direction++) {
       const [move] = DIRECTION_ENTRIES[direction];
       const supportId = board.dense.neighbors[
@@ -1861,10 +1900,23 @@ function pushNeighbors(state, board, reachable = reachablePaths(state, board)) {
   return result;
 }
 
-function pushBoxNeighbors(state, board, boxPosition, reachable = reachablePaths(state, board)) {
+function pushBoxNeighbors(
+  state,
+  board,
+  boxPosition,
+  reachable = reachablePaths(state, board),
+  options = {},
+) {
   const occupied = reachable.occupied || denseOccupancy(state, board);
   const boxId = board.dense.idByKey.get(boxPosition);
   if (boxId === undefined || occupied[boxId] < 0) return [];
+  const commitments = options.commitments || (options.lockProven && board.topology.rooms.length
+    ? stateGoalCommitments(state, board, reachable)
+    : null);
+  if (commitments?.get(boxPosition) === GOAL_COMMITMENT.PROVEN) {
+    board.metrics.commitmentBoxLocks++;
+    return [];
+  }
   const index = occupied[boxId];
   const [y, x, label] = state.boxes[index], result = [];
   for (let direction = 0; direction < DIRECTION_ENTRIES.length; direction++) {
@@ -1903,14 +1955,14 @@ function pushKey(state, reachable) {
   return `${robotRegion}|${[...state.boxes.map(b => b.join(","))].sort().join(";")}`;
 }
 
-function collapseForcedPushes(first, board, limit = 32) {
+function collapseForcedPushes(first, board, limit = 32, options = {}) {
   let state = {robot: first.robot, boxes: first.boxes};
   const path = [...first.path], seen = new Set([exactPushKey(state, board)]);
   let pushes = 1;
   while (pushes < limit && !goal(state.boxes, board.goals)) {
     const reachable = reachablePaths(state, board);
     if (createsSealedCorralDeadlock(state, board, reachable)) return null;
-    const choices = pushNeighbors(state, board, reachable);
+    const choices = pushNeighbors(state, board, reachable, {lockProven: options.lockProven});
     if (choices.length !== 1) break;
     const next = choices[0], signature = exactPushKey(next, board);
     if (seen.has(signature)) break;
@@ -1922,12 +1974,19 @@ function collapseForcedPushes(first, board, limit = 32) {
   return {...state, path, pushes, pushClass: first.pushClass};
 }
 
-function expandPushMacro(next, board, enabled = true) {
+function expandPushMacro(next, board, enabled = true, options = {}) {
   if (!enabled || !board.topology.tunnels.has(next.pushedTo)) return {...next, pushes: 1};
-  return collapseForcedPushes(next, board);
+  return collapseForcedPushes(next, board, 32, options);
 }
 
-function expandPushSequences(first, board, maxPushes = 12, maxExplored = 48, maxReturned = 8) {
+function expandPushSequences(
+  first,
+  board,
+  maxPushes = 12,
+  maxExplored = 48,
+  maxReturned = 8,
+  options = {},
+) {
   const initial = {...first, pushes: 1};
   const queue = [initial], endpoints = [];
   const seen = new Set([exactPushKey(initial, board)]);
@@ -1944,7 +2003,13 @@ function expandPushSequences(first, board, maxPushes = 12, maxExplored = 48, max
       endpoints.push(current);
       continue;
     }
-    const continuations = pushBoxNeighbors(state, board, current.pushedTo, reachable);
+    const continuations = pushBoxNeighbors(
+      state,
+      board,
+      current.pushedTo,
+      reachable,
+      {lockProven: options.lockProven},
+    );
     if (!continuations.length) endpoints.push({...current, macroDecision: true});
     else if (continuations.length > 1) endpoints.push({...current, macroDecision: true});
     for (const next of continuations) {
@@ -1979,7 +2044,7 @@ function expandPushSequences(first, board, maxPushes = 12, maxExplored = 48, max
     exactPushKey(endpoint, board) !== exactPushKey(initial, board))];
 }
 
-function expandStraightPushes(first, board, maxPushes = 8) {
+function expandStraightPushes(first, board, maxPushes = 8, options = {}) {
   const [fromY, fromX] = first.pushedFrom.split(",").map(Number);
   const [toY, toX] = first.pushedTo.split(",").map(Number);
   const dy = toY - fromY, dx = toX - fromX;
@@ -1991,7 +2056,13 @@ function expandStraightPushes(first, board, maxPushes = 8) {
     if (createsSealedCorralDeadlock(state, board, reachable)) break;
     const [y, x] = current.pushedTo.split(",").map(Number);
     const destination = pkey(y + dy, x + dx);
-    const next = pushBoxNeighbors(state, board, current.pushedTo, reachable)
+    const next = pushBoxNeighbors(
+      state,
+      board,
+      current.pushedTo,
+      reachable,
+      {lockProven: options.lockProven},
+    )
       .find(candidate => candidate.pushedTo === destination);
     if (!next) break;
     current = {
@@ -2242,6 +2313,7 @@ function beamSearch(payload) {
   const supportDependencyWeight = payload.supportDependencyWeight ?? 0.8;
   const localRoomWeight = payload.localRoomWeight ?? 0.6;
   const doorwayFlowWeight = payload.doorwayFlowWeight ?? 0.35;
+  const lockProvenCommitments = payload.lockProvenCommitments !== false;
   const beamProfile = payload.beamProfile || "balanced";
   const seed = payload.seed || 0;
   const transpositionLimit = payload.transpositionLimit || Math.max(12000, width * 60);
@@ -2288,9 +2360,24 @@ function beamSearch(payload) {
         ...exactLocalCorralAnalyses(current, board, current.reachable),
       ];
       const doorwayBefore = typedDoorwayFlow(current.boxes, board);
-      for (const rawNext of pushNeighbors(current, board, current.reachable)) {
+      const currentCommitments = lockProvenCommitments ? goalCommitments(current.boxes, board, {
+        doorway: doorwayBefore,
+        supportDependency: dependencyGraph,
+        localAnalyses: localRooms,
+      }) : null;
+      for (const rawNext of pushNeighbors(
+        current,
+        board,
+        current.reachable,
+        {commitments: currentCommitments},
+      )) {
         const expansions = payload.straightMacros
-          ? expandStraightPushes(rawNext, board, payload.straightMacroLimit || 8)
+          ? expandStraightPushes(
+              rawNext,
+              board,
+              payload.straightMacroLimit || 8,
+              {lockProven: lockProvenCommitments},
+            )
           : payload.sequenceMacros
           ? expandPushSequences(
               rawNext,
@@ -2298,8 +2385,14 @@ function beamSearch(payload) {
               payload.sequenceMacroLimit || 12,
               payload.sequenceMacroExplored || 48,
               payload.sequenceMacroResults || 8,
+              {lockProven: lockProvenCommitments},
             )
-          : [expandPushMacro(rawNext, board, payload.forcedMacros !== false)].filter(Boolean);
+          : [expandPushMacro(
+              rawNext,
+              board,
+              payload.forcedMacros !== false,
+              {lockProven: lockProvenCommitments},
+            )].filter(Boolean);
         for (const next of expansions) {
         const child = {robot: next.robot, boxes: next.boxes, cost: current.cost + next.pushes};
         if (child.cost > maxDepth) continue;
@@ -2624,6 +2717,7 @@ function boundedPushDepthFirstSearch(payload) {
   const seed = payload.seed || 0;
   const profile = payload.dfsProfile || "balanced";
   const discrepancyLimit = payload.discrepancyLimit ?? Infinity;
+  const lockProvenCommitments = payload.lockProvenCommitments !== false;
   const transpositions = new BoundedDepthMap(payload.transpositionLimit || 60000);
   const activePath = new Set(), segments = [];
   const checkpointLimit = payload.checkpointLimit || 8;
@@ -2666,9 +2760,24 @@ function boundedPushDepthFirstSearch(payload) {
       ...exactLocalCorralAnalyses(state, board, reachable),
     ];
     const doorwayBefore = typedDoorwayFlow(state.boxes, board);
+    const currentCommitments = lockProvenCommitments ? goalCommitments(state.boxes, board, {
+      doorway: doorwayBefore,
+      supportDependency: dependencyGraph,
+      localAnalyses: localRooms,
+    }) : null;
     const candidates = [];
-    for (const rawNext of pushNeighbors(state, board, reachable)) {
-      const next = expandPushMacro(rawNext, board, payload.forcedMacros !== false);
+    for (const rawNext of pushNeighbors(
+      state,
+      board,
+      reachable,
+      {commitments: currentCommitments},
+    )) {
+      const next = expandPushMacro(
+        rawNext,
+        board,
+        payload.forcedMacros !== false,
+        {lockProven: lockProvenCommitments},
+      );
       if (!next) continue;
       const childCost = cost + next.pushes;
       if (childCost > maxDepth || childCost > bound) continue;
@@ -2801,6 +2910,7 @@ function pushIterativeDeepeningAStar(payload) {
   const progressInterval = payload.progressInterval || 25000;
   let trackedThrough = payload.trackedSignatures ? 0 : undefined;
   const exactShard = payload.exactShard;
+  const lockProvenCommitments = payload.lockProvenCommitments !== false;
   if (!Number.isFinite(bestEstimate)) {
     return {path: null, visited, cutoff: false, terminationReason: "infeasible-root",
       bestEstimate, bestPushes};
@@ -2882,11 +2992,26 @@ function pushIterativeDeepeningAStar(payload) {
       ...exactLocalCorralAnalyses(state, board, reachable),
     ];
     const doorwayBefore = typedDoorwayFlow(state.boxes, board);
+    const currentCommitments = lockProvenCommitments ? goalCommitments(state.boxes, board, {
+      doorway: doorwayBefore,
+      supportDependency: dependencyGraph,
+      localAnalyses: localRooms,
+    }) : null;
     let nextThreshold = Infinity;
     const candidates = [];
-    for (const rawNext of pushNeighbors(state, board, reachable)) {
+    for (const rawNext of pushNeighbors(
+      state,
+      board,
+      reachable,
+      {commitments: currentCommitments},
+    )) {
       generated++;
-      const next = expandPushMacro(rawNext, board, payload.forcedMacros !== false);
+      const next = expandPushMacro(
+        rawNext,
+        board,
+        payload.forcedMacros !== false,
+        {lockProven: lockProvenCommitments},
+      );
       if (!next) continue;
       const childCost = cost + next.pushes;
       if (childCost > upperBound) {

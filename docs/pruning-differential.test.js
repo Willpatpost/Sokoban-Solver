@@ -236,11 +236,20 @@ test("hard pruning never rejects an exhaustively proven solvable small state", (
     for (const stateSignature of solvable) {
       const state = states.get(stateSignature);
       checkedStates++;
+      let ordinaryPushes = null, lockedPushes = null;
       if (!worker.goal(state.boxes, board.goals)) {
         const reachable = worker.reachablePaths(state, board);
         if (worker.createsSealedCorralDeadlock(state, board, reachable)) {
           record("sealed-corral", state);
         }
+        const pushKey = next => `${next.pushedFrom}>${next.pushedTo}`;
+        ordinaryPushes = new Set(worker.pushNeighbors(state, board, reachable).map(pushKey));
+        lockedPushes = new Set(worker.pushNeighbors(
+          state,
+          board,
+          reachable,
+          {lockProven: true},
+        ).map(pushKey));
       }
 
       const retainedMoves = new Set(worker.neighbors(state, board).map(next => next.move));
@@ -259,6 +268,10 @@ test("hard pruning never rejects an exhaustively proven solvable small state", (
           record("dynamic", state, edge);
         }
         if (!retainedMoves.has(edge.move)) record("combined-neighbor", state, edge);
+        const push = `${edge.state.robot.join(",")}>${edge.pushed.destination.join(",")}`;
+        if (ordinaryPushes?.has(push) && !lockedPushes.has(push)) {
+          record("proven-commitment", state, edge);
+        }
       }
     }
   }

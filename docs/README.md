@@ -130,11 +130,13 @@ congestion pressure, encouraging the solver to clear staging gates before packin
 Goal packing uses a conservative commitment oracle instead of rewarding every
 currently matched box equally. A placement is temporary when fixing it would
 block pending room dependencies, occupy a required gate, or destroy the remaining
-typed perfect matching and its static push/support routes. Movable placements that
-pass those checks are conditional and receive a reduced ordering reward. Only a
-statically immovable matched box that passes every residual check is classified as
-proven and receives the full packing reward. These classifications affect search
-ordering only; they are not an additional hard-pruning rule.
+typed perfect matching and its static or dynamic support routes. Movable placements
+that pass those checks are conditional and receive a reduced ordering reward. A
+matched box is proven when it is statically immovable or belongs to an exactly
+completed one-entry room whose imports, exports, gate, staging, matching, and support
+requirements are resolved. Beam, bounded DFS, and IDA* keep proven boxes fixed;
+baseline search and gameplay retain ordinary legal movement. Commitment is cached by
+box layout and robot region, and macros re-evaluate it after each push.
 
 Advanced forward searches also build a bounded, dynamic support-square dependency
 graph for each expanded robot region and box layout. Goal-directed push gradients
@@ -150,8 +152,9 @@ exports, doorway occupancy, restored doorway states, packed goals, and viable bo
 configurations. Corral entries search for the shortest way to reopen robot access or
 resolve the enclosed goals. Completed local searches expose their optimal first pushes
 to beam, discrepancy, and IDA* ordering. Exhausted, oversized, inaccessible, and
-budget-cutoff abstractions are reported but never used as global hard-pruning proofs;
-corral-opening hints also receive lower confidence than complete room-packing hints.
+budget-cutoff abstractions are reported but never used as global hard-pruning proofs.
+Only an exactly completed room can support proven-box locking; corral-opening hints
+receive lower confidence and remain ordering-only.
 
 One-entrance room topology now compiles doorway lanes and nearby interior/exterior
 staging sets. A cached typed-flow analysis compares each room's current labels with
