@@ -269,6 +269,50 @@ test("compact canonical push keys preserve robot-region equivalence", () => {
   assert.notEqual(worker.exactPushKey(left, board), worker.exactPushKey(right, board));
 });
 
+test("prepared board seeds are clone-safe and preserve search results", () => {
+  const worker = loadWorker();
+  const state = stateFromRows([
+    "OOOOOO", "O R  O", "O AB O", "O ab O", "OOOOOO",
+  ]);
+  const analysis = worker.search({algorithm: "analyze-puzzle", state}).analysis;
+  const preparedBoard = structuredClone(analysis.preparedBoard);
+  const firstBoard = worker.parse({...state, preparedBoard});
+  const secondBoard = worker.parse({...state, preparedBoard});
+  assert.notEqual(firstBoard.heuristicMemo, secondBoard.heuristicMemo);
+  assert.notEqual(firstBoard.deadlockMemo, secondBoard.deadlockMemo);
+  assert.notEqual(firstBoard.boxSignatureMemo, secondBoard.boxSignatureMemo);
+  assert.equal(firstBoard.topology, secondBoard.topology);
+  const baseline = worker.search({algorithm: "push-astar", state});
+  const reused = worker.search({
+    algorithm: "push-astar",
+    state: {...state, preparedBoard},
+  });
+
+  assert.deepEqual(Array.from(reused.path), Array.from(baseline.path));
+  assert.equal(reused.visited, baseline.visited);
+  assert.equal(reused.performance.preparedBoardReuses, 1);
+  assert.equal(reused.performance.preparedBoardFallbacks, 0);
+  assert.equal(reused.performance.graphCompileMs, 0);
+  assert.equal(reused.performance.denseBuildMs, 0);
+  assert.ok(reused.performance.graphNodes > 0);
+});
+
+test("prepared board seeds fall back safely when board contents differ", () => {
+  const worker = loadWorker();
+  const source = stateFromRows(["OOOOO", "O R O", "O A O", "O a O", "OOOOO"]);
+  const target = stateFromRows(["OOOOOO", "O R  O", "O A  O", "O  a O", "OOOOOO"]);
+  const sourceBoard = worker.parse(source);
+  const preparedBoard = structuredClone(worker.createPreparedBoardSeed(sourceBoard));
+  const result = worker.search({
+    algorithm: "push-astar",
+    state: {...target, preparedBoard},
+  });
+
+  assert.equal(result.performance.preparedBoardReuses, 0);
+  assert.equal(result.performance.preparedBoardFallbacks, 1);
+  assert.equal(result.performance.denseCells, 12);
+});
+
 test("search results expose bounded hot-path performance telemetry", () => {
   const worker = loadWorker();
   const result = worker.search({
@@ -285,6 +329,7 @@ test("search results expose bounded hot-path performance telemetry", () => {
   assert.ok(result.performance.signatureCacheHits > 0);
   assert.ok(result.performance.signatureCharacters > 0);
   assert.ok(result.performance.signatureMs >= 0);
+  assert.equal(result.performance.preparedBoardReuses, 0);
   assert.ok(result.performance.heuristicCalls > 0);
   assert.ok(result.performance.reachabilityCalls > 0);
   assert.ok(result.performance.pushNeighborCalls > 0);

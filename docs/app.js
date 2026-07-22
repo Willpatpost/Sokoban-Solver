@@ -1,7 +1,7 @@
 const LEVELS = SokomindLevels.LEVELS;
 const DIRS = {Up: [-1, 0], Down: [1, 0], Left: [0, -1], Right: [0, 1]};
 const CODE_MOVE = {U: "Up", D: "Down", L: "Left", R: "Right"};
-const SOLVER_BUILD = "2026-07-22.10";
+const SOLVER_BUILD = "2026-07-22.11";
 const SOLVER_WORKER_URL = `solver-worker.js?build=${SOLVER_BUILD}`;
 const PUSH_BOUNDS_KEY = "sokomind-push-bounds-v1";
 const KEYS = {ArrowUp: "Up", ArrowDown: "Down", ArrowLeft: "Left", ArrowRight: "Right",
@@ -473,6 +473,7 @@ function runBidirectionalSolver(purpose, analysis) {
     reverseWorkers,
     beamAttempts: recommendations.beamAttempts,
     beamWidth: recommendations.beamWidth,
+    preparedBoard: Boolean(analysis.preparedBoard),
   });
   const beamProfiles = [
     {beamProfile: "balanced", weight: 3, diversity: 1.75,
@@ -1304,6 +1305,7 @@ function runBidirectionalSolver(purpose, analysis) {
           profileMs: data.performance?.totalMs,
           graphMs: data.performance?.graphCompileMs,
           denseMs: data.performance?.denseBuildMs,
+          preparedBoardReuses: data.performance?.preparedBoardReuses,
           signatureMs: data.performance?.signatureMs,
           signatureCacheHits: data.performance?.signatureCacheHits,
           heuristicMs: data.performance?.heuristicMs,
@@ -1367,6 +1369,7 @@ function runBidirectionalSolver(purpose, analysis) {
           profileMs: data.performance?.totalMs,
           graphMs: data.performance?.graphCompileMs,
           denseMs: data.performance?.denseBuildMs,
+          preparedBoardReuses: data.performance?.preparedBoardReuses,
           signatureMs: data.performance?.signatureMs,
           signatureCacheHits: data.performance?.signatureCacheHits,
           heuristicMs: data.performance?.heuristicMs,
@@ -1488,10 +1491,11 @@ function runBidirectionalSolver(purpose, analysis) {
       }
     };
     worker.onerror = error => abandonWorker("worker-error", error);
+    const planState = plan.state || serializeState(state);
     worker.postMessage({
-      state: plan.state || serializeState(state),
-      upperBound: effectiveUpperBound,
       ...plan,
+      state: {...planState, preparedBoard: analysis.preparedBoard},
+      upperBound: effectiveUpperBound,
     });
   };
 
@@ -1549,6 +1553,7 @@ function startSolver(purpose) {
           depth: data.depth, threshold: data.threshold, frontier: data.frontier,
           graphMs: data.performance?.graphCompileMs,
           denseMs: data.performance?.denseBuildMs,
+          preparedBoardReuses: data.performance?.preparedBoardReuses,
           signatureMs: data.performance?.signatureMs,
           heuristicMs: data.performance?.heuristicMs,
           reachabilityMs: data.performance?.reachabilityMs,
@@ -1567,6 +1572,7 @@ function startSolver(purpose) {
         profileMs: data.performance?.totalMs,
         graphMs: data.performance?.graphCompileMs,
         denseMs: data.performance?.denseBuildMs,
+        preparedBoardReuses: data.performance?.preparedBoardReuses,
         signatureMs: data.performance?.signatureMs,
         signatureCacheHits: data.performance?.signatureCacheHits,
         heuristicMs: data.performance?.heuristicMs,

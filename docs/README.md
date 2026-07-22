@@ -27,6 +27,14 @@ Immutable box-array identities cache those keys so heuristic, deadlock,
 transposition, and diversity scoring do not repeatedly sort and stringify the
 same layout. Search telemetry includes signature calls, cache hits, generated
 characters, and construction time.
+
+Ultimate Bidirectional's planning worker also returns a clone-safe prepared-board
+seed. Subsequent portfolio workers reuse its immutable geometry, topology,
+reverse-distance tables, dense indices, and compiled single-box graph while
+creating private heuristic, deadlock, and signature caches. Workers verify the
+exact board contents and schema before reuse and rebuild normally on a mismatch.
+This uses standard structured cloning because shared memory requires
+cross-origin isolation headers that GitHub Pages does not reliably provide.
 The adjacent `{ }` control copies the complete run as newline-delimited JSON.
 Each event includes a schema version, run ID, sequence number, timestamp, elapsed
 milliseconds, solver build, level, category, message, and typed statistics.

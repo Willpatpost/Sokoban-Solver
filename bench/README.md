@@ -51,6 +51,8 @@ The final JSON object contains:
 - `performance`: worker-owned hot-path timings, call counts, cache hits, compiled
   graph size, dense-board build size/time, generated push candidates, retained
   pushes, compact-signature construction/cache behavior, and deadlock prunes.
+  Prepared-board reuse and safe-fallback counts are included when a caller
+  supplies a planner-generated immutable board seed.
 
 For AlphaEvolve, optimize `totalScore` while treating any `valid: false` or
 non-zero `errors` as a hard rejection. The benchmark intentionally rewards a

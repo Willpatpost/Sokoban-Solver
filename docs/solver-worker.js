@@ -67,6 +67,8 @@ function createPerformanceMetrics() {
     signatureCacheHits: 0,
     signatureCharacters: 0,
     signatureMs: 0,
+    preparedBoardReuses: 0,
+    preparedBoardFallbacks: 0,
     heuristicCalls: 0,
     heuristicCacheHits: 0,
     heuristicMs: 0,
@@ -289,9 +291,68 @@ function analyzeTopology(floor, goals) {
   return {articulations, rooms, tunnels};
 }
 
+const PREPARED_BOARD_SCHEMA = 1;
+const boardContentKey = rows => rows.join("\n");
+
+function createPreparedBoardSeed(board) {
+  return {
+    schemaVersion: PREPARED_BOARD_SCHEMA,
+    boardContentKey: boardContentKey(board.rows),
+    floor: board.floor,
+    walls: board.walls,
+    goals: board.goals,
+    goalsByLabel: board.goalsByLabel,
+    pushDistances: board.pushDistances,
+    goalPressure: board.goalPressure,
+    topology: board.topology,
+    singleBoxGraph: board.singleBoxGraph,
+    dense: board.dense,
+    graphNodes: board.metrics.graphNodes,
+    graphEdges: board.metrics.graphEdges,
+  };
+}
+
+function preparedBoardMatches(data, seed) {
+  return seed?.schemaVersion === PREPARED_BOARD_SCHEMA &&
+    seed.boardContentKey === boardContentKey(data.rows) &&
+    typeof seed.floor?.has === "function" && typeof seed.goals?.get === "function" &&
+    typeof seed.singleBoxGraph?.nodes?.get === "function" &&
+    typeof seed.dense?.idByKey?.get === "function";
+}
+
+function hydratePreparedBoard(data, seed, metrics) {
+  metrics.preparedBoardReuses++;
+  metrics.graphNodes = seed.graphNodes;
+  metrics.graphEdges = seed.graphEdges;
+  metrics.denseCells = seed.dense.keys.length;
+  return {
+    rows: data.rows,
+    floor: seed.floor,
+    walls: seed.walls,
+    goals: seed.goals,
+    goalsByLabel: seed.goalsByLabel,
+    pushDistances: seed.pushDistances,
+    goalPressure: seed.goalPressure,
+    topology: seed.topology,
+    singleBoxGraph: seed.singleBoxGraph,
+    dense: seed.dense,
+    heuristicMemo: new Map(),
+    playerPushDistances: new Map(),
+    deadlockMemo: new Map(),
+    boxSignatureMemo: new WeakMap(),
+    metrics,
+  };
+}
+
 function parse(data) {
   const parseStarted = now();
   const metrics = activePerformance || createPerformanceMetrics();
+  if (preparedBoardMatches(data, data.preparedBoard)) {
+    const board = hydratePreparedBoard(data, data.preparedBoard, metrics);
+    metrics.parseMs += now() - parseStarted;
+    return board;
+  }
+  if (data.preparedBoard) metrics.preparedBoardFallbacks++;
   const floor = new Set(), walls = new Set(), goals = new Map(), goalsByLabel = new Map();
   data.rows.forEach((row, y) => [...row].forEach((ch, x) => {
     const p = pkey(y, x);
@@ -739,6 +800,7 @@ function analyzePuzzleForSearch(data) {
     difficulty,
     phases,
     recommendations,
+    preparedBoard: createPreparedBoardSeed(board),
   };
 }
 
@@ -1664,7 +1726,7 @@ function beamSearch(payload) {
       const continuation = beamSearch({
         ...payload,
         ...profiles[index % profiles.length],
-        preparedBoard: undefined,
+        preparedBoard: board,
         state: {
           rows: board.rows,
           robot: checkpoint.robot,
@@ -1706,6 +1768,7 @@ function beamSearch(payload) {
       const attemptVisited = Math.ceil(remainingVisited / (attempts - index));
     const endgame = boundedPushDepthFirstSearch({
       algorithm: "bounded-push-dfs",
+      preparedBoard: board,
       state: {
         rows: board.rows,
         robot: checkpoint.robot,
@@ -1783,7 +1846,7 @@ function beamRestartSearch(payload) {
 }
 
 function boundedPushDepthFirstSearch(payload) {
-  const board = parse(payload.state);
+  const board = payload.preparedBoard || parse(payload.state);
   const initial = {
     robot: payload.state.robot,
     boxes: payload.state.boxes.map(([position, label]) => [
