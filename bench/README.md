@@ -16,8 +16,8 @@ Run the longer AlphaEvolve-oriented suite:
 node bench/benchmark.js --suite alpha --jsonl
 ```
 
-Run the deterministic validation suite of mirrored, rotated, relabeled, and
-premature-goal cases:
+Run the deterministic validation suite of mirrored, rotated, relabeled,
+premature-goal, typed-doorway, exact-room, and corral-family cases:
 
 ```powershell
 node bench/benchmark.js --suite validation --jsonl

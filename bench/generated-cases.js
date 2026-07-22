@@ -18,6 +18,58 @@ function permuteLabels(rows, mapping) {
   }).join(""));
 }
 
+function guidedCase(name, rows) {
+  return {
+    name,
+    rows,
+    algorithm: "push-beam",
+    timeoutMs: 10000,
+    weight: 2,
+    payload: {maxVisited: 60000, beamWidth: 120, maxDepth: 40},
+  };
+}
+
+function strategicVariants(name, rows, labelMapping = null) {
+  const candidates = [
+    ["base", rows],
+    ["mirrored", mirrorRows(rows)],
+    ["rotated", rotateRows(rows)],
+  ];
+  if (labelMapping) candidates.push(["relabeled", permuteLabels(rows, labelMapping)]);
+  const seen = new Set();
+  return candidates
+    .filter(([, candidateRows]) => {
+      const signature = candidateRows.join("\n");
+      if (seen.has(signature)) return false;
+      seen.add(signature);
+      return true;
+    })
+    .map(([variant, candidateRows]) => guidedCase(`generated ${name} ${variant}`, candidateRows));
+}
+
+const STRATEGIC_CASES = [
+  ...strategicVariants("typed doorway import", [
+    "OOOOOOOOO",
+    "O R A a O",
+    "O       O",
+    "O       O",
+    "OOOOAOOOO",
+    "O   a   O",
+    "O       O",
+    "OOOOOOOOO",
+  ], {A: "E"}),
+  ...strategicVariants("exact room packing", [
+    "OOOOOOO",
+    "O R   O",
+    "OOO OOO",
+    "O S S O",
+    "O X X O",
+    "O     O",
+    "OOOOOOO",
+  ]),
+  ...strategicVariants("corral reopening", ["OOOOOOO", "OR X SO", "OOOOOOO"]),
+];
+
 const GENERATED_CASES = [
   {
     name: "generated mirrored tiny",
@@ -58,47 +110,14 @@ const GENERATED_CASES = [
     weight: 2,
     payload: {maxVisited: 60000},
   },
-  {
-    name: "generated typed doorway import",
-    rows: [
-      "OOOOOOOOO",
-      "O R X S O",
-      "O       O",
-      "O       O",
-      "OOOOXOOOO",
-      "O   S   O",
-      "O       O",
-      "OOOOOOOOO",
-    ],
-    algorithm: "push-beam",
-    timeoutMs: 10000,
-    weight: 2,
-    payload: {maxVisited: 60000, beamWidth: 120, maxDepth: 40},
-  },
-  {
-    name: "generated exact room packing",
-    rows: [
-      "OOOOOOO",
-      "O R   O",
-      "OOO OOO",
-      "O S S O",
-      "O X X O",
-      "O     O",
-      "OOOOOOO",
-    ],
-    algorithm: "push-beam",
-    timeoutMs: 10000,
-    weight: 2,
-    payload: {maxVisited: 60000, beamWidth: 120, maxDepth: 40},
-  },
-  {
-    name: "generated corral reopening",
-    rows: ["OOOOOOO", "OR X SO", "OOOOOOO"],
-    algorithm: "push-beam",
-    timeoutMs: 10000,
-    weight: 2,
-    payload: {maxVisited: 60000, beamWidth: 120, maxDepth: 40},
-  },
+  ...STRATEGIC_CASES,
 ];
 
-module.exports = {GENERATED_CASES, mirrorRows, permuteLabels, rotateRows};
+module.exports = {
+  GENERATED_CASES,
+  STRATEGIC_CASES,
+  mirrorRows,
+  permuteLabels,
+  rotateRows,
+  strategicVariants,
+};

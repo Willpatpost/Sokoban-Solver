@@ -52,8 +52,7 @@ function unprunedNeighbors(state, board) {
   return result;
 }
 
-function enumerateReachable(rows, limit = 50000) {
-  const worker = loadWorker();
+function enumerateReachable(rows, worker = loadWorker(), limit = 50000) {
   const board = worker.parse({rows});
   const initial = stateFromRows(rows);
   const initialSignature = signature(initial);
@@ -128,45 +127,120 @@ const DIFFERENTIAL_BOARDS = [
   ],
 ];
 
-function generatedSolvableBoards() {
+function connectedFloor(cells) {
+  const cellSet = new Set(cells.map(([y, x]) => `${y},${x}`));
+  if (!cellSet.size) return false;
+  const reached = new Set([cellSet.values().next().value]);
+  const queue = [...reached];
+  for (let head = 0; head < queue.length; head++) {
+    const [y, x] = queue[head].split(",").map(Number);
+    for (const [dy, dx] of Object.values(DIRS)) {
+      const next = `${y + dy},${x + dx}`;
+      if (!cellSet.has(next) || reached.has(next)) continue;
+      reached.add(next);
+      queue.push(next);
+    }
+  }
+  return reached.size === cellSet.size;
+}
+
+function exhaustiveTinyBoards() {
+  const interior = [];
+  for (let y = 1; y <= 2; y++) {
+    for (let x = 1; x <= 3; x++) interior.push([y, x]);
+  }
   const boards = [];
-  for (const width of [6, 7, 8]) {
-    for (const height of [5, 6]) {
-      for (let column = 2; column <= width - 3; column++) {
-        const rows = Array.from({length: height}, (_, y) =>
-          y === 0 || y === height - 1 ? "O".repeat(width) : `O${" ".repeat(width - 2)}O`);
-        const replace = (row, cell) => {
-          rows[row] = rows[row].slice(0, column) + cell + rows[row].slice(column + 1);
-        };
-        replace(1, "S");
-        replace(2, "X");
-        replace(height - 2, "R");
-        boards.push(rows);
+  for (let mask = 0; mask < (1 << interior.length); mask++) {
+    const floor = interior.filter((_, index) => mask & (1 << index));
+    if (floor.length < 3 || !connectedFloor(floor)) continue;
+    for (let goal = 0; goal < floor.length; goal++) {
+      for (let box = 0; box < floor.length; box++) {
+        if (box === goal) continue;
+        for (let robot = 0; robot < floor.length; robot++) {
+          if (robot === goal || robot === box) continue;
+          const rows = Array.from({length: 4}, () => [..."OOOOO"]);
+          floor.forEach(([y, x]) => { rows[y][x] = " "; });
+          rows[floor[goal][0]][floor[goal][1]] = "S";
+          rows[floor[box][0]][floor[box][1]] = "X";
+          rows[floor[robot][0]][floor[robot][1]] = "R";
+          boards.push(rows.map(row => row.join("")));
+        }
       }
     }
   }
   return boards;
 }
 
+function retainSmallestCounterexample(current, candidate) {
+  if (!current) return candidate;
+  const rank = value => [
+    value.floorCells,
+    value.boxes,
+    value.rows.length * value.rows[0].length,
+    value.state.length,
+    value.rule,
+    value.move || "",
+  ];
+  const left = rank(candidate), right = rank(current);
+  for (let index = 0; index < left.length; index++) {
+    if (left[index] < right[index]) return candidate;
+    if (left[index] > right[index]) return current;
+  }
+  return current;
+}
+
+test("counterexample retention prefers the smallest reproducible board and state", () => {
+  const larger = {
+    rule: "dynamic", rows: ["OOOOOO", "ORX SO", "OOOOOO"],
+    floorCells: 4, boxes: 1, state: "1,1|1,2,X", move: "Right",
+  };
+  const smaller = {
+    rule: "static-dead", rows: ["OOOOO", "ORXSO", "OOOOO"],
+    floorCells: 3, boxes: 1, state: "1,1|1,2,X", move: "Right",
+  };
+  assert.equal(retainSmallestCounterexample(larger, smaller), smaller);
+  assert.equal(retainSmallestCounterexample(smaller, larger), smaller);
+});
+
 test("hard pruning never rejects an exhaustively proven solvable small state", () => {
-  let checkedStates = 0;
-  let checkedPushes = 0;
-  const generatedBoards = generatedSolvableBoards();
-  assert.ok(generatedBoards.length >= 10);
-  for (const rows of [...DIFFERENTIAL_BOARDS, ...generatedBoards]) {
-    const {worker, board, states, edges, solvable} = enumerateReachable(rows);
-    assert.ok(solvable.size > 0, `test board has no solvable reachable states:\n${rows.join("\n")}`);
+  let checkedStates = 0, checkedPushes = 0, solvableTinyLayouts = 0;
+  let smallestCounterexample = null;
+  const worker = loadWorker();
+  const generatedBoards = exhaustiveTinyBoards();
+  assert.ok(generatedBoards.length >= 750);
+  const cases = [
+    ...DIFFERENTIAL_BOARDS.map(rows => ({rows, requiredSolvable: true})),
+    ...generatedBoards.map(rows => ({rows, requiredSolvable: false})),
+  ];
+  for (const {rows, requiredSolvable} of cases) {
+    const {board, states, edges, solvable} = enumerateReachable(rows, worker);
+    if (requiredSolvable) {
+      assert.ok(solvable.size > 0, `test board has no solvable reachable states:\n${rows.join("\n")}`);
+    } else if (solvable.size) {
+      solvableTinyLayouts++;
+    }
+    if (!solvable.size) continue;
+
+    const record = (rule, state, edge = null) => {
+      smallestCounterexample = retainSmallestCounterexample(smallestCounterexample, {
+        rule,
+        rows,
+        floorCells: board.floor.size,
+        boxes: state.boxes.length,
+        state: signature(state),
+        move: edge?.move || null,
+        nextState: edge?.signature || null,
+      });
+    };
 
     for (const stateSignature of solvable) {
       const state = states.get(stateSignature);
       checkedStates++;
       if (!worker.goal(state.boxes, board.goals)) {
         const reachable = worker.reachablePaths(state, board);
-        assert.equal(
-          worker.createsSealedCorralDeadlock(state, board, reachable),
-          false,
-          `sealed-corral false positive at ${stateSignature}`,
-        );
+        if (worker.createsSealedCorralDeadlock(state, board, reachable)) {
+          record("sealed-corral", state);
+        }
       }
 
       const retainedMoves = new Set(worker.neighbors(state, board).map(next => next.move));
@@ -174,20 +248,28 @@ test("hard pruning never rejects an exhaustively proven solvable small state", (
         if (!edge.pushed || !solvable.has(edge.signature)) continue;
         checkedPushes++;
         const [y, x] = edge.pushed.destination;
-        const context = `${edge.move} from ${stateSignature} to ${edge.signature}`;
-        assert.equal(worker.staticDead(y, x, board, edge.pushed.label), false,
-          `static-dead false positive: ${context}`);
-        assert.equal(worker.creates2x2Deadlock(edge.state.boxes, board, [y, x]), false,
-          `2x2 false positive: ${context}`);
-        assert.equal(worker.createsFrozenComponentDeadlock(edge.state.boxes, board, [y, x]), false,
-          `freeze false positive: ${context}`);
-        assert.equal(worker.createsDynamicDeadlock(edge.state.boxes, board, [y, x]), false,
-          `dynamic false positive: ${context}`);
-        assert.equal(retainedMoves.has(edge.move), true,
-          `combined neighbor pruning false positive: ${context}`);
+        if (worker.staticDead(y, x, board, edge.pushed.label)) record("static-dead", state, edge);
+        if (worker.creates2x2Deadlock(edge.state.boxes, board, [y, x])) {
+          record("2x2", state, edge);
+        }
+        if (worker.createsFrozenComponentDeadlock(edge.state.boxes, board, [y, x])) {
+          record("freeze", state, edge);
+        }
+        if (worker.createsDynamicDeadlock(edge.state.boxes, board, [y, x])) {
+          record("dynamic", state, edge);
+        }
+        if (!retainedMoves.has(edge.move)) record("combined-neighbor", state, edge);
       }
     }
   }
+  if (smallestCounterexample) {
+    assert.fail(
+      `hard pruning rejected a solvable transition; smallest counterexample:\n` +
+      `${JSON.stringify(smallestCounterexample, null, 2)}\n` +
+      smallestCounterexample.rows.join("\n"),
+    );
+  }
+  assert.ok(solvableTinyLayouts >= 50, `expected exhaustive solvable layouts, got ${solvableTinyLayouts}`);
   assert.ok(checkedStates >= 100, `expected broad state coverage, got ${checkedStates}`);
   assert.ok(checkedPushes >= 20, `expected broad push coverage, got ${checkedPushes}`);
 });
