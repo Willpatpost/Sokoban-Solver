@@ -195,6 +195,40 @@ test("compiled single-box graph matches the reference search on medium and Huge 
   }
 });
 
+test("dense board reachability preserves reference regions and exact walking paths", () => {
+  const worker = loadWorker();
+  const parsed = stateFromRows([
+    "OOOOOOO", "Oa   bO", "O AXB O", "O XRX O",
+    "OSCXDSO", "OcS SdO", "OOOOOOO",
+  ]);
+  const board = worker.parse(parsed);
+  let state = {
+    robot: parsed.robot,
+    boxes: parsed.boxes.map(([position, label]) => [...position.split(",").map(Number), label]),
+  };
+  const states = [state];
+  for (let depth = 0; depth < 3; depth++) {
+    const next = worker.neighbors(state, board);
+    if (!next.length) break;
+    state = next[next.length - 1];
+    states.push(state);
+  }
+
+  for (const candidate of states) {
+    const dense = worker.reachablePaths(candidate, board);
+    const reference = worker.reachablePathsReference(candidate, board);
+    assert.deepEqual([...dense.keys()].sort(), [...reference.keys()].sort());
+    for (const position of reference.keys()) {
+      assert.deepEqual(dense.get(position), reference.get(position), `path mismatch at ${position}`);
+    }
+  }
+
+  assert.equal(board.dense.keys.length, board.floor.size);
+  for (const [position, id] of board.dense.idByKey) {
+    assert.equal(board.dense.keys[id], position);
+  }
+});
+
 test("search results expose bounded hot-path performance telemetry", () => {
   const worker = loadWorker();
   const result = worker.search({
@@ -205,6 +239,8 @@ test("search results expose bounded hot-path performance telemetry", () => {
   assert.ok(result.performance.totalMs >= 0);
   assert.ok(result.performance.graphNodes > 0);
   assert.ok(result.performance.graphEdges > 0);
+  assert.ok(result.performance.denseCells > 0);
+  assert.ok(result.performance.denseBuildMs >= 0);
   assert.ok(result.performance.heuristicCalls > 0);
   assert.ok(result.performance.reachabilityCalls > 0);
   assert.ok(result.performance.pushNeighborCalls > 0);

@@ -1,4 +1,6 @@
 const DIRS = {Up: [-1, 0], Down: [1, 0], Left: [0, -1], Right: [0, 1]};
+const DIRECTION_ENTRIES = Object.entries(DIRS);
+const OPPOSITE_DIRECTION_INDEX = [1, 0, 3, 2];
 const OPPOSITE = {Up: "Down", Down: "Up", Left: "Right", Right: "Left"};
 const MOVE_CODE = {Up: "U", Down: "D", Left: "L", Right: "R"};
 const key = (robot, boxes) => `${robot.join(",")}|${[...boxes].sort().join(";")}`;
@@ -19,6 +21,8 @@ function createPerformanceMetrics() {
     graphCompileMs: 0,
     graphNodes: 0,
     graphEdges: 0,
+    denseCells: 0,
+    denseBuildMs: 0,
     heuristicCalls: 0,
     heuristicCacheHits: 0,
     heuristicMs: 0,
@@ -43,7 +47,7 @@ function performanceSnapshot(metrics) {
     totalMs: metrics._startedAt === null ? metrics.totalMs : now() - metrics._startedAt,
   };
   delete rounded._startedAt;
-  for (const key of ["totalMs", "parseMs", "graphCompileMs", "heuristicMs", "pushDistanceMs", "reachabilityMs"]) {
+  for (const key of ["totalMs", "parseMs", "graphCompileMs", "denseBuildMs", "heuristicMs", "pushDistanceMs", "reachabilityMs"]) {
     rounded[key] = Math.round((rounded[key] || 0) * 1000) / 1000;
   }
   return rounded;
@@ -261,13 +265,35 @@ function parse(data) {
     floor.size / Math.max(1, pushDistances.get(goal).size),
   ]));
   const topology = analyzeTopology(floor, goals);
+  const dense = compileDenseBoard(floor, metrics);
   const singleBoxGraph = compileSingleBoxPushGraph(floor, metrics);
   metrics.parseMs += now() - parseStarted;
   return {
     rows: data.rows, floor, walls, goals, goalsByLabel, pushDistances, goalPressure,
     topology, heuristicMemo: new Map(), playerPushDistances: new Map(),
-    deadlockMemo: new Map(), singleBoxGraph, metrics,
+    deadlockMemo: new Map(), singleBoxGraph, dense, metrics,
   };
+}
+
+function compileDenseBoard(floor, metrics) {
+  const started = now();
+  const keys = [...floor];
+  const idByKey = new Map(keys.map((position, id) => [position, id]));
+  const y = new Int16Array(keys.length), x = new Int16Array(keys.length);
+  const neighbors = new Int32Array(keys.length * DIRECTION_ENTRIES.length);
+  neighbors.fill(-1);
+  keys.forEach((position, id) => {
+    const [cellY, cellX] = position.split(",").map(Number);
+    y[id] = cellY;
+    x[id] = cellX;
+    DIRECTION_ENTRIES.forEach(([, [dy, dx]], direction) => {
+      neighbors[id * DIRECTION_ENTRIES.length + direction] =
+        idByKey.get(pkey(cellY + dy, cellX + dx)) ?? -1;
+    });
+  });
+  metrics.denseCells = keys.length;
+  metrics.denseBuildMs += now() - started;
+  return {keys, idByKey, y, x, neighbors};
 }
 function reversePushDistances(floor, goalKey) {
   const [gy, gx] = goalKey.split(",").map(Number);
@@ -807,15 +833,20 @@ function createsDynamicDeadlock(boxes, board, movedBox) {
   return memoizeBounded(board.deadlockMemo, signature, deadlocked, DEADLOCK_MEMO_LIMIT);
 }
 function neighbors(state, board) {
-  const occupied = new Map(state.boxes.map((b, i) => [pkey(b[0], b[1]), i])), result = [];
-  for (const [move, [dy, dx]] of Object.entries(DIRS)) {
-    const [y, x] = state.robot, ny = y + dy, nx = x + dx, next = pkey(ny, nx);
-    if (!board.floor.has(next)) continue;
+  const occupied = denseOccupancy(state, board), result = [];
+  const robotId = board.dense.idByKey.get(pkey(state.robot[0], state.robot[1]));
+  for (let direction = 0; direction < DIRECTION_ENTRIES.length; direction++) {
+    const [move, [dy, dx]] = DIRECTION_ENTRIES[direction];
+    const [y, x] = state.robot;
+    const nextId = board.dense.neighbors[robotId * DIRECTION_ENTRIES.length + direction];
+    if (nextId < 0) continue;
+    const ny = board.dense.y[nextId], nx = board.dense.x[nextId];
     let boxes = state.boxes;
-    if (occupied.has(next)) {
-      const by = ny + dy, bx = nx + dx, beyond = pkey(by, bx);
-      if (!board.floor.has(beyond) || occupied.has(beyond)) continue;
-      const index = occupied.get(next), label = boxes[index][2];
+    if (occupied[nextId] >= 0) {
+      const beyondId = board.dense.neighbors[nextId * DIRECTION_ENTRIES.length + direction];
+      if (beyondId < 0 || occupied[beyondId] >= 0) continue;
+      const by = board.dense.y[beyondId], bx = board.dense.x[beyondId];
+      const index = occupied[nextId], label = boxes[index][2];
       boxes = boxes.map((b, i) => i === index ? [by, bx, label] : b);
       if (staticDead(by, bx, board, label) ||
           createsDynamicDeadlock(boxes, board, [by, bx])) continue;
@@ -825,27 +856,23 @@ function neighbors(state, board) {
   return result;
 }
 
-function reachablePaths(state, board) {
-  const started = now();
-  board.metrics.reachabilityCalls++;
+function reachablePathsReference(state, board) {
   const occupied = new Set(state.boxes.map(b => pkey(b[0], b[1])));
   const start = pkey(state.robot[0], state.robot[1]);
   const parents = new Map([[start, {parent: null, move: null}]]);
   const queue = [state.robot];
   for (let head = 0; head < queue.length; head++) {
     const [y, x] = queue[head], current = pkey(y, x);
-    for (const [move, [dy, dx]] of Object.entries(DIRS)) {
-      const ny = y + dy, nx = x + dx, next = pkey(ny, nx);
+    for (const [move, [dy, dx]] of DIRECTION_ENTRIES) {
+      const next = pkey(y + dy, x + dx);
       if (parents.has(next) || !board.floor.has(next) || occupied.has(next)) continue;
       parents.set(next, {parent: current, move});
-      queue.push([ny, nx]);
+      queue.push([y + dy, x + dx]);
     }
   }
-  board.metrics.reachabilityCells += parents.size;
-  board.metrics.reachabilityMs += now() - started;
   return {
-    has: (position) => parents.has(position),
-    get: (position) => {
+    has: position => parents.has(position),
+    get: position => {
       const path = [];
       let current = position;
       while (parents.has(current) && parents.get(current).parent !== null) {
@@ -857,6 +884,64 @@ function reachablePaths(state, board) {
     },
     keys: () => parents.keys(),
     size: parents.size,
+  };
+}
+
+function denseOccupancy(state, board) {
+  const occupied = new Int32Array(board.dense.keys.length);
+  occupied.fill(-1);
+  state.boxes.forEach((box, index) => {
+    const id = board.dense.idByKey.get(pkey(box[0], box[1]));
+    if (id !== undefined) occupied[id] = index;
+  });
+  return occupied;
+}
+
+function reachablePaths(state, board) {
+  const started = now();
+  board.metrics.reachabilityCalls++;
+  const {dense} = board, occupied = denseOccupancy(state, board);
+  const start = dense.idByKey.get(pkey(state.robot[0], state.robot[1]));
+  const parents = new Int32Array(dense.keys.length), parentMoves = new Int8Array(dense.keys.length);
+  parents.fill(-2);
+  parents[start] = -1;
+  const queue = new Int32Array(dense.keys.length);
+  queue[0] = start;
+  let tail = 1;
+  for (let head = 0; head < tail; head++) {
+    const current = queue[head];
+    for (let direction = 0; direction < DIRECTION_ENTRIES.length; direction++) {
+      const next = dense.neighbors[current * DIRECTION_ENTRIES.length + direction];
+      if (next < 0 || parents[next] !== -2 || occupied[next] >= 0) continue;
+      parents[next] = current;
+      parentMoves[next] = direction;
+      queue[tail++] = next;
+    }
+  }
+  const pathToId = id => {
+    if (id === undefined || id < 0 || parents[id] === -2) return [];
+    const path = [];
+    for (let current = id; parents[current] !== -1; current = parents[current]) {
+      path.push(DIRECTION_ENTRIES[parentMoves[current]][0]);
+    }
+    path.reverse();
+    return path;
+  };
+  board.metrics.reachabilityCells += tail;
+  board.metrics.reachabilityMs += now() - started;
+  return {
+    has: position => {
+      const id = dense.idByKey.get(position);
+      return id !== undefined && parents[id] !== -2;
+    },
+    hasId: id => id >= 0 && parents[id] !== -2,
+    get: position => pathToId(dense.idByKey.get(position)),
+    getId: pathToId,
+    keys: function* () {
+      for (let index = 0; index < tail; index++) yield dense.keys[queue[index]];
+    },
+    size: tail,
+    occupied,
   };
 }
 
@@ -891,26 +976,33 @@ function createsSealedCorralDeadlock(state, board, reachable) {
 
 function pushNeighbors(state, board, reachable = reachablePaths(state, board)) {
   board.metrics.pushNeighborCalls++;
-  const occupied = new Map(state.boxes.map((b, i) => [pkey(b[0], b[1]), i]));
+  const occupied = reachable.occupied || denseOccupancy(state, board);
   const result = [];
   state.boxes.forEach(([y, x, label], index) => {
-    for (const [move, [dy, dx]] of Object.entries(DIRS)) {
-      const support = pkey(y - dy, x - dx), dest = pkey(y + dy, x + dx);
-      if (!reachable.has(support) || !board.floor.has(dest) || occupied.has(dest)) continue;
+    const boxId = board.dense.idByKey.get(pkey(y, x));
+    for (let direction = 0; direction < DIRECTION_ENTRIES.length; direction++) {
+      const [move] = DIRECTION_ENTRIES[direction];
+      const supportId = board.dense.neighbors[
+        boxId * DIRECTION_ENTRIES.length + OPPOSITE_DIRECTION_INDEX[direction]
+      ];
+      const destinationId = board.dense.neighbors[boxId * DIRECTION_ENTRIES.length + direction];
+      if (!reachable.hasId(supportId) || destinationId < 0 || occupied[destinationId] >= 0) continue;
+      const destinationY = board.dense.y[destinationId], destinationX = board.dense.x[destinationId];
+      const dest = board.dense.keys[destinationId];
       board.metrics.pushCandidates++;
-      const boxes = state.boxes.map((b, i) => i === index ? [y + dy, x + dx, label] : b);
-      if (staticDead(y + dy, x + dx, board, label)) {
+      const boxes = state.boxes.map((b, i) => i === index ? [destinationY, destinationX, label] : b);
+      if (staticDead(destinationY, destinationX, board, label)) {
         board.metrics.staticDeadPrunes++;
         continue;
       }
-      if (createsDynamicDeadlock(boxes, board, [y + dy, x + dx])) {
+      if (createsDynamicDeadlock(boxes, board, [destinationY, destinationX])) {
         board.metrics.dynamicDeadPrunes++;
         continue;
       }
       result.push({
         robot: [y, x],
         boxes,
-        path: [...reachable.get(support), move],
+        path: [...reachable.getId(supportId), move],
         pushClass: `${label}:${y},${x}:${move}`,
         pushedFrom: pkey(y, x),
         pushedTo: dest,
@@ -922,21 +1014,28 @@ function pushNeighbors(state, board, reachable = reachablePaths(state, board)) {
 }
 
 function pushBoxNeighbors(state, board, boxPosition, reachable = reachablePaths(state, board)) {
-  const occupied = new Map(state.boxes.map((box, index) => [pkey(box[0], box[1]), index]));
-  const index = occupied.get(boxPosition);
-  if (index === undefined) return [];
+  const occupied = reachable.occupied || denseOccupancy(state, board);
+  const boxId = board.dense.idByKey.get(boxPosition);
+  if (boxId === undefined || occupied[boxId] < 0) return [];
+  const index = occupied[boxId];
   const [y, x, label] = state.boxes[index], result = [];
-  for (const [move, [dy, dx]] of Object.entries(DIRS)) {
-    const support = pkey(y - dy, x - dx), destination = pkey(y + dy, x + dx);
-    if (!reachable.has(support) || !board.floor.has(destination) || occupied.has(destination)) continue;
+  for (let direction = 0; direction < DIRECTION_ENTRIES.length; direction++) {
+    const [move] = DIRECTION_ENTRIES[direction];
+    const supportId = board.dense.neighbors[
+      boxId * DIRECTION_ENTRIES.length + OPPOSITE_DIRECTION_INDEX[direction]
+    ];
+    const destinationId = board.dense.neighbors[boxId * DIRECTION_ENTRIES.length + direction];
+    if (!reachable.hasId(supportId) || destinationId < 0 || occupied[destinationId] >= 0) continue;
+    const destinationY = board.dense.y[destinationId], destinationX = board.dense.x[destinationId];
+    const destination = board.dense.keys[destinationId];
     const boxes = state.boxes.map((box, boxIndex) =>
-      boxIndex === index ? [y + dy, x + dx, label] : box);
-    if (staticDead(y + dy, x + dx, board, label) ||
-        createsDynamicDeadlock(boxes, board, [y + dy, x + dx])) continue;
+      boxIndex === index ? [destinationY, destinationX, label] : box);
+    if (staticDead(destinationY, destinationX, board, label) ||
+        createsDynamicDeadlock(boxes, board, [destinationY, destinationX])) continue;
     result.push({
       robot: [y, x],
       boxes,
-      path: [...reachable.get(support), move],
+      path: [...reachable.getId(supportId), move],
       pushClass: `${label}:${y},${x}:${move}`,
       pushedFrom: boxPosition,
       pushedTo: destination,
@@ -1062,22 +1161,28 @@ function encodeMoves(path) {
 }
 
 function reversePullNeighbors(state, board, reachable = reachablePaths(state, board)) {
-  const occupied = new Map(state.boxes.map((b, i) => [pkey(b[0], b[1]), i]));
+  const occupied = reachable.occupied || denseOccupancy(state, board);
   const result = [];
   state.boxes.forEach(([y, x, label], index) => {
-    for (const [move, [dy, dx]] of Object.entries(DIRS)) {
-      const boxBefore = pkey(y - dy, x - dx);
-      const robotAfterPull = pkey(y - 2 * dy, x - 2 * dx);
-      if (!reachable.has(boxBefore) || !board.floor.has(robotAfterPull)) continue;
-      if (occupied.has(boxBefore) || occupied.has(robotAfterPull)) continue;
-      if (staticDead(y - dy, x - dx, board, label)) continue;
-      const boxes = state.boxes.map((b, i) => i === index ? [y - dy, x - dx, label] : b);
-      if (creates2x2Deadlock(boxes, board, [y - dy, x - dx]) ||
-          createsFrozenComponentDeadlock(boxes, board, [y - dy, x - dx])) continue;
-      const walkToPullSpot = reachable.get(boxBefore);
+    const boxId = board.dense.idByKey.get(pkey(y, x));
+    for (let direction = 0; direction < DIRECTION_ENTRIES.length; direction++) {
+      const [move] = DIRECTION_ENTRIES[direction];
+      const opposite = OPPOSITE_DIRECTION_INDEX[direction];
+      const boxBeforeId = board.dense.neighbors[boxId * DIRECTION_ENTRIES.length + opposite];
+      if (!reachable.hasId(boxBeforeId) || occupied[boxBeforeId] >= 0) continue;
+      const robotAfterPullId = board.dense.neighbors[
+        boxBeforeId * DIRECTION_ENTRIES.length + opposite
+      ];
+      if (robotAfterPullId < 0 || occupied[robotAfterPullId] >= 0) continue;
+      const boxY = board.dense.y[boxBeforeId], boxX = board.dense.x[boxBeforeId];
+      if (staticDead(boxY, boxX, board, label)) continue;
+      const boxes = state.boxes.map((b, i) => i === index ? [boxY, boxX, label] : b);
+      if (creates2x2Deadlock(boxes, board, [boxY, boxX]) ||
+          createsFrozenComponentDeadlock(boxes, board, [boxY, boxX])) continue;
+      const walkToPullSpot = reachable.getId(boxBeforeId);
       const walkFromPushLanding = invertWalk(walkToPullSpot);
       result.push({
-        robot: [y - 2 * dy, x - 2 * dx],
+        robot: [board.dense.y[robotAfterPullId], board.dense.x[robotAfterPullId]],
         boxes,
         cost: state.cost + 1,
         segment: [move, ...walkFromPushLanding],

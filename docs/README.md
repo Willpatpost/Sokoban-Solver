@@ -17,8 +17,11 @@ Completion entries include elapsed time and an explicit termination reason plus
 generated-state, peak-frontier, compaction, and retained-state telemetry when the
 worker supplies it. The on-screen field renders the newest 1,500 entries, while
 Copy preserves the complete in-memory log for long-run analysis.
-Direct-search completions also report compiled-graph construction, heuristic,
-robot-reachability, cache-hit, push-generation, and pruning measurements.
+Direct-search completions also report compiled-graph construction, dense-board
+index construction, heuristic, robot-reachability, cache-hit, push-generation,
+and pruning measurements. Robot flood fills and forward push generation use
+immutable integer cell IDs and typed arrays while retaining string coordinates
+at module boundaries for compatible logs, checkpoints, and replay paths.
 The adjacent `{ }` control copies the complete run as newline-delimited JSON.
 Each event includes a schema version, run ID, sequence number, timestamp, elapsed
 milliseconds, solver build, level, category, message, and typed statistics.
