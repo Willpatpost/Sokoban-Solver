@@ -1,6 +1,7 @@
 const {spawn} = require("node:child_process");
 const path = require("node:path");
 const {performance} = require("node:perf_hooks");
+const {GENERATED_CASES} = require("./generated-cases.js");
 
 const CASE_RUNNER = path.join(__dirname, "case-runner.js");
 
@@ -91,7 +92,9 @@ const SUITES = {
         checkpointLimit: 16,
       },
     },
+    ...GENERATED_CASES,
   ],
+  validation: GENERATED_CASES,
   huge: [
     {
       name: "huge long guided beam",
@@ -134,7 +137,7 @@ function usage() {
     "Usage: node bench/benchmark.js [options]",
     "",
     "Options:",
-    "  --suite smoke|alpha|huge Benchmark suite to run (default: smoke).",
+    "  --suite smoke|alpha|validation|huge  Benchmark suite to run (default: smoke).",
     "  --level LEVEL            Run one level from docs/levels.js.",
     "  --algorithm ALGORITHM    Algorithm for --level (default: push-beam).",
     "  --max-visited N          Worker state budget for a single-level run.",
@@ -148,8 +151,9 @@ function caseScore(result, weight) {
   const visitedCost = (result.visited || 0) * 0.02;
   const timeCost = (result.elapsedMs || 0) * 2;
   const pathCost = (result.moves || 0) + 5 * (result.pushes || 0);
-  const partialCredit = Number.isFinite(result.bestEstimate)
-    ? Math.max(0, 100000 - 600 * result.bestEstimate - 4 * (result.bestPushes || 0))
+  const checkpoint = result.checkpointEvaluation?.best;
+  const partialCredit = checkpoint
+    ? Math.max(0, 100000 - 600 * checkpoint.remainingPushes - 4 * checkpoint.pushes)
     : 0;
   return Math.round(weight * (
     result.solved ? 1000000 - visitedCost - timeCost - pathCost : partialCredit - visitedCost - timeCost
@@ -287,7 +291,7 @@ async function main() {
     if (options.jsonl) process.stdout.write(`${JSON.stringify({type: "case", ...result})}\n`);
   }
   const summary = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     suite: options.level ? "single" : options.suite,
     elapsedMs: Math.round(performance.now() - started),
     attempted: results.length,
@@ -303,7 +307,11 @@ async function main() {
   if (!summary.valid || summary.errors) process.exitCode = 1;
 }
 
-main().catch(error => {
-  process.stderr.write(`${error.stack || error.message}\n`);
-  process.exitCode = 1;
-});
+if (require.main === module) {
+  main().catch(error => {
+    process.stderr.write(`${error.stack || error.message}\n`);
+    process.exitCode = 1;
+  });
+}
+
+module.exports = {buildCases, caseScore, parseArgs, SUITES};

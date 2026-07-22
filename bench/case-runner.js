@@ -3,6 +3,7 @@ const path = require("node:path");
 const vm = require("node:vm");
 const {performance} = require("node:perf_hooks");
 const {LEVELS, stateFromRows} = require("../docs/levels.js");
+const {evaluateCheckpoints} = require("./evaluator.js");
 
 const DIRS = {Up: [-1, 0], Down: [1, 0], Left: [0, -1], Right: [0, 1]};
 
@@ -122,6 +123,7 @@ function runCase(caseSpec) {
   const result = worker.search(payload);
   const elapsedMs = Math.round(performance.now() - started);
   const validation = validatePathToGoal(levelRows, result.path);
+  const checkpointEvaluation = evaluateCheckpoints(levelRows, result);
   return {
     name: caseSpec.name || `${caseSpec.level}:${payload.algorithm}`,
     level: caseSpec.level || "custom",
@@ -137,6 +139,7 @@ function runCase(caseSpec) {
     bestEstimate: result.bestEstimate,
     bestPushes: result.bestPushes,
     checkpointCount: result.checkpoints?.length || 0,
+    checkpointEvaluation,
     progress: progressSummary(progress),
     validation,
   };

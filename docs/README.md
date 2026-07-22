@@ -177,7 +177,9 @@ From the repository root:
 
 ```powershell
 node --test docs/solver-worker.test.js docs/path-validation.test.js docs/director-policy.test.js docs/keyboard-policy.test.js
+node --test docs/pruning-differential.test.js bench/evaluator.test.js bench/generated-cases.test.js bench/benchmark.test.js
 node bench/benchmark.js --suite smoke
+node bench/benchmark.js --suite validation
 ```
 
 ## Benchmarking
@@ -193,7 +195,10 @@ Each benchmark case runs in an isolated child process, validates any returned
 solution by replaying it against the puzzle rules, and emits a single scalar
 `totalScore` plus per-case timing, visited states, pushes, estimates, checkpoints,
 and cutoff reasons. Invalid returned paths fail the benchmark instead of earning
-partial credit.
+partial credit. Unsolved partial credit is based on replay-valid checkpoints and
+a fixed harness-owned typed push-distance evaluator, not the solver's reported
+estimate. The `validation` suite adds deterministic mirrored, rotated, relabeled,
+and premature-goal cases to reduce tuning against only the built-in layouts.
 
 ## GitHub Pages deployment
 
