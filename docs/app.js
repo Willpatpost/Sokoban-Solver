@@ -1308,6 +1308,8 @@ function runBidirectionalSolver(purpose, analysis) {
           preparedBoardReuses: data.performance?.preparedBoardReuses,
           signatureMs: data.performance?.signatureMs,
           signatureCacheHits: data.performance?.signatureCacheHits,
+          packedIdentityCalls: data.performance?.packedIdentityCalls,
+          packedIdentityCacheHits: data.performance?.packedIdentityCacheHits,
           heuristicMs: data.performance?.heuristicMs,
           commitmentMs: data.performance?.commitmentMs,
           heapMB: data.performance?.heapSupported
@@ -1387,6 +1389,8 @@ function runBidirectionalSolver(purpose, analysis) {
           preparedBoardReuses: data.performance?.preparedBoardReuses,
           signatureMs: data.performance?.signatureMs,
           signatureCacheHits: data.performance?.signatureCacheHits,
+          packedIdentityCalls: data.performance?.packedIdentityCalls,
+          packedIdentityCacheHits: data.performance?.packedIdentityCacheHits,
           heuristicMs: data.performance?.heuristicMs,
           commitmentMs: data.performance?.commitmentMs,
           heapMB: data.performance?.heapSupported
@@ -1623,6 +1627,8 @@ function startSolver(purpose) {
         preparedBoardReuses: data.performance?.preparedBoardReuses,
         signatureMs: data.performance?.signatureMs,
         signatureCacheHits: data.performance?.signatureCacheHits,
+        packedIdentityCalls: data.performance?.packedIdentityCalls,
+        packedIdentityCacheHits: data.performance?.packedIdentityCacheHits,
         heuristicMs: data.performance?.heuristicMs,
         commitmentMs: data.performance?.commitmentMs,
         commitmentBoxLocks: data.performance?.commitmentBoxLocks,

@@ -42,6 +42,50 @@ function boxSignature(boxes, board = null) {
   return signature;
 }
 
+function packedBoxIdentity(boxes, board) {
+  const metrics = board.metrics;
+  metrics.packedIdentityCalls++;
+  if (board.boxIdentityMemo.has(boxes)) {
+    metrics.packedIdentityCacheHits++;
+    return board.boxIdentityMemo.get(boxes);
+  }
+  const encoded = new Uint32Array(boxes.length);
+  for (let index = 0; index < boxes.length; index++) {
+    const [y, x, label] = boxes[index];
+    const cell = board.dense.idByKey.get(pkey(y, x));
+    const labelId = board.dense.labelIds.get(label);
+    if (cell === undefined || labelId === undefined) {
+      throw new Error(`Cannot densely encode box ${label} at ${y},${x}.`);
+    }
+    encoded[index] = labelId * board.dense.keys.length + cell;
+  }
+  encoded.sort();
+  const shift = BigInt(board.dense.tokenBits);
+  let identity = BigInt(boxes.length);
+  for (const value of encoded) identity = (identity << shift) | BigInt(value);
+  board.boxIdentityMemo.set(boxes, identity);
+  metrics.packedIdentityValues += encoded.length;
+  return identity;
+}
+
+function denseStateIdentity(state, board, robotId) {
+  if (robotId === undefined || robotId < 0) return exactPushKey(state, board);
+  return (packedBoxIdentity(state.boxes, board) << BigInt(board.dense.cellBits)) |
+    BigInt(robotId);
+}
+
+function exactPushIdentity(state, board) {
+  const robotId = board.dense.idByKey.get(pkey(state.robot[0], state.robot[1]));
+  return denseStateIdentity(state, board, robotId);
+}
+
+function pushIdentity(state, reachable) {
+  if (reachable.board && reachable.regionId !== undefined) {
+    return denseStateIdentity(state, reachable.board, reachable.regionId);
+  }
+  return pushKey(state, reachable);
+}
+
 function exactPushKey(state, board = null) {
   const robotId = board?.dense.idByKey.get(pkey(state.robot[0], state.robot[1]));
   const robot = robotId === undefined ? state.robot.join(",") : robotId.toString(36);
@@ -106,6 +150,9 @@ function createPerformanceMetrics() {
     signatureCacheHits: 0,
     signatureCharacters: 0,
     signatureMs: 0,
+    packedIdentityCalls: 0,
+    packedIdentityCacheHits: 0,
+    packedIdentityValues: 0,
     preparedBoardReuses: 0,
     preparedBoardFallbacks: 0,
     heuristicCalls: 0,
@@ -443,6 +490,7 @@ function hydratePreparedBoard(data, seed, metrics) {
     localCorralMemo: new Map(),
     doorwayFlowMemo: new Map(),
     boxSignatureMemo: new WeakMap(),
+    boxIdentityMemo: new WeakMap(),
     metrics,
   };
 }
@@ -529,6 +577,7 @@ function parse(data) {
     localCorralMemo: new Map(),
     doorwayFlowMemo: new Map(),
     boxSignatureMemo: new WeakMap(),
+    boxIdentityMemo: new WeakMap(),
     singleBoxGraph, dense, metrics,
   };
 }
@@ -553,7 +602,10 @@ function compileDenseBoard(floor, goals, metrics) {
   metrics.denseBuildMs += now() - started;
   const labelIds = new Map([...new Set(goals.values())].sort()
     .map((label, index) => [label, index]));
-  return {keys, idByKey, y, x, neighbors, labelIds};
+  const cellBits = Math.max(1, Math.ceil(Math.log2(Math.max(2, keys.length))));
+  const tokenCount = Math.max(2, keys.length * Math.max(1, labelIds.size));
+  const tokenBits = Math.max(1, Math.ceil(Math.log2(tokenCount)));
+  return {keys, idByKey, y, x, neighbors, labelIds, cellBits, tokenBits};
 }
 function reversePushDistances(floor, goalKey) {
   const [gy, gx] = goalKey.split(",").map(Number);
@@ -2237,6 +2289,15 @@ function reconstructPath(cameFrom, signature) {
 
 function signatureNoise(signature, seed) {
   let hash = (2166136261 ^ seed) >>> 0;
+  if (typeof signature === "bigint") {
+    let value = signature;
+    do {
+      hash ^= Number(value & 0xffffffffn);
+      hash = Math.imul(hash, 16777619) >>> 0;
+      value >>= 32n;
+    } while (value);
+    return hash / 0x100000000;
+  }
   for (let index = 0; index < signature.length; index++) {
     hash ^= signature.charCodeAt(index);
     hash = Math.imul(hash, 16777619) >>> 0;
@@ -2269,8 +2330,9 @@ function serializeSearchCheckpoint(candidate, board) {
 function takeDiverse(candidates, count, selected, scoreKey, groupKey = "pushClass") {
   const groups = new Map();
   for (const candidate of candidates) {
-    if (selected.has(candidate.exactSignature)) continue;
-    const key = candidate[groupKey] || candidate.pushClass || candidate.exactSignature;
+    const identity = candidate.exactIdentity ?? candidate.exactSignature;
+    if (selected.has(identity)) continue;
+    const key = candidate[groupKey] || candidate.pushClass || identity;
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(candidate);
   }
@@ -2285,8 +2347,9 @@ function takeDiverse(candidates, count, selected, scoreKey, groupKey = "pushClas
     for (const queue of queues) {
       if (result.length >= count) break;
       const candidate = queue.items[queue.index++];
-      if (!selected.has(candidate.exactSignature)) {
-        selected.add(candidate.exactSignature);
+      const identity = candidate.exactIdentity ?? candidate.exactSignature;
+      if (!selected.has(identity)) {
+        selected.add(identity);
         result.push(candidate);
       }
       if (queue.index < queue.items.length) remaining.push(queue);
@@ -2367,13 +2430,14 @@ function beamSearch(payload) {
   if (createsSealedCorralDeadlock(initial, board, initial.reachable)) {
     return {path: null, visited};
   }
+  initial.identity = pushIdentity(initial, initial.reachable);
   initial.signature = pushKey(initial, initial.reachable);
   initial.strategicHistory = "";
   initial.openingHistory = "";
   const initialEstimate = heuristic(initial.boxes, board);
   if (!Number.isFinite(initialEstimate)) return {path: null, visited};
   bestEstimate = initialEstimate;
-  seenDepth.set(initial.signature, 0);
+  seenDepth.set(initial.identity, 0);
   let beam = [initial];
 
   searchLayers: for (let depth = 0; beam.length && depth <= maxDepth; depth++) {
@@ -2436,8 +2500,8 @@ function beamSearch(payload) {
             visited,
           };
         }
-        child.exactSignature = exactPushKey(child, board);
-        if ((seenExactDepth.get(child.exactSignature) ?? Infinity) <= child.cost) continue;
+        child.exactIdentity = exactPushIdentity(child, board);
+        if ((seenExactDepth.get(child.exactIdentity) ?? Infinity) <= child.cost) continue;
         const estimate = heuristic(child.boxes, board);
         if (!Number.isFinite(estimate)) continue;
         if (payload.upperBound && child.cost + estimate > payload.upperBound) continue;
@@ -2475,14 +2539,14 @@ function beamSearch(payload) {
           supportDependencyWeight * dependencyDelta +
           localRoomWeight * localRoomDelta +
           doorwayFlowWeight * (0.2 * doorway.penalty + doorwayDelta) +
-          diversity * signatureNoise(child.exactSignature, seed);
+          diversity * signatureNoise(child.exactIdentity, seed);
         const exploreScore = topologyWeight * topology + evacuationWeight * evacuation -
           goalPackingWeight * packing +
           supportDependencyWeight * dependencyDelta +
           localRoomWeight * localRoomDelta +
           doorwayFlowWeight * (0.2 * doorway.penalty + doorwayDelta) +
-          diversity * signatureNoise(child.exactSignature, seed + 7919);
-        const existing = candidates.get(child.exactSignature);
+          diversity * signatureNoise(child.exactIdentity, seed + 7919);
+        const existing = candidates.get(child.exactIdentity);
         if (!existing || score < existing.score) {
           const candidate = {
             ...child,
@@ -2503,7 +2567,7 @@ function beamSearch(payload) {
             strategicHistory: child.strategicHistory,
             openingHistory: child.openingHistory,
           };
-          candidates.set(child.exactSignature, candidate);
+          candidates.set(child.exactIdentity, candidate);
           if (!bestCheckpoint || estimate < bestCheckpoint.estimate ||
               (estimate === bestCheckpoint.estimate && child.cost < bestCheckpoint.cost)) {
             bestCheckpoint = candidate;
@@ -2564,12 +2628,13 @@ function beamSearch(payload) {
     for (const child of shortlist) {
       child.reachable = reachablePaths(child, board);
       if (createsSealedCorralDeadlock(child, board, child.reachable)) continue;
+      child.identity = pushIdentity(child, child.reachable);
+      if ((seenDepth.get(child.identity) ?? Infinity) <= child.cost) continue;
       child.signature = pushKey(child, child.reachable);
-      if ((seenDepth.get(child.signature) ?? Infinity) <= child.cost) continue;
       child.score -= mobilityWeight * child.reachable.size;
       child.exploreScore -= mobilityWeight * child.reachable.size;
-      seenDepth.set(child.signature, child.cost);
-      seenExactDepth.set(child.exactSignature, child.cost);
+      seenDepth.set(child.identity, child.cost);
+      seenExactDepth.set(child.exactIdentity, child.cost);
       beam.push(child);
       if (!bestHandoff || child.estimate < bestHandoff.estimate ||
           (child.estimate === bestHandoff.estimate && child.cost < bestHandoff.cost)) {
@@ -2779,13 +2844,14 @@ function boundedPushDepthFirstSearch(payload) {
     }
     const reachable = reachablePaths(state, board);
     if (createsSealedCorralDeadlock(state, board, reachable)) return;
-    const signature = pushKey(state, reachable);
-    if (payload.trackedSignatures?.[cost] === signature) {
+    const identity = pushIdentity(state, reachable);
+    if (payload.trackedSignatures &&
+        payload.trackedSignatures[cost] === pushKey(state, reachable)) {
       trackedThrough = Math.max(trackedThrough, cost);
     }
-    if (activePath.has(signature) || (transpositions.get(signature) ?? Infinity) <= cost) return;
-    activePath.add(signature);
-    transpositions.set(signature, cost);
+    if (activePath.has(identity) || (transpositions.get(identity) ?? Infinity) <= cost) return;
+    activePath.add(identity);
+    transpositions.set(identity, cost);
 
     const dependencyGraph = supportDependencyGraph(state, board, reachable);
     const localRooms = [
@@ -2816,9 +2882,9 @@ function boundedPushDepthFirstSearch(payload) {
       if (childCost > maxDepth || childCost > bound) continue;
       const estimate = heuristic(next.boxes, board);
       if (!Number.isFinite(estimate) || childCost + estimate > bound) continue;
-      const checkpointSignature = exactPushKey(next, board);
-      if (!checkpoints.has(checkpointSignature)) {
-        checkpoints.set(checkpointSignature, {
+      const checkpointIdentity = exactPushIdentity(next, board);
+      if (!checkpoints.has(checkpointIdentity)) {
+        checkpoints.set(checkpointIdentity, {
           state: {
             rows: board.rows,
             robot: next.robot,
@@ -2835,8 +2901,8 @@ function boundedPushDepthFirstSearch(payload) {
               (left.cost + left.estimate) - (right.cost + right.estimate))
             .slice(0, checkpointLimit);
           checkpoints.clear();
-          retained.forEach(([signature, checkpoint]) =>
-            checkpoints.set(signature, checkpoint));
+          retained.forEach(([retainedIdentity, checkpoint]) =>
+            checkpoints.set(retainedIdentity, checkpoint));
         }
       }
       if (estimate < bestEstimate) {
@@ -2875,7 +2941,7 @@ function boundedPushDepthFirstSearch(payload) {
       score += (payload.doorwayFlowWeight ?? 0.35) *
         (0.2 * doorway.penalty + doorwayDelta);
       score += (payload.diversity ?? 1.5) *
-        signatureNoise(exactPushKey(next, board), seed + childCost);
+        signatureNoise(exactPushIdentity(next, board), seed + childCost);
       candidates.push({next, cost: childCost, score});
     }
     candidates.sort((left, right) => left.score - right.score);
@@ -2892,7 +2958,7 @@ function boundedPushDepthFirstSearch(payload) {
       segments.pop();
       if (cutoff || solution) break;
     }
-    activePath.delete(signature);
+    activePath.delete(identity);
   };
 
   const initialEstimate = heuristic(initial.boxes, board);
@@ -2968,7 +3034,7 @@ function pushIterativeDeepeningAStar(payload) {
     const total = cost + estimate;
     let accepted = shardAccepted;
     if (!accepted && exactShard && cost >= exactShard.depth) {
-      const bucket = Math.floor(signatureNoise(exactPushKey(state, board), 0) * exactShard.count);
+      const bucket = Math.floor(signatureNoise(exactPushIdentity(state, board), 0) * exactShard.count);
       if (bucket !== exactShard.index) {
         shardRejections++;
         return Infinity;
@@ -3004,20 +3070,21 @@ function pushIterativeDeepeningAStar(payload) {
       corralPrunes++;
       return Infinity;
     }
-    const signature = pushKey(state, reachable);
-    if (payload.trackedSignatures?.[cost] === signature) {
+    const identity = pushIdentity(state, reachable);
+    if (payload.trackedSignatures &&
+        payload.trackedSignatures[cost] === pushKey(state, reachable)) {
       trackedThrough = Math.max(trackedThrough, cost);
     }
-    if (activePath.has(signature)) {
+    if (activePath.has(identity)) {
       cyclePrunes++;
       return Infinity;
     }
-    if ((transpositions.get(signature) ?? Infinity) <= cost) {
+    if ((transpositions.get(identity) ?? Infinity) <= cost) {
       transpositionPrunes++;
       return Infinity;
     }
-    activePath.add(signature);
-    transpositions.set(signature, cost);
+    activePath.add(identity);
+    transpositions.set(identity, cost);
 
     const dependencyGraph = supportDependencyGraph(state, board, reachable);
     const localRooms = [
@@ -3080,7 +3147,7 @@ function pushIterativeDeepeningAStar(payload) {
             doorwayFlowDelta(doorwayBefore, state, next)
           ) +
           (payload.diversity ?? 0.2) *
-            signatureNoise(exactPushKey(next, board), seed + childCost),
+            signatureNoise(exactPushIdentity(next, board), seed + childCost),
       });
     }
     candidates.sort((left, right) => left.total - right.total || left.score - right.score);
@@ -3103,7 +3170,7 @@ function pushIterativeDeepeningAStar(payload) {
       nextThreshold = Math.min(nextThreshold, exceeded);
       if (cutoff || solution) break;
     }
-    activePath.delete(signature);
+    activePath.delete(identity);
     return nextThreshold;
   };
 
@@ -3301,8 +3368,8 @@ function bidirectionalSide(payload) {
     frontier.retainBest(frontierLimit);
     const retainedCosts = new Map();
     for (const [, , state] of frontier.items) {
-      const previous = retainedCosts.get(state.exactSignature) ?? Infinity;
-      if (state.cost < previous) retainedCosts.set(state.exactSignature, state.cost);
+      const previous = retainedCosts.get(state.exactIdentity) ?? Infinity;
+      if (state.cost < previous) retainedCosts.set(state.exactIdentity, state.cost);
     }
     bestCost = retainedCosts;
     compactions++;
@@ -3329,13 +3396,13 @@ function bidirectionalSide(payload) {
     ...starts.portfolioStats,
   });
   starts.forEach(state => {
-    state.exactSignature = exactPushKey(state, board);
+    state.exactIdentity = exactPushIdentity(state, board);
     const estimate = forward
       ? heuristic(state.boxes, board)
       : homeHeuristic(state.boxes, initialTargets);
-    if (!Number.isFinite(estimate) || bestCost.has(state.exactSignature)) return;
+    if (!Number.isFinite(estimate) || bestCost.has(state.exactIdentity)) return;
     if (payload.upperBound && state.cost + estimate > payload.upperBound) return;
-    bestCost.set(state.exactSignature, state.cost);
+    bestCost.set(state.exactIdentity, state.cost);
     const topology = forward ? 0.2 * topologyPenalty(state.boxes, board) : 0;
     frontier.push([state.cost + estimate + topology, order++, state]);
   });
@@ -3343,13 +3410,14 @@ function bidirectionalSide(payload) {
 
   while (frontier.length) {
     const current = frontier.pop()[2];
-    if (bestCost.get(current.exactSignature) !== current.cost) continue;
-    bestCost.delete(current.exactSignature);
+    if (bestCost.get(current.exactIdentity) !== current.cost) continue;
+    bestCost.delete(current.exactIdentity);
     const reachable = reachablePaths(current, board);
     if (forward && createsSealedCorralDeadlock(current, board, reachable)) continue;
+    const identity = pushIdentity(current, reachable);
+    if (closed.has(identity)) continue;
+    closed.add(identity); visited++;
     const signature = pushKey(current, reachable);
-    if (closed.has(signature)) continue;
-    closed.add(signature); visited++;
     records.push({
       id: signature,
       parent: current.parent ?? null,
@@ -3428,17 +3496,17 @@ function bidirectionalSide(payload) {
         }));
     if (!forward && current.cost === 0 && payload.reverseShard?.count > 1) {
       nextStates = nextStates.filter(next =>
-        reverseShardOwns(exactPushKey(next, board), payload.reverseShard));
+        reverseShardOwns(exactPushIdentity(next, board), payload.reverseShard));
     }
     for (const next of nextStates) {
-      next.exactSignature = exactPushKey(next, board);
-      if (next.cost >= (bestCost.get(next.exactSignature) ?? Infinity)) continue;
+      next.exactIdentity = exactPushIdentity(next, board);
+      if (next.cost >= (bestCost.get(next.exactIdentity) ?? Infinity)) continue;
       const estimate = forward
         ? heuristic(next.boxes, board)
         : homeHeuristic(next.boxes, initialTargets);
       if (!Number.isFinite(estimate)) continue;
       if (payload.upperBound && next.cost + estimate > payload.upperBound) continue;
-      bestCost.set(next.exactSignature, next.cost);
+      bestCost.set(next.exactIdentity, next.cost);
       generated++;
       const weightedEstimate = (forward ? 1.4 : 1.2) * estimate;
       const topology = forward ? 0.2 * topologyPenalty(next.boxes, board) : 0;
@@ -3502,29 +3570,29 @@ function searchCore(payload) {
     s.cost + weight * heuristic(s.boxes, board) +
       (algorithm === "weighted-push-astar" ? 0.15 * topologyPenalty(s.boxes, board) : 0);
   if (pushMacro) {
-    initial.exactSignature = exactPushKey(initial, board);
-    bestCost.set(initial.exactSignature, 0);
+    initial.exactIdentity = exactPushIdentity(initial, board);
+    bestCost.set(initial.exactIdentity, 0);
   }
   const initialScore = score(initial);
   if (!Number.isFinite(initialScore)) return {path: null, visited: 0};
   frontier.push([initialScore, order++, initial]);
   while (frontier.length) {
     const current = frontier.pop()[2];
-    if (pushMacro && bestCost.get(current.exactSignature) !== current.cost) continue;
+    if (pushMacro && bestCost.get(current.exactIdentity) !== current.cost) continue;
     const reachable = pushMacro ? reachablePaths(current, board) : null;
-    const signature = pushMacro ? pushKey(current, reachable) : exactPushKey(current, board);
+    const identity = pushMacro ? pushIdentity(current, reachable) : exactPushIdentity(current, board);
     if (pushMacro) {
-      if (closed.has(signature)) continue;
-      closed.add(signature);
+      if (closed.has(identity)) continue;
+      closed.add(identity);
     } else {
-      if (seen.has(signature) && seen.get(signature) <= current.cost) continue;
-      seen.set(signature, current.cost);
+      if (seen.has(identity) && seen.get(identity) <= current.cost) continue;
+      seen.set(identity, current.cost);
     }
     visited++;
     if (current.parent !== null) {
-      cameFrom.set(signature, {parent: current.parent, segment: current.segment});
+      cameFrom.set(identity, {parent: current.parent, segment: current.segment});
     }
-    if (goal(current.boxes, board.goals)) return {path: reconstructPath(cameFrom, signature), visited};
+    if (goal(current.boxes, board.goals)) return {path: reconstructPath(cameFrom, identity), visited};
     if (pushMacro && createsSealedCorralDeadlock(current, board, reachable)) continue;
     if (payload.maxVisited && visited >= payload.maxVisited) {
       return {path: null, visited, cutoff: true};
@@ -3536,14 +3604,14 @@ function searchCore(payload) {
     for (const next of nextStates) {
       const child = {robot: next.robot, boxes: next.boxes,
         cost: current.cost + (pushMacro ? next.pushes : next.path.length),
-        parent: signature, segment: next.path};
+        parent: identity, segment: next.path};
       if (pushMacro) {
-        child.exactSignature = exactPushKey(child, board);
-        if (child.cost >= (bestCost.get(child.exactSignature) ?? Infinity)) continue;
+        child.exactIdentity = exactPushIdentity(child, board);
+        if (child.cost >= (bestCost.get(child.exactIdentity) ?? Infinity)) continue;
         const childScore = score(child);
         if (!Number.isFinite(childScore)) continue;
         if (payload.upperBound && child.cost + heuristic(child.boxes, board) > payload.upperBound) continue;
-        bestCost.set(child.exactSignature, child.cost);
+        bestCost.set(child.exactIdentity, child.cost);
         frontier.push([childScore, order++, child]);
       } else {
         frontier.push([score(child), order++, child]);

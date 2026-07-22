@@ -25,11 +25,12 @@ browser heap APIs are omitted rather than displayed as zero. Robot flood fills
 and forward push generation use
 immutable integer cell IDs and typed arrays while retaining string coordinates
 at module boundaries for compatible logs, checkpoints, and replay paths.
-Canonical box layouts and robot regions use collision-free dense base-36 keys.
-Immutable box-array identities cache those keys so heuristic, deadlock,
-transposition, and diversity scoring do not repeatedly sort and stringify the
-same layout. Search telemetry includes signature calls, cache hits, generated
-characters, and construction time.
+Canonical box layouts retain collision-free dense base-36 keys for memo tables
+and worker boundaries. Hot search transposition maps instead use collision-free
+packed `BigInt` identities that combine sorted typed-box cell tokens with the
+exact robot cell or canonical reachable-region ID. Immutable box arrays cache
+their packed identity, and diversity sharding hashes that dense value directly.
+Search telemetry reports both string-signature and packed-identity activity.
 
 Ultimate Bidirectional's planning worker also returns a clone-safe prepared-board
 seed. Subsequent portfolio workers reuse its immutable geometry, topology,

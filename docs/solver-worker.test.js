@@ -496,6 +496,7 @@ test("compact box signatures are permutation-invariant and collision-free on a s
   ]));
   const cells = [...board.floor].map(position => position.split(",").map(Number));
   const signatures = new Map();
+  const identities = new Map();
   for (let left = 0; left < cells.length; left++) {
     for (let right = 0; right < cells.length; right++) {
       if (left === right) continue;
@@ -509,10 +510,17 @@ test("compact box signatures are permutation-invariant and collision-free on a s
       signatures.set(compact, reference);
       assert.equal(worker.boxSignature([...boxes].reverse(), board), compact);
       assert.equal(worker.boxSignature(boxes, board), compact);
+      const identity = worker.packedBoxIdentity(boxes, board);
+      assert.equal(identities.get(identity) ?? reference, reference);
+      identities.set(identity, reference);
+      assert.equal(worker.packedBoxIdentity([...boxes].reverse(), board), identity);
+      assert.equal(worker.packedBoxIdentity(boxes, board), identity);
     }
   }
   assert.equal(signatures.size, cells.length * (cells.length - 1));
+  assert.equal(identities.size, signatures.size);
   assert.ok(board.metrics.signatureCacheHits > 0);
+  assert.ok(board.metrics.packedIdentityCacheHits > 0);
 });
 
 test("compact canonical push keys preserve robot-region equivalence", () => {
@@ -527,6 +535,11 @@ test("compact canonical push keys preserve robot-region equivalence", () => {
   const rightKey = worker.pushKey(right, worker.reachablePaths(right, board));
   assert.equal(leftKey, rightKey);
   assert.notEqual(worker.exactPushKey(left, board), worker.exactPushKey(right, board));
+  assert.equal(
+    worker.pushIdentity(left, worker.reachablePaths(left, board)),
+    worker.pushIdentity(right, worker.reachablePaths(right, board)),
+  );
+  assert.notEqual(worker.exactPushIdentity(left, board), worker.exactPushIdentity(right, board));
 });
 
 test("prepared board seeds are clone-safe and preserve search results", () => {
@@ -600,6 +613,9 @@ test("search results expose bounded hot-path performance telemetry", () => {
   assert.ok(result.performance.signatureCacheHits > 0);
   assert.ok(result.performance.signatureCharacters > 0);
   assert.ok(result.performance.signatureMs >= 0);
+  assert.ok(result.performance.packedIdentityCalls > 0);
+  assert.equal(typeof result.performance.packedIdentityCacheHits, "number");
+  assert.ok(result.performance.packedIdentityValues > 0);
   assert.equal(result.performance.preparedBoardReuses, 0);
   assert.ok(result.performance.heuristicCalls > 0);
   assert.ok(result.performance.supportDependencyCalls > 0);

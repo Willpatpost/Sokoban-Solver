@@ -1,8 +1,8 @@
 Sokomind improvements and implementation status
 ===============================================
 
-Status reviewed against the repository after the Sprint 17 generated multi-box
-benchmark and exact-certification work.
+Status reviewed against the repository after the Sprint 18 packed dense-state
+identity and transposition-key work.
 
 The original item numbers and priority order are retained for traceability.
 "Done" means the stated outcome is implemented and adequately validated.
@@ -100,6 +100,26 @@ STRONG IMPLEMENTATION, WITH BOUNDED LIMITATIONS
    - It searches forward from box starts instead of reverse-searching from each
      typed goal into reusable typed feasibility tables.
 
+9. Replace string-heavy hot-path state data with dense representations.
+   Implemented:
+   - Integer cell IDs, dense neighbor/support tables, typed reachability arrays,
+     compact parent directions, and deferred walking-path reconstruction.
+   - Typed box layouts are encoded as sorted dense cell/label tokens and packed
+     into collision-free BigInt identities, cached by immutable box-array object.
+   - Exact robot cells or canonical reachable-region IDs are packed into the same
+     identity for beam, bounded DFS, IDA*, bidirectional, and baseline search
+     transposition maps. Diversity and exact-shard hashing consume the packed
+     value directly instead of reconstructing a string.
+   - Exhaustive small-board tests verify permutation invariance, typed-layout
+     uniqueness, exact robot distinction, and canonical robot-region equivalence.
+   Bounded limitations:
+   - Coordinate-heavy solver logic still stores boxes as nested JavaScript arrays
+     and clones those arrays for successors; the packed form is currently the
+     state identity, not the sole state representation.
+   - Strategic memo tables and cross-worker IDs retain compact strings where they
+     simplify interoperability and diagnostics.
+   - Box bitsets and truly incremental move-updated hashing are not implemented.
+
 10. Reuse immutable board analysis across web workers.
     Implemented:
     - Prepared board seeds share topology, push distances, compiled graphs, dense
@@ -143,16 +163,6 @@ STRONG IMPLEMENTATION, WITH BOUNDED LIMITATIONS
 
 PARTIALLY DELIVERED
 -------------------
-
-9. Replace string-heavy hot-path state data with dense representations.
-   Delivered so far:
-   - Integer cell IDs, dense neighbor/support tables, typed reachability arrays,
-     compact parent directions, and compact state signatures.
-   - Walking paths are reconstructed only when needed.
-   Remaining:
-   - Typed or packed box-position state storage instead of nested JavaScript arrays.
-   - Bitsets and incremental Zobrist or equivalent non-string hashing.
-   - Fewer box-array maps, clones, joins, and reconstructed string keys.
 
 12. Bring the Python/local solver closer to the JavaScript solver.
     Delivered so far:
