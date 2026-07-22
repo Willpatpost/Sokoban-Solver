@@ -229,6 +229,46 @@ test("dense board reachability preserves reference regions and exact walking pat
   }
 });
 
+test("compact box signatures are permutation-invariant and collision-free on a small board", () => {
+  const worker = loadWorker();
+  const board = worker.parse(stateFromRows([
+    "OOOOOO", "Oa  bO", "O    O", "O    O", "OOOOOO",
+  ]));
+  const cells = [...board.floor].map(position => position.split(",").map(Number));
+  const signatures = new Map();
+  for (let left = 0; left < cells.length; left++) {
+    for (let right = 0; right < cells.length; right++) {
+      if (left === right) continue;
+      const boxes = [
+        [cells[left][0], cells[left][1], "A"],
+        [cells[right][0], cells[right][1], "B"],
+      ];
+      const compact = worker.boxSignature(boxes, board);
+      const reference = worker.boxSignatureReference(boxes);
+      assert.equal(signatures.get(compact) ?? reference, reference);
+      signatures.set(compact, reference);
+      assert.equal(worker.boxSignature([...boxes].reverse(), board), compact);
+      assert.equal(worker.boxSignature(boxes, board), compact);
+    }
+  }
+  assert.equal(signatures.size, cells.length * (cells.length - 1));
+  assert.ok(board.metrics.signatureCacheHits > 0);
+});
+
+test("compact canonical push keys preserve robot-region equivalence", () => {
+  const worker = loadWorker();
+  const board = worker.parse(stateFromRows([
+    "OOOOOOO", "O  a  O", "O  A  O", "O     O", "OOOOOOO",
+  ]));
+  const boxes = [[2, 3, "A"]];
+  const left = {robot: [3, 1], boxes};
+  const right = {robot: [3, 5], boxes};
+  const leftKey = worker.pushKey(left, worker.reachablePaths(left, board));
+  const rightKey = worker.pushKey(right, worker.reachablePaths(right, board));
+  assert.equal(leftKey, rightKey);
+  assert.notEqual(worker.exactPushKey(left, board), worker.exactPushKey(right, board));
+});
+
 test("search results expose bounded hot-path performance telemetry", () => {
   const worker = loadWorker();
   const result = worker.search({
@@ -241,6 +281,10 @@ test("search results expose bounded hot-path performance telemetry", () => {
   assert.ok(result.performance.graphEdges > 0);
   assert.ok(result.performance.denseCells > 0);
   assert.ok(result.performance.denseBuildMs >= 0);
+  assert.ok(result.performance.signatureCalls > 0);
+  assert.ok(result.performance.signatureCacheHits > 0);
+  assert.ok(result.performance.signatureCharacters > 0);
+  assert.ok(result.performance.signatureMs >= 0);
   assert.ok(result.performance.heuristicCalls > 0);
   assert.ok(result.performance.reachabilityCalls > 0);
   assert.ok(result.performance.pushNeighborCalls > 0);

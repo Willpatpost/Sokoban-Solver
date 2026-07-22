@@ -1,7 +1,7 @@
 const LEVELS = SokomindLevels.LEVELS;
 const DIRS = {Up: [-1, 0], Down: [1, 0], Left: [0, -1], Right: [0, 1]};
 const CODE_MOVE = {U: "Up", D: "Down", L: "Left", R: "Right"};
-const SOLVER_BUILD = "2026-07-22.9";
+const SOLVER_BUILD = "2026-07-22.10";
 const SOLVER_WORKER_URL = `solver-worker.js?build=${SOLVER_BUILD}`;
 const PUSH_BOUNDS_KEY = "sokomind-push-bounds-v1";
 const KEYS = {ArrowUp: "Up", ArrowDown: "Down", ArrowLeft: "Left", ArrowRight: "Right",
@@ -1303,6 +1303,9 @@ function runBidirectionalSolver(purpose, analysis) {
           upperBoundPrunes: data.upperBoundPrunes,
           profileMs: data.performance?.totalMs,
           graphMs: data.performance?.graphCompileMs,
+          denseMs: data.performance?.denseBuildMs,
+          signatureMs: data.performance?.signatureMs,
+          signatureCacheHits: data.performance?.signatureCacheHits,
           heuristicMs: data.performance?.heuristicMs,
           reachabilityMs: data.performance?.reachabilityMs,
           heuristicCacheHits: data.performance?.heuristicCacheHits,
@@ -1363,6 +1366,9 @@ function runBidirectionalSolver(purpose, analysis) {
           shardAccepted: data.shardAccepted,
           profileMs: data.performance?.totalMs,
           graphMs: data.performance?.graphCompileMs,
+          denseMs: data.performance?.denseBuildMs,
+          signatureMs: data.performance?.signatureMs,
+          signatureCacheHits: data.performance?.signatureCacheHits,
           heuristicMs: data.performance?.heuristicMs,
           reachabilityMs: data.performance?.reachabilityMs,
           heuristicCacheHits: data.performance?.heuristicCacheHits,
@@ -1542,6 +1548,8 @@ function startSolver(purpose) {
           h: Number.isFinite(data.bestEstimate) ? data.bestEstimate : undefined,
           depth: data.depth, threshold: data.threshold, frontier: data.frontier,
           graphMs: data.performance?.graphCompileMs,
+          denseMs: data.performance?.denseBuildMs,
+          signatureMs: data.performance?.signatureMs,
           heuristicMs: data.performance?.heuristicMs,
           reachabilityMs: data.performance?.reachabilityMs,
         });
@@ -1558,6 +1566,9 @@ function startSolver(purpose) {
         h: Number.isFinite(data.bestEstimate) ? data.bestEstimate : undefined,
         profileMs: data.performance?.totalMs,
         graphMs: data.performance?.graphCompileMs,
+        denseMs: data.performance?.denseBuildMs,
+        signatureMs: data.performance?.signatureMs,
+        signatureCacheHits: data.performance?.signatureCacheHits,
         heuristicMs: data.performance?.heuristicMs,
         reachabilityMs: data.performance?.reachabilityMs,
       });

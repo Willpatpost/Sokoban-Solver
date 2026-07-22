@@ -22,6 +22,11 @@ index construction, heuristic, robot-reachability, cache-hit, push-generation,
 and pruning measurements. Robot flood fills and forward push generation use
 immutable integer cell IDs and typed arrays while retaining string coordinates
 at module boundaries for compatible logs, checkpoints, and replay paths.
+Canonical box layouts and robot regions use collision-free dense base-36 keys.
+Immutable box-array identities cache those keys so heuristic, deadlock,
+transposition, and diversity scoring do not repeatedly sort and stringify the
+same layout. Search telemetry includes signature calls, cache hits, generated
+characters, and construction time.
 The adjacent `{ }` control copies the complete run as newline-delimited JSON.
 Each event includes a schema version, run ID, sequence number, timestamp, elapsed
 milliseconds, solver build, level, category, message, and typed statistics.

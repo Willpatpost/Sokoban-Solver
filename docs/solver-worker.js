@@ -3,10 +3,50 @@ const DIRECTION_ENTRIES = Object.entries(DIRS);
 const OPPOSITE_DIRECTION_INDEX = [1, 0, 3, 2];
 const OPPOSITE = {Up: "Down", Down: "Up", Left: "Right", Right: "Left"};
 const MOVE_CODE = {Up: "U", Down: "D", Left: "L", Right: "R"};
-const key = (robot, boxes) => `${robot.join(",")}|${[...boxes].sort().join(";")}`;
 const pkey = (y, x) => `${y},${x}`;
-const boxSignature = (boxes) => boxes.map(box => box.join(",")).sort().join(";");
-const exactPushKey = state => `${state.robot.join(",")}|${boxSignature(state.boxes)}`;
+function boxSignatureReference(boxes) {
+  return boxes.map(box => box.join(",")).sort().join(";");
+}
+
+function boxSignature(boxes, board = null) {
+  const metrics = board?.metrics;
+  if (metrics) metrics.signatureCalls++;
+  if (board?.boxSignatureMemo.has(boxes)) {
+    metrics.signatureCacheHits++;
+    return board.boxSignatureMemo.get(boxes);
+  }
+  const started = metrics ? now() : 0;
+  let signature = null;
+  if (board) {
+    const encoded = [];
+    for (const [y, x, label] of boxes) {
+      const cell = board.dense.idByKey.get(pkey(y, x));
+      const labelId = board.dense.labelIds.get(label);
+      if (cell === undefined || labelId === undefined) {
+        encoded.length = 0;
+        break;
+      }
+      encoded.push(labelId * board.dense.keys.length + cell);
+    }
+    if (encoded.length === boxes.length) {
+      encoded.sort((left, right) => left - right);
+      signature = encoded.map(value => value.toString(36)).join(".");
+    }
+  }
+  signature ??= boxSignatureReference(boxes);
+  if (board) board.boxSignatureMemo.set(boxes, signature);
+  if (metrics) {
+    metrics.signatureMs += now() - started;
+    metrics.signatureCharacters += signature.length;
+  }
+  return signature;
+}
+
+function exactPushKey(state, board = null) {
+  const robotId = board?.dense.idByKey.get(pkey(state.robot[0], state.robot[1]));
+  const robot = robotId === undefined ? state.robot.join(",") : robotId.toString(36);
+  return `${robot}|${boxSignature(state.boxes, board)}`;
+}
 const HEURISTIC_MEMO_LIMIT = 20000;
 const DEADLOCK_MEMO_LIMIT = 10000;
 let activePerformance = null;
@@ -23,6 +63,10 @@ function createPerformanceMetrics() {
     graphEdges: 0,
     denseCells: 0,
     denseBuildMs: 0,
+    signatureCalls: 0,
+    signatureCacheHits: 0,
+    signatureCharacters: 0,
+    signatureMs: 0,
     heuristicCalls: 0,
     heuristicCacheHits: 0,
     heuristicMs: 0,
@@ -47,7 +91,7 @@ function performanceSnapshot(metrics) {
     totalMs: metrics._startedAt === null ? metrics.totalMs : now() - metrics._startedAt,
   };
   delete rounded._startedAt;
-  for (const key of ["totalMs", "parseMs", "graphCompileMs", "denseBuildMs", "heuristicMs", "pushDistanceMs", "reachabilityMs"]) {
+  for (const key of ["totalMs", "parseMs", "graphCompileMs", "denseBuildMs", "signatureMs", "heuristicMs", "pushDistanceMs", "reachabilityMs"]) {
     rounded[key] = Math.round((rounded[key] || 0) * 1000) / 1000;
   }
   return rounded;
@@ -265,17 +309,17 @@ function parse(data) {
     floor.size / Math.max(1, pushDistances.get(goal).size),
   ]));
   const topology = analyzeTopology(floor, goals);
-  const dense = compileDenseBoard(floor, metrics);
+  const dense = compileDenseBoard(floor, goals, metrics);
   const singleBoxGraph = compileSingleBoxPushGraph(floor, metrics);
   metrics.parseMs += now() - parseStarted;
   return {
     rows: data.rows, floor, walls, goals, goalsByLabel, pushDistances, goalPressure,
     topology, heuristicMemo: new Map(), playerPushDistances: new Map(),
-    deadlockMemo: new Map(), singleBoxGraph, dense, metrics,
+    deadlockMemo: new Map(), boxSignatureMemo: new WeakMap(), singleBoxGraph, dense, metrics,
   };
 }
 
-function compileDenseBoard(floor, metrics) {
+function compileDenseBoard(floor, goals, metrics) {
   const started = now();
   const keys = [...floor];
   const idByKey = new Map(keys.map((position, id) => [position, id]));
@@ -293,7 +337,9 @@ function compileDenseBoard(floor, metrics) {
   });
   metrics.denseCells = keys.length;
   metrics.denseBuildMs += now() - started;
-  return {keys, idByKey, y, x, neighbors};
+  const labelIds = new Map([...new Set(goals.values())].sort()
+    .map((label, index) => [label, index]));
+  return {keys, idByKey, y, x, neighbors, labelIds};
 }
 function reversePushDistances(floor, goalKey) {
   const [gy, gx] = goalKey.split(",").map(Number);
@@ -496,7 +542,7 @@ function playerAwarePushDistances(board, startKey) {
 function heuristic(boxes, board) {
   const metrics = board.metrics;
   metrics.heuristicCalls++;
-  const signature = boxSignature(boxes);
+  const signature = boxSignature(boxes, board);
   if (board.heuristicMemo.has(signature)) {
     metrics.heuristicCacheHits++;
     return board.heuristicMemo.get(signature);
@@ -718,10 +764,11 @@ function targetMapFromBoxes(boxes, board) {
     targets.get(label).push({distances: playerAwarePushDistances(board, pkey(y, x))});
   });
   targets.memo = new Map();
+  targets.board = board;
   return targets;
 }
 function homeHeuristic(boxes, targetsByLabel) {
-  const signature = boxSignature(boxes);
+  const signature = boxSignature(boxes, targetsByLabel.board);
   if (targetsByLabel.memo.has(signature)) return targetsByLabel.memo.get(signature);
   const byLabel = new Map();
   boxes.forEach(([y, x, label]) => {
@@ -740,7 +787,7 @@ function homeHeuristic(boxes, targetsByLabel) {
 }
 
 function targetLayoutHeuristic(boxes, targetBoxes, board, memo) {
-  const signature = boxSignature(boxes);
+  const signature = boxSignature(boxes, board);
   if (memo.has(signature)) return memo.get(signature);
   const targetsByLabel = new Map();
   targetBoxes.forEach(([y, x, label]) => {
@@ -826,7 +873,7 @@ function createsFrozenComponentDeadlock(boxes, board, movedBox) {
 }
 
 function createsDynamicDeadlock(boxes, board, movedBox) {
-  const signature = `${boxSignature(boxes)}|${movedBox.join(",")}`;
+  const signature = `${boxSignature(boxes, board)}|${movedBox.join(",")}`;
   if (board.deadlockMemo.has(signature)) return board.deadlockMemo.get(signature);
   const deadlocked = creates2x2Deadlock(boxes, board, movedBox) ||
     createsFrozenComponentDeadlock(boxes, board, movedBox);
@@ -907,7 +954,7 @@ function reachablePaths(state, board) {
   parents[start] = -1;
   const queue = new Int32Array(dense.keys.length);
   queue[0] = start;
-  let tail = 1;
+  let tail = 1, regionId = start;
   for (let head = 0; head < tail; head++) {
     const current = queue[head];
     for (let direction = 0; direction < DIRECTION_ENTRIES.length; direction++) {
@@ -916,6 +963,7 @@ function reachablePaths(state, board) {
       parents[next] = current;
       parentMoves[next] = direction;
       queue[tail++] = next;
+      regionId = Math.min(regionId, next);
     }
   }
   const pathToId = id => {
@@ -942,6 +990,8 @@ function reachablePaths(state, board) {
     },
     size: tail,
     occupied,
+    board,
+    regionId,
   };
 }
 
@@ -1045,6 +1095,9 @@ function pushBoxNeighbors(state, board, boxPosition, reachable = reachablePaths(
 }
 
 function pushKey(state, reachable) {
+  if (reachable.board && reachable.regionId !== undefined) {
+    return `${reachable.regionId.toString(36)}|${boxSignature(state.boxes, reachable.board)}`;
+  }
   let robotRegion = null;
   for (const position of reachable.keys()) {
     if (robotRegion === null || position < robotRegion) robotRegion = position;
@@ -1054,14 +1107,14 @@ function pushKey(state, reachable) {
 
 function collapseForcedPushes(first, board, limit = 32) {
   let state = {robot: first.robot, boxes: first.boxes};
-  const path = [...first.path], seen = new Set([exactPushKey(state)]);
+  const path = [...first.path], seen = new Set([exactPushKey(state, board)]);
   let pushes = 1;
   while (pushes < limit && !goal(state.boxes, board.goals)) {
     const reachable = reachablePaths(state, board);
     if (createsSealedCorralDeadlock(state, board, reachable)) return null;
     const choices = pushNeighbors(state, board, reachable);
     if (choices.length !== 1) break;
-    const next = choices[0], signature = exactPushKey(next);
+    const next = choices[0], signature = exactPushKey(next, board);
     if (seen.has(signature)) break;
     seen.add(signature);
     path.push(...next.path);
@@ -1079,7 +1132,7 @@ function expandPushMacro(next, board, enabled = true) {
 function expandPushSequences(first, board, maxPushes = 12, maxExplored = 48, maxReturned = 8) {
   const initial = {...first, pushes: 1};
   const queue = [initial], endpoints = [];
-  const seen = new Set([exactPushKey(initial)]);
+  const seen = new Set([exactPushKey(initial, board)]);
   let head = 0;
   for (; head < queue.length && queue.length < maxExplored; head++) {
     const current = queue[head];
@@ -1106,7 +1159,7 @@ function expandPushSequences(first, board, maxPushes = 12, maxExplored = 48, max
         pushedFrom: next.pushedFrom,
         pushedTo: next.pushedTo,
       };
-      const signature = exactPushKey(sequence);
+      const signature = exactPushKey(sequence, board);
       if (seen.has(signature)) continue;
       seen.add(signature);
       queue.push(sequence);
@@ -1124,7 +1177,8 @@ function expandPushSequences(first, board, maxPushes = 12, maxExplored = 48, max
     selected.push(endpoint);
     if (selected.length >= maxReturned) break;
   }
-  return [initial, ...selected.filter(endpoint => exactPushKey(endpoint) !== exactPushKey(initial))];
+  return [initial, ...selected.filter(endpoint =>
+    exactPushKey(endpoint, board) !== exactPushKey(initial, board))];
 }
 
 function expandStraightPushes(first, board, maxPushes = 8) {
@@ -1228,7 +1282,7 @@ function reverseStartPortfolio(board, initialBoxes, initialTargets = null) {
     return {
       ...entry,
       pullOptions: pulls.length,
-      pullSignatures: pulls.map(next => exactPushKey(next)),
+      pullSignatures: pulls.map(next => exactPushKey(next, board)),
       nextEstimate,
       reachableCells: entry.reachable.size,
       gateAccess,
@@ -1449,7 +1503,7 @@ function beamSearch(payload) {
             visited,
           };
         }
-        child.exactSignature = exactPushKey(child);
+        child.exactSignature = exactPushKey(child, board);
         if ((seenExactDepth.get(child.exactSignature) ?? Infinity) <= child.cost) continue;
         const estimate = heuristic(child.boxes, board);
         if (!Number.isFinite(estimate)) continue;
@@ -1786,7 +1840,7 @@ function boundedPushDepthFirstSearch(payload) {
       if (childCost > maxDepth || childCost > bound) continue;
       const estimate = heuristic(next.boxes, board);
       if (!Number.isFinite(estimate) || childCost + estimate > bound) continue;
-      const checkpointSignature = exactPushKey(next);
+      const checkpointSignature = exactPushKey(next, board);
       if (!checkpoints.has(checkpointSignature)) {
         checkpoints.set(checkpointSignature, {
           state: {
@@ -1831,7 +1885,8 @@ function boundedPushDepthFirstSearch(payload) {
       if (profile === "setup" && childCost <= 12) score = -estimate + topology - packing;
       if (profile === "room-flow") score = estimate + 6 * topology - packing;
       if (profile === "evacuation") score = estimate + 8 * evacuation + topology - packing;
-      score += (payload.diversity ?? 1.5) * signatureNoise(exactPushKey(next), seed + childCost);
+      score += (payload.diversity ?? 1.5) *
+        signatureNoise(exactPushKey(next, board), seed + childCost);
       candidates.push({next, cost: childCost, score});
     }
     candidates.sort((left, right) => left.score - right.score);
@@ -1923,7 +1978,7 @@ function pushIterativeDeepeningAStar(payload) {
     const total = cost + estimate;
     let accepted = shardAccepted;
     if (!accepted && exactShard && cost >= exactShard.depth) {
-      const bucket = Math.floor(signatureNoise(exactPushKey(state), 0) * exactShard.count);
+      const bucket = Math.floor(signatureNoise(exactPushKey(state, board), 0) * exactShard.count);
       if (bucket !== exactShard.index) {
         shardRejections++;
         return Infinity;
@@ -1999,7 +2054,8 @@ function pushIterativeDeepeningAStar(payload) {
         cost: childCost,
         total: childCost + childEstimate,
         score: orderingScore(next, childCost) +
-          (payload.diversity ?? 0.2) * signatureNoise(exactPushKey(next), seed + childCost),
+          (payload.diversity ?? 0.2) *
+            signatureNoise(exactPushKey(next, board), seed + childCost),
       });
     }
     candidates.sort((left, right) => left.total - right.total || left.score - right.score);
@@ -2247,7 +2303,7 @@ function bidirectionalSide(payload) {
     ...starts.portfolioStats,
   });
   starts.forEach(state => {
-    state.exactSignature = exactPushKey(state);
+    state.exactSignature = exactPushKey(state, board);
     const estimate = forward
       ? heuristic(state.boxes, board)
       : homeHeuristic(state.boxes, initialTargets);
@@ -2346,10 +2402,10 @@ function bidirectionalSide(payload) {
         }));
     if (!forward && current.cost === 0 && payload.reverseShard?.count > 1) {
       nextStates = nextStates.filter(next =>
-        reverseShardOwns(exactPushKey(next), payload.reverseShard));
+        reverseShardOwns(exactPushKey(next, board), payload.reverseShard));
     }
     for (const next of nextStates) {
-      next.exactSignature = exactPushKey(next);
+      next.exactSignature = exactPushKey(next, board);
       if (next.cost >= (bestCost.get(next.exactSignature) ?? Infinity)) continue;
       const estimate = forward
         ? heuristic(next.boxes, board)
@@ -2420,7 +2476,7 @@ function searchCore(payload) {
     s.cost + weight * heuristic(s.boxes, board) +
       (algorithm === "weighted-push-astar" ? 0.15 * topologyPenalty(s.boxes, board) : 0);
   if (pushMacro) {
-    initial.exactSignature = exactPushKey(initial);
+    initial.exactSignature = exactPushKey(initial, board);
     bestCost.set(initial.exactSignature, 0);
   }
   const initialScore = score(initial);
@@ -2430,7 +2486,7 @@ function searchCore(payload) {
     const current = frontier.pop()[2];
     if (pushMacro && bestCost.get(current.exactSignature) !== current.cost) continue;
     const reachable = pushMacro ? reachablePaths(current, board) : null;
-    const signature = pushMacro ? pushKey(current, reachable) : exactPushKey(current);
+    const signature = pushMacro ? pushKey(current, reachable) : exactPushKey(current, board);
     if (pushMacro) {
       if (closed.has(signature)) continue;
       closed.add(signature);
@@ -2456,7 +2512,7 @@ function searchCore(payload) {
         cost: current.cost + (pushMacro ? next.pushes : next.path.length),
         parent: signature, segment: next.path};
       if (pushMacro) {
-        child.exactSignature = exactPushKey(child);
+        child.exactSignature = exactPushKey(child, board);
         if (child.cost >= (bestCost.get(child.exactSignature) ?? Infinity)) continue;
         const childScore = score(child);
         if (!Number.isFinite(childScore)) continue;
