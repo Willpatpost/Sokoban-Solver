@@ -177,7 +177,23 @@ From the repository root:
 
 ```powershell
 node --test docs/solver-worker.test.js docs/path-validation.test.js
+node bench/benchmark.js --suite smoke
 ```
+
+## Benchmarking
+
+The repository includes a headless benchmark harness for algorithm tuning and
+AlphaEvolve-style optimization:
+
+```powershell
+node bench/benchmark.js --suite alpha --jsonl
+```
+
+Each benchmark case runs in an isolated child process, validates any returned
+solution by replaying it against the puzzle rules, and emits a single scalar
+`totalScore` plus per-case timing, visited states, pushes, estimates, checkpoints,
+and cutoff reasons. Invalid returned paths fail the benchmark instead of earning
+partial credit.
 
 ## GitHub Pages deployment
 

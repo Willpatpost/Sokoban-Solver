@@ -38,6 +38,7 @@ test("web UI exposes a separate copyable search log", () => {
   assert.match(html, /id="search-log-text"/);
   assert.match(html, /id="copy-search-log"/);
   assert.match(html, /id="copy-search-json"/);
+  assert.match(html, /levels\.js\?build=[\s\S]*app\.js\?build=/);
   assert.match(html, /director-policy\.js/);
   assert.match(app, /function appendSearchLog\(/);
   assert.match(app, /algorithm: "analyze-puzzle"/);

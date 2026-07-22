@@ -1,14 +1,4 @@
-const LEVELS = {
-  "ultra-tiny": ["OOOOO", "O R O", "O A O", "O a O", "OOOOO"],
-  tiny: ["OOOOOO", "O R  O", "O XO O", "OO A O", "OSa  O", "OOOOOO"],
-  medium: ["OOOOOOO", "Oa   bO", "O AXB O", "O XRX O", "OSCXDSO", "OcS SdO", "OOOOOOO"],
-  large: ["OOOOOOOOOO", "OOOOOOOSSO", "OOOOO  abO", "OOOOO XSSO", "OOOOOO  OO",
-    "OR     OOO", "OO A X X O", "OO BXO O O", "OO   O   O", "OOOOOOOOOO"],
-  huge: ["OOOOOOOOOOOOOOO", "OaSS   S   SSbO", "OSCS  OOO  SDSO", "OX X  OOO  X XO",
-    "O     OOO     O", "OOOO   X   OOOO", "O      O      O", "O G hOOOOOH g O",
-    "O      O      O", "OOO         OOO", "OOO   X X   OOO", "OOOOOOOROOOOOOO",
-    "O B X X X X A O", "O Sc       dS O", "OOOOOOOOOOOOOOO"],
-};
+const LEVELS = SokomindLevels.LEVELS;
 const DIRS = {Up: [-1, 0], Down: [1, 0], Left: [0, -1], Right: [0, 1]};
 const CODE_MOVE = {U: "Up", D: "Down", L: "Left", R: "Right"};
 const SOLVER_BUILD = "2026-07-20.5";
