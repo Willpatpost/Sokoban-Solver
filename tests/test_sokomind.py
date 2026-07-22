@@ -9,7 +9,12 @@ from threading import Event
 from Searches.Sokomind import (
     BUILTIN_PUZZLES,
     CONFORMANCE_PATH,
+    HEURISTIC_CACHE_SIZE,
     PuzzleError,
+    _heuristic_for_layout,
+    _minimum_assignment_cost,
+    _reachable_parents,
+    _reconstruct_walk,
     apply_move,
     a_star_search,
     get_push_neighbors,
@@ -104,6 +109,48 @@ class SokomindTests(unittest.TestCase):
         ]
         state = parse_puzzle(puzzle)
         self.assertEqual(4, state.heuristic)
+
+    def test_large_assignment_is_exact_instead_of_reusing_goal_minima(self):
+        costs = [[float("inf")] * 9 for _ in range(9)]
+        costs[0][0] = 0
+        for index in range(1, 9):
+            costs[index][0] = 0
+            costs[index][index] = index
+        self.assertEqual(36, _minimum_assignment_cost(costs))
+
+    def test_large_assignment_detects_hall_failure(self):
+        costs = [[float("inf")] * 9 for _ in range(9)]
+        costs[0][0] = 0
+        costs[1][0] = 0
+        for index in range(2, 9):
+            costs[index][index] = 0
+        self.assertEqual(float("inf"), _minimum_assignment_cost(costs))
+
+    def test_heuristic_cache_is_bounded_and_keyed_by_layout(self):
+        state = parse_puzzle(["OOOOO", "O R O", "O A O", "O a O", "OOOOO"])
+        _heuristic_for_layout.cache_clear()
+        self.assertEqual(1, state.heuristic)
+        self.assertEqual(1, state.heuristic)
+        info = _heuristic_for_layout.cache_info()
+        self.assertEqual(HEURISTIC_CACHE_SIZE, info.maxsize)
+        self.assertEqual(1, info.hits)
+        self.assertEqual(1, info.currsize)
+
+    def test_reachability_reconstructs_paths_only_when_requested(self):
+        state = parse_puzzle([
+            "OOOOOOO",
+            "O  R  O",
+            "O     O",
+            "O  X SO",
+            "OOOOOOO",
+        ])
+        parents = _reachable_parents(state)
+        self.assertEqual(["Down", "Left", "Down"], _reconstruct_walk(parents, (3, 2)))
+        self.assertIsNone(parents[state.robot_pos])
+        self.assertTrue(all(
+            record is None or isinstance(record, tuple)
+            for record in parents.values()
+        ))
 
     def test_ragged_missing_cells_are_walls(self):
         state = parse_puzzle(["OOOOO", "OR  O", "OOOO", "OaA O", "OOOOO"])

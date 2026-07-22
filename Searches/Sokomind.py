@@ -88,15 +88,6 @@ class State:
     def heuristic(self) -> float:
         return heuristic(self)
 
-    @property
-    def priority(self) -> float:
-        return self.cost + self.heuristic
-
-    def calculate_heuristic(self, algorithm: str = "astar") -> float:
-        value = self.heuristic if algorithm.lower(
-        ) in {"astar", "a*", "greedy"} else 0
-        return value if algorithm.lower() == "greedy" else self.cost + value
-
 
 def _reverse_reachable(floor: frozenset[Position], goals: Iterable[Position]) -> frozenset[Position]:
     """Cells from which a box can reach a goal on an otherwise empty board."""
@@ -238,22 +229,21 @@ def _matching_cost(
         ]
         for pos in positions
     ]
-    if rows is not None and size > 8:
-        return sum(min(row) for row in costs)
-    if rows is not None:
-        @lru_cache(maxsize=None)
-        def assign(index: int, used_mask: int) -> float:
-            if index == size:
-                return 0
-            best = math.inf
-            for goal_index, cost in enumerate(costs[index]):
-                if used_mask & (1 << goal_index) or math.isinf(cost):
-                    continue
-                best = min(best, cost + assign(index + 1, used_mask | (1 << goal_index)))
-            return best
+    return _minimum_assignment_cost(costs)
 
-        return assign(0, 0)
 
+def _minimum_assignment_cost(costs: Sequence[Sequence[float]]) -> float:
+    """Return an exact distinct assignment cost, or infinity without a perfect matching."""
+    size = len(costs)
+    if size == 0:
+        return 0
+    if any(len(row) != size for row in costs):
+        return math.inf
+    blocked = 1_000_000_000.0
+    finite_costs = [
+        [blocked if math.isinf(cost) else cost for cost in row]
+        for row in costs
+    ]
     row_potential: list[float] = [0.0] * (size + 1)
     col_potential: list[float] = [0.0] * (size + 1)
     matching: list[int] = [0] * (size + 1)
@@ -272,7 +262,7 @@ def _matching_cost(
                 if used[candidate]:
                     continue
                 reduced = (
-                    costs[matched_row - 1][candidate - 1]
+                    finite_costs[matched_row - 1][candidate - 1]
                     - row_potential[matched_row]
                     - col_potential[candidate]
                 )
@@ -297,19 +287,40 @@ def _matching_cost(
             column = previous
             if column == 0:
                 break
-    return -col_potential[0]
+    result = -col_potential[0]
+    return math.inf if result >= blocked / 2 else result
 
 
-@lru_cache(maxsize=200_000)
-def heuristic(state: State) -> float:
-    """Admissible lower bound based on optimal box-to-goal assignment."""
+HEURISTIC_CACHE_SIZE = 20_000
+
+
+@lru_cache(maxsize=HEURISTIC_CACHE_SIZE)
+def _heuristic_for_layout(
+    rows: tuple[str, ...],
+    boxes: tuple[Box, ...],
+    generic_goals: frozenset[Position],
+    dedicated_goals: tuple[tuple[str, frozenset[Position]], ...],
+) -> float:
+    """Cache the lower bound by immutable layout data without retaining State objects."""
+    goals_by_label = dict(dedicated_goals)
+    goals_by_label["X"] = generic_goals
     by_label: dict[str, list[Position]] = {}
-    for label, pos in state.boxes:
+    for label, pos in boxes:
         by_label.setdefault(label, []).append(pos)
     return sum(
         _matching_cost(tuple(sorted(positions)), tuple(
-            sorted(state.board.goals_for(label))), state.board.rows)
+            sorted(goals_by_label.get(label, ()))), rows)
         for label, positions in by_label.items()
+    )
+
+
+def heuristic(state: State) -> float:
+    """Admissible lower bound based on exact distinct box-to-goal assignment."""
+    return _heuristic_for_layout(
+        state.board.rows,
+        state.boxes,
+        state.board.generic_goals,
+        state.board.dedicated_goals,
     )
 
 
@@ -401,27 +412,49 @@ def get_neighbors(
     return neighbors
 
 
-def _reachable_paths(state: State) -> dict[Position, list[str]]:
-    """Shortest walking paths the robot can take without moving boxes."""
+ReachabilityParents = dict[Position, tuple[Position, str] | None]
+
+
+def _reachable_parents(state: State) -> ReachabilityParents:
+    """Flood fill once, storing one compact parent record per reachable cell."""
     occupied = {pos for _label, pos in state.boxes}
-    paths: dict[Position, list[str]] = {state.robot_pos: []}
+    parents: ReachabilityParents = {state.robot_pos: None}
     queue = deque([state.robot_pos])
     while queue:
         y, x = queue.popleft()
         for move, (dy, dx) in DIRECTIONS.items():
             next_pos = (y + dy, x + dx)
             if (
-                next_pos in paths
+                next_pos in parents
                 or next_pos not in state.board.floor
                 or next_pos in occupied
             ):
                 continue
-            paths[next_pos] = [*paths[(y, x)], move]
+            parents[next_pos] = ((y, x), move)
             queue.append(next_pos)
-    return paths
+    return parents
 
 
-def get_push_neighbors(state: State) -> list[tuple[State, list[str]]]:
+def _reconstruct_walk(parents: ReachabilityParents, destination: Position) -> list[str]:
+    if destination not in parents:
+        raise KeyError(destination)
+    path: list[str] = []
+    current = destination
+    while True:
+        record = parents.get(current)
+        if record is None:
+            break
+        parent, move = record
+        path.append(move)
+        current = parent
+    path.reverse()
+    return path
+
+
+def get_push_neighbors(
+    state: State,
+    reachable: ReachabilityParents | None = None,
+) -> list[tuple[State, list[str]]]:
     """Return states after one box push, including the walking path to perform it.
 
     Classic Sokoban solvers search primarily over pushes instead of every robot
@@ -429,7 +462,8 @@ def get_push_neighbors(state: State) -> list[tuple[State, list[str]]]:
     expansion while still returning a normal step-by-step move list for the GUI.
     """
     occupied = {pos: label for label, pos in state.boxes}
-    reachable = _reachable_paths(state)
+    if reachable is None:
+        reachable = _reachable_parents(state)
     neighbors: list[tuple[State, list[str]]] = []
 
     for label, box in state.boxes:
@@ -449,7 +483,7 @@ def get_push_neighbors(state: State) -> list[tuple[State, list[str]]]:
             boxes = tuple(sorted(moved))
             if creates_2x2_deadlock(boxes, state.board, box_destination):
                 continue
-            segment = [*reachable[robot_support], push_move]
+            segment = [*_reconstruct_walk(reachable, robot_support), push_move]
             neighbors.append(
                 (
                     State(
@@ -464,8 +498,12 @@ def get_push_neighbors(state: State) -> list[tuple[State, list[str]]]:
     return neighbors
 
 
-def _push_signature(state: State) -> tuple[Position, tuple[Box, ...]]:
-    reachable = _reachable_paths(state)
+def _push_signature(
+    state: State,
+    reachable: ReachabilityParents | None = None,
+) -> tuple[Position, tuple[Box, ...]]:
+    if reachable is None:
+        reachable = _reachable_parents(state)
     return min(reachable), state.boxes
 
 
@@ -553,7 +591,10 @@ def _search(
         if max_seconds is not None and time.perf_counter() - started >= max_seconds:
             return None, None, time.perf_counter() - started, len(expanded)
         current = pop()
-        current_key = _push_signature(current) if push_macro else current
+        current_reachable = _reachable_parents(current) if push_macro else None
+        current_key = (
+            _push_signature(current, current_reachable) if push_macro else current
+        )
         if current_key in expanded:
             continue
         expanded.add(current_key)
@@ -561,7 +602,7 @@ def _search(
             elapsed = time.perf_counter() - started
             return reconstruct_path(came_from, current, initial), current, elapsed, len(expanded)
 
-        children = get_push_neighbors(current) if push_macro else [
+        children = get_push_neighbors(current, current_reachable) if push_macro else [
             (neighbor, [move]) for neighbor, move in get_neighbors(current)
         ]
         if algorithm == "dfs":

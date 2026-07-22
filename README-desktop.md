@@ -72,7 +72,7 @@ Recommended algorithms:
 
 - `ultimate`: recommended mode; combines Sokoban-specific mechanics including
   push-level search, dead-square pruning, robot-reachability canonicalization,
-  label-aware goal matching, and push-distance heuristics.
+  exact distinct label-aware goal matching, and push-distance heuristics.
 - `fast` / `portfolio`: older aliases for the same recommended portfolio.
 - `push-greedy`: usually the quickest way to find a playable solution on big
   levels, though it may not be shortest.
@@ -83,6 +83,12 @@ Recommended algorithms:
 `ultimate` is bounded so the app stays responsive. If it cannot solve a very
 large board, try `push-greedy` directly or expect to add stronger
 Sokoban-specific deadlock/pattern-database logic for that level.
+
+The local solver uses exact polynomial assignment for every box count, including
+Hall-failure detection when no distinct box-to-goal matching exists. Its bounded
+layout-only heuristic cache avoids retaining complete search states, and
+push-level reachability stores compact parent directions so walking paths are
+reconstructed only for legal retained pushes.
 
 Puzzle symbols are `O` wall, `R` robot, `X` generic box, `S` generic goal,
 and spaces for floor. Other uppercase letters are dedicated boxes and their
