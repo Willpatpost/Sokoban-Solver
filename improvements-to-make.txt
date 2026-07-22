@@ -1,8 +1,8 @@
 Sokomind improvements and implementation status
 ===============================================
 
-Status reviewed against the repository after the Sprint 16 memory and worker-
-lifecycle instrumentation work.
+Status reviewed against the repository after the Sprint 17 generated multi-box
+benchmark and exact-certification work.
 
 The original item numbers and priority order are retained for traceability.
 "Done" means the stated outcome is implemented and adequately validated.
@@ -54,6 +54,23 @@ STRONG IMPLEMENTATION, WITH BOUNDED LIMITATIONS
      typed-label combinations.
    - Counterexamples are selected from the corpus but not structurally minimized.
    - Coverage must continue to be extended whenever hard rejection rules change.
+
+5. Add hidden or generated benchmark families.
+   Implemented:
+   - Generated mirror, rotation, label permutation, premature-goal, typed
+     doorway-import, exact room-packing, and corral-reopening cases.
+   - A separate procedural lane-warehouse family covers three and four boxes,
+     longer push distances, and distinct typed boxes without deriving its boards
+     from the built-in level catalog or the authored strategic seeds.
+   - An independent exact A* over canonical push states certifies every procedural
+     multi-box case with an admissible label-aware assignment bound.
+   - The replay-validated validation suite now contains 16 deterministic cases.
+   Bounded limitations:
+   - The procedural family currently uses open lane geometry rather than shared
+     bottlenecks, interacting staging capacity, or coupled packing orders.
+   - The suite remains repository-visible and deterministic, not a secret test
+     corpus; more separately maintained challenge layouts would further reduce
+     tuning against familiar cases.
 
 7. Add detailed solver performance instrumentation.
    Implemented:
@@ -126,18 +143,6 @@ STRONG IMPLEMENTATION, WITH BOUNDED LIMITATIONS
 
 PARTIALLY DELIVERED
 -------------------
-
-5. Add hidden or generated benchmark families.
-   Delivered so far:
-   - Generated mirror, rotation, label permutation, and premature-goal cases.
-   - Typed doorway-import, exact room-packing, and corral-reopening seeds expand
-     into deterministic mirrored, rotated, and typed-label variants. The current
-     validation suite contains 13 replay-validated cases.
-   Remaining:
-   - Larger exhaustively solvable multi-box benchmark families.
-   - Broader typed bottleneck and staging-capacity interactions beyond geometric
-     transformations of the current strategic seeds.
-   - Broader held-out cases that reduce tuning against known repository levels.
 
 9. Replace string-heavy hot-path state data with dense representations.
    Delivered so far:

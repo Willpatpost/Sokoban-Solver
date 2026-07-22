@@ -29,6 +29,44 @@ function guidedCase(name, rows) {
   };
 }
 
+function laneWarehouseRows(boxCount, {typed = false, pushDistance = 2} = {}) {
+  if (!Number.isInteger(boxCount) || boxCount < 2 || boxCount > 20) {
+    throw new RangeError("boxCount must be an integer between 2 and 20.");
+  }
+  if (!Number.isInteger(pushDistance) || pushDistance < 1 || pushDistance > 20) {
+    throw new RangeError("pushDistance must be an integer between 1 and 20.");
+  }
+  const boxColumn = 4;
+  const goalColumn = boxColumn + pushDistance;
+  const width = goalColumn + 3;
+  const wall = "O".repeat(width);
+  const empty = `O${" ".repeat(width - 2)}O`;
+  const rows = [wall, empty];
+  for (let index = 0; index < boxCount; index++) {
+    const row = [...empty];
+    if (index === 0) row[2] = "R";
+    const label = typed ? String.fromCharCode(65 + index) : "X";
+    row[boxColumn] = label;
+    row[goalColumn] = typed ? label.toLowerCase() : "S";
+    rows.push(row.join(""));
+  }
+  rows.push(empty, wall);
+  return rows;
+}
+
+function certifiedMultiboxCase(name, boxCount, options = {}) {
+  return {
+    name: `generated certified multibox ${name}`,
+    rows: laneWarehouseRows(boxCount, options),
+    algorithm: "push-astar",
+    timeoutMs: 15000,
+    weight: boxCount,
+    payload: {maxVisited: 200000},
+    family: "certified-multibox",
+    certification: "exact-reference",
+  };
+}
+
 function strategicVariants(name, rows, labelMapping = null) {
   const candidates = [
     ["base", rows],
@@ -68,6 +106,12 @@ const STRATEGIC_CASES = [
     "OOOOOOO",
   ]),
   ...strategicVariants("corral reopening", ["OOOOOOO", "OR X SO", "OOOOOOO"]),
+];
+
+const CERTIFIED_MULTIBOX_CASES = [
+  certifiedMultiboxCase("three lane", 3),
+  certifiedMultiboxCase("typed three lane", 3, {typed: true}),
+  certifiedMultiboxCase("four lane long push", 4, {pushDistance: 3}),
 ];
 
 const GENERATED_CASES = [
@@ -111,11 +155,14 @@ const GENERATED_CASES = [
     payload: {maxVisited: 60000},
   },
   ...STRATEGIC_CASES,
+  ...CERTIFIED_MULTIBOX_CASES,
 ];
 
 module.exports = {
+  CERTIFIED_MULTIBOX_CASES,
   GENERATED_CASES,
   STRATEGIC_CASES,
+  laneWarehouseRows,
   mirrorRows,
   permuteLabels,
   rotateRows,
