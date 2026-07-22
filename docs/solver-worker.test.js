@@ -455,6 +455,7 @@ test("prepared board seeds are clone-safe and preserve search results", () => {
   assert.notEqual(firstBoard.supportDependencyMemo, secondBoard.supportDependencyMemo);
   assert.notEqual(firstBoard.localRoomMemo, secondBoard.localRoomMemo);
   assert.notEqual(firstBoard.localCorralMemo, secondBoard.localCorralMemo);
+  assert.notEqual(firstBoard.doorwayFlowMemo, secondBoard.doorwayFlowMemo);
   assert.notEqual(firstBoard.boxSignatureMemo, secondBoard.boxSignatureMemo);
   assert.equal(firstBoard.topology, secondBoard.topology);
   const baseline = worker.search({algorithm: "push-astar", state});
@@ -510,6 +511,7 @@ test("search results expose bounded hot-path performance telemetry", () => {
   assert.ok(result.performance.supportDependencyMs >= 0);
   assert.ok(result.performance.localRoomMs >= 0);
   assert.ok(result.performance.localCorralMs >= 0);
+  assert.ok(result.performance.doorwayFlowMs >= 0);
   assert.ok(result.performance.reachabilityCalls > 0);
   assert.ok(result.performance.pushNeighborCalls > 0);
   assert.ok(result.performance.pushesRetained > 0);
@@ -554,6 +556,52 @@ test("room evacuation pressure is derived from surplus room contents", () => {
     worker.roomEvacuationPenalty(crowded, board) >
       worker.roomEvacuationPenalty(evacuated, board),
   );
+});
+
+test("typed doorway flow tracks label direction, lane geometry, and staging capacity", () => {
+  const worker = loadWorker();
+  const board = worker.parse({rows: [
+    "OOOOOOO", "O     O", "O     O", "O     O", "OOO OOO",
+    "O  a  O", "O b   O", "O     O", "OOOOOOO",
+  ]});
+  const room = board.topology.rooms.find(candidate => candidate.goals.includes("5,3"));
+  const boxes = [
+    [6, 3, "A"], [7, 4, "A"],
+    [2, 2, "B"], [2, 4, "B"],
+  ];
+  const analysis = worker.typedDoorwayFlow(boxes, board);
+  const flow = analysis.rooms.find(candidate => candidate.room === room);
+
+  assert.equal(room.gate, "3,3");
+  assert.equal(room.doorwayLanes.some(lane => lane.importPossible), true);
+  assert.equal(room.doorwayLanes.some(lane => lane.exportPossible), true);
+  assert.equal(flow.imports.get("B"), 1);
+  assert.equal(flow.exports.get("A"), 1);
+  assert.ok(flow.interiorCapacity > 0);
+  assert.ok(flow.exteriorCapacity > 0);
+  assert.ok(worker.doorwayFlowDelta(analysis, {boxes}, {
+    pushedFrom: "2,3", pushedTo: "3,3", pushClass: "B:2,3:Down",
+  }) < 0);
+  assert.ok(worker.doorwayFlowDelta(analysis, {boxes}, {
+    pushedFrom: "4,3", pushedTo: "3,3", pushClass: "A:4,3:Up",
+  }) < 0);
+  assert.ok(worker.doorwayFlowDelta(analysis, {boxes}, {
+    pushedFrom: "2,3", pushedTo: "3,3", pushClass: "A:2,3:Down",
+  }) > 0);
+
+  const stagingFull = [
+    ...boxes,
+    ...[...room.exteriorStaging].map(position => [
+      ...position.split(",").map(Number), "X",
+    ]),
+  ];
+  const fullFlow = worker.typedDoorwayFlow(stagingFull, board).rooms
+    .find(candidate => candidate.room === room);
+  assert.equal(fullFlow.exteriorCapacity, 0);
+  assert.ok(fullFlow.contradictions.includes("exterior-staging-full"));
+
+  assert.equal(worker.typedDoorwayFlow(boxes, board), analysis);
+  assert.equal(board.metrics.doorwayFlowCacheHits, 1);
 });
 
 test("puzzle analysis builds a board-derived worker plan", () => {

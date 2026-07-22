@@ -1313,12 +1313,14 @@ function runBidirectionalSolver(purpose, analysis) {
           supportDependencyMs: data.performance?.supportDependencyMs,
           localRoomMs: data.performance?.localRoomMs,
           localCorralMs: data.performance?.localCorralMs,
+          doorwayFlowMs: data.performance?.doorwayFlowMs,
           reachabilityMs: data.performance?.reachabilityMs,
           heuristicCacheHits: data.performance?.heuristicCacheHits,
           commitmentCacheHits: data.performance?.commitmentCacheHits,
           supportDependencyCacheHits: data.performance?.supportDependencyCacheHits,
           localRoomCacheHits: data.performance?.localRoomCacheHits,
           localCorralCacheHits: data.performance?.localCorralCacheHits,
+          doorwayFlowCacheHits: data.performance?.doorwayFlowCacheHits,
           pushDistanceCacheHits: data.performance?.pushDistanceCacheHits,
           corralPrunes: data.corralPrunes,
           cyclePrunes: data.cyclePrunes,
@@ -1385,12 +1387,14 @@ function runBidirectionalSolver(purpose, analysis) {
           supportDependencyMs: data.performance?.supportDependencyMs,
           localRoomMs: data.performance?.localRoomMs,
           localCorralMs: data.performance?.localCorralMs,
+          doorwayFlowMs: data.performance?.doorwayFlowMs,
           reachabilityMs: data.performance?.reachabilityMs,
           heuristicCacheHits: data.performance?.heuristicCacheHits,
           commitmentCacheHits: data.performance?.commitmentCacheHits,
           supportDependencyCacheHits: data.performance?.supportDependencyCacheHits,
           localRoomCacheHits: data.performance?.localRoomCacheHits,
           localCorralCacheHits: data.performance?.localCorralCacheHits,
+          doorwayFlowCacheHits: data.performance?.doorwayFlowCacheHits,
           pushDistanceCacheHits: data.performance?.pushDistanceCacheHits,
           reason: data.terminationReason || (data.path ? "solution" : data.cutoff ? "budget" : "exhausted"),
         });
@@ -1576,6 +1580,7 @@ function startSolver(purpose) {
           supportDependencyMs: data.performance?.supportDependencyMs,
           localRoomMs: data.performance?.localRoomMs,
           localCorralMs: data.performance?.localCorralMs,
+          doorwayFlowMs: data.performance?.doorwayFlowMs,
           reachabilityMs: data.performance?.reachabilityMs,
         });
         setStatus(`${active.size} worker${active.size === 1 ? "" : "s"} searching... ${plan.label}: ${data.visited.toLocaleString()} states`);
@@ -1600,6 +1605,7 @@ function startSolver(purpose) {
         supportDependencyMs: data.performance?.supportDependencyMs,
         localRoomMs: data.performance?.localRoomMs,
         localCorralMs: data.performance?.localCorralMs,
+        doorwayFlowMs: data.performance?.doorwayFlowMs,
         reachabilityMs: data.performance?.reachabilityMs,
       });
       if (data.path) {

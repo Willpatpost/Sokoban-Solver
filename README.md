@@ -8,7 +8,8 @@ reachability canonicalization, exact distinct goal assignment, and push-distance
 heuristics. Its web search distinguishes temporary, conditional, and provably
 packed goal placements before applying packing rewards, and orders strategic
 pushes using dynamic robot support-square dependencies and cached exact searches
-of small rooms and corrals.
+of small rooms and corrals. Typed doorway-flow analysis also tracks required room
+imports, exports, lane direction, and staging capacity.
 
 - [Desktop application setup and usage](README-desktop.md)
 - [Web application documentation](docs/README.md)

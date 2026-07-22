@@ -19,7 +19,7 @@ worker supplies it. The on-screen field renders the newest 1,500 entries, while
 Copy preserves the complete in-memory log for long-run analysis.
 Direct-search completions also report compiled-graph construction, dense-board
 index construction, heuristic, robot-reachability, cache-hit, push-generation,
-goal-commitment, support-dependency, local-room/corral, and pruning measurements. Robot flood fills and forward push generation use
+goal-commitment, support-dependency, local-room/corral, typed doorway-flow, and pruning measurements. Robot flood fills and forward push generation use
 immutable integer cell IDs and typed arrays while retaining string coordinates
 at module boundaries for compatible logs, checkpoints, and replay paths.
 Canonical box layouts and robot regions use collision-free dense base-36 keys.
@@ -152,6 +152,15 @@ resolve the enclosed goals. Completed local searches expose their optimal first 
 to beam, discrepancy, and IDA* ordering. Exhausted, oversized, inaccessible, and
 budget-cutoff abstractions are reported but never used as global hard-pruning proofs;
 corral-opening hints also receive lower confidence than complete room-packing hints.
+
+One-entrance room topology now compiles doorway lanes and nearby interior/exterior
+staging sets. A cached typed-flow analysis compares each room's current labels with
+its target labels, records required imports and exports, checks whether the geometry
+supports each direction, measures open staging capacity and dynamically ready lanes,
+and reports blocked gates or capacity contradictions. Push ordering favors the right
+label moving through the gate in the required direction and discourages consuming
+needed staging cells. These constraints remain diagnostic ordering pressure rather
+than hard pruning.
 
 Small searches remain exhaustive. Complex boards use explicit state and cache
 budgets. After the bounded heuristic portfolio finishes, persistent push-IDA*

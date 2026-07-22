@@ -53,6 +53,7 @@ const COMMITMENT_MEMO_LIMIT = 10000;
 const SUPPORT_DEPENDENCY_MEMO_LIMIT = 10000;
 const LOCAL_ROOM_MEMO_LIMIT = 5000;
 const LOCAL_CORRAL_MEMO_LIMIT = 5000;
+const DOORWAY_FLOW_MEMO_LIMIT = 10000;
 const GOAL_COMMITMENT = Object.freeze({
   TEMPORARY: "temporary",
   CONDITIONAL: "conditional",
@@ -97,6 +98,9 @@ function createPerformanceMetrics() {
     localCorralCacheHits: 0,
     localCorralStates: 0,
     localCorralMs: 0,
+    doorwayFlowCalls: 0,
+    doorwayFlowCacheHits: 0,
+    doorwayFlowMs: 0,
     assignmentCalls: 0,
     pushDistanceCalls: 0,
     pushDistanceCacheHits: 0,
@@ -118,7 +122,7 @@ function performanceSnapshot(metrics) {
     totalMs: metrics._startedAt === null ? metrics.totalMs : now() - metrics._startedAt,
   };
   delete rounded._startedAt;
-  for (const key of ["totalMs", "parseMs", "graphCompileMs", "denseBuildMs", "signatureMs", "heuristicMs", "commitmentMs", "supportDependencyMs", "localRoomMs", "localCorralMs", "pushDistanceMs", "reachabilityMs"]) {
+  for (const key of ["totalMs", "parseMs", "graphCompileMs", "denseBuildMs", "signatureMs", "heuristicMs", "commitmentMs", "supportDependencyMs", "localRoomMs", "localCorralMs", "doorwayFlowMs", "pushDistanceMs", "reachabilityMs"]) {
     rounded[key] = Math.round((rounded[key] || 0) * 1000) / 1000;
   }
   return rounded;
@@ -304,7 +308,40 @@ function analyzeTopology(floor, goals) {
           approachQueue.push(next);
         }
       }
-      candidates.push({gate, cells, goals: roomGoals, depths, traffic, dependencies, approach});
+      const [gateY, gateX] = gate.split(",").map(Number);
+      const doorwayLanes = floorNeighbors(gate, floor)
+        .filter(inside => cells.has(inside))
+        .map(inside => {
+          const [insideY, insideX] = inside.split(",").map(Number);
+          const dy = insideY - gateY, dx = insideX - gateX;
+          const outside = pkey(gateY - dy, gateX - dx);
+          const importSupport = pkey(gateY - 2 * dy, gateX - 2 * dx);
+          const exportSupport = pkey(gateY + 2 * dy, gateX + 2 * dx);
+          return {
+            inside,
+            outside,
+            importSupport,
+            exportSupport,
+            importPossible: floor.has(outside) && floor.has(importSupport),
+            exportPossible: floor.has(outside) && floor.has(exportSupport),
+          };
+        });
+      const interiorStaging = new Set([...cells].filter(cell => (depths.get(cell) || 0) <= 2));
+      const exteriorStaging = new Set([...approach]
+        .filter(([, distance]) => distance <= 2)
+        .map(([position]) => position));
+      candidates.push({
+        gate,
+        cells,
+        goals: roomGoals,
+        depths,
+        traffic,
+        dependencies,
+        approach,
+        doorwayLanes,
+        interiorStaging,
+        exteriorStaging,
+      });
     }
   }
   candidates.sort((left, right) => right.cells.size - left.cells.size);
@@ -316,7 +353,7 @@ function analyzeTopology(floor, goals) {
   return {articulations, rooms, tunnels};
 }
 
-const PREPARED_BOARD_SCHEMA = 1;
+const PREPARED_BOARD_SCHEMA = 2;
 const boardContentKey = rows => rows.join("\n");
 
 function createPreparedBoardSeed(board) {
@@ -369,6 +406,7 @@ function hydratePreparedBoard(data, seed, metrics) {
     supportDependencyMemo: new Map(),
     localRoomMemo: new Map(),
     localCorralMemo: new Map(),
+    doorwayFlowMemo: new Map(),
     boxSignatureMemo: new WeakMap(),
     metrics,
   };
@@ -453,6 +491,7 @@ function parse(data) {
     supportDependencyMemo: new Map(),
     localRoomMemo: new Map(),
     localCorralMemo: new Map(),
+    doorwayFlowMemo: new Map(),
     boxSignatureMemo: new WeakMap(),
     singleBoxGraph, dense, metrics,
   };
@@ -774,6 +813,104 @@ function roomEvacuationPenalty(boxes, board) {
     }
   }
   return penalty;
+}
+
+function typedDoorwayFlow(boxes, board) {
+  const metrics = board.metrics;
+  metrics.doorwayFlowCalls++;
+  const signature = boxSignature(boxes, board);
+  if (board.doorwayFlowMemo.has(signature)) {
+    metrics.doorwayFlowCacheHits++;
+    return board.doorwayFlowMemo.get(signature);
+  }
+  const started = now();
+  const occupied = new Map(boxes.map(([y, x, label]) => [pkey(y, x), label]));
+  let penalty = 0;
+  const rooms = board.topology.rooms.map((room, index) => {
+    const current = new Map(), target = new Map();
+    boxes.forEach(([y, x, label]) => {
+      if (room.cells.has(pkey(y, x))) current.set(label, (current.get(label) || 0) + 1);
+    });
+    room.goals.forEach(goal => {
+      const label = board.goals.get(goal);
+      target.set(label, (target.get(label) || 0) + 1);
+    });
+    const imports = new Map(), exports = new Map();
+    for (const label of new Set([...current.keys(), ...target.keys()])) {
+      const difference = (target.get(label) || 0) - (current.get(label) || 0);
+      if (difference > 0) imports.set(label, difference);
+      if (difference < 0) exports.set(label, -difference);
+    }
+    const importTotal = [...imports.values()].reduce((sum, count) => sum + count, 0);
+    const exportTotal = [...exports.values()].reduce((sum, count) => sum + count, 0);
+    const interiorCapacity = [...room.interiorStaging].filter(cell => !occupied.has(cell)).length;
+    const exteriorCapacity = [...room.exteriorStaging].filter(cell => !occupied.has(cell)).length;
+    const importLanes = room.doorwayLanes.filter(lane => lane.importPossible);
+    const exportLanes = room.doorwayLanes.filter(lane => lane.exportPossible);
+    const readyImportLanes = importLanes.filter(lane =>
+      !occupied.has(room.gate) && !occupied.has(lane.inside) && !occupied.has(lane.importSupport));
+    const readyExportLanes = exportLanes.filter(lane =>
+      !occupied.has(room.gate) && !occupied.has(lane.outside) && !occupied.has(lane.exportSupport));
+    const contradictions = [];
+    if (importTotal && !importLanes.length) contradictions.push("no-import-lane");
+    if (exportTotal && !exportLanes.length) contradictions.push("no-export-lane");
+    if (importTotal && !exteriorCapacity) contradictions.push("exterior-staging-full");
+    if (exportTotal && !interiorCapacity) contradictions.push("interior-staging-full");
+    const gateLabel = occupied.get(room.gate) || null;
+    const crossings = importTotal + exportTotal;
+    const roomPenalty = crossings +
+      (gateLabel && crossings ? 2 * crossings : 0) +
+      (importTotal && !readyImportLanes.length ? 2 : 0) +
+      (exportTotal && !readyExportLanes.length ? 2 : 0) +
+      2 * contradictions.length;
+    penalty += roomPenalty;
+    return {
+      index,
+      room,
+      imports,
+      exports,
+      importTotal,
+      exportTotal,
+      interiorCapacity,
+      exteriorCapacity,
+      readyImportLanes: readyImportLanes.length,
+      readyExportLanes: readyExportLanes.length,
+      gateLabel,
+      contradictions,
+      penalty: roomPenalty,
+    };
+  });
+  const result = {rooms, penalty};
+  metrics.doorwayFlowMs += now() - started;
+  return memoizeBounded(board.doorwayFlowMemo, signature, result, DOORWAY_FLOW_MEMO_LIMIT);
+}
+
+function doorwayFlowDelta(analysis, state, next) {
+  const from = next.pushedFrom, to = next.pushedTo;
+  const label = state.boxes.find(([y, x]) => pkey(y, x) === from)?.[2] ||
+    next.pushClass?.split(":")[0];
+  let delta = 0;
+  for (const flow of analysis.rooms) {
+    const {room} = flow;
+    const fromInside = room.cells.has(from), toInside = room.cells.has(to);
+    let direction = null;
+    if ((to === room.gate && !fromInside) || (from === room.gate && toInside)) {
+      direction = "import";
+    } else if ((to === room.gate && fromInside) || (from === room.gate && !toInside)) {
+      direction = "export";
+    }
+    if (direction === "import") delta += flow.imports.has(label) ? -1.5 : 1.5;
+    if (direction === "export") delta += flow.exports.has(label) ? -1.5 : 1.5;
+    if (flow.importTotal) {
+      if (room.exteriorStaging.has(to)) delta += 0.25;
+      if (room.exteriorStaging.has(from) && flow.imports.has(label)) delta -= 0.25;
+    }
+    if (flow.exportTotal) {
+      if (room.interiorStaging.has(to)) delta += 0.25;
+      if (room.interiorStaging.has(from) && flow.exports.has(label)) delta -= 0.25;
+    }
+  }
+  return delta;
 }
 
 function roomFlowSignature(boxes, board) {
@@ -2044,6 +2181,7 @@ function beamSearch(payload) {
   const evacuationWeight = payload.evacuationWeight ?? 0;
   const supportDependencyWeight = payload.supportDependencyWeight ?? 0.8;
   const localRoomWeight = payload.localRoomWeight ?? 0.6;
+  const doorwayFlowWeight = payload.doorwayFlowWeight ?? 0.35;
   const beamProfile = payload.beamProfile || "balanced";
   const seed = payload.seed || 0;
   const transpositionLimit = payload.transpositionLimit || Math.max(12000, width * 60);
@@ -2089,6 +2227,7 @@ function beamSearch(payload) {
         ...exactLocalRoomAnalyses(current, board, current.reachable),
         ...exactLocalCorralAnalyses(current, board, current.reachable),
       ];
+      const doorwayBefore = typedDoorwayFlow(current.boxes, board);
       for (const rawNext of pushNeighbors(current, board, current.reachable)) {
         const expansions = payload.straightMacros
           ? expandStraightPushes(rawNext, board, payload.straightMacroLimit || 8)
@@ -2124,6 +2263,8 @@ function beamSearch(payload) {
         const packing = goalPackingBonus(child.boxes, board);
         const dependencyDelta = supportDependencyDelta(dependencyGraph, next);
         const localRoomDelta = localRoomOrderingDelta(localRooms, next);
+        const doorway = typedDoorwayFlow(child.boxes, board);
+        const doorwayDelta = doorwayFlowDelta(doorwayBefore, current, next);
         const evacuation = evacuationWeight
           ? roomEvacuationPenalty(child.boxes, board)
           : 0;
@@ -2142,11 +2283,13 @@ function beamSearch(payload) {
           goalPackingWeight * packing +
           supportDependencyWeight * dependencyDelta +
           localRoomWeight * localRoomDelta +
+          doorwayFlowWeight * (0.2 * doorway.penalty + doorwayDelta) +
           diversity * signatureNoise(child.exactSignature, seed);
         const exploreScore = topologyWeight * topology + evacuationWeight * evacuation -
           goalPackingWeight * packing +
           supportDependencyWeight * dependencyDelta +
           localRoomWeight * localRoomDelta +
+          doorwayFlowWeight * (0.2 * doorway.penalty + doorwayDelta) +
           diversity * signatureNoise(child.exactSignature, seed + 7919);
         const existing = candidates.get(child.exactSignature);
         if (!existing || score < existing.score) {
@@ -2158,6 +2301,8 @@ function beamSearch(payload) {
             evacuation,
             dependencyDelta,
             localRoomDelta,
+            doorway: doorway.penalty,
+            doorwayDelta,
             score,
             exploreScore,
             pushClass: next.pushClass,
@@ -2455,6 +2600,7 @@ function boundedPushDepthFirstSearch(payload) {
       ...exactLocalRoomAnalyses(state, board, reachable),
       ...exactLocalCorralAnalyses(state, board, reachable),
     ];
+    const doorwayBefore = typedDoorwayFlow(state.boxes, board);
     const candidates = [];
     for (const rawNext of pushNeighbors(state, board, reachable)) {
       const next = expandPushMacro(rawNext, board, payload.forcedMacros !== false);
@@ -2505,6 +2651,8 @@ function boundedPushDepthFirstSearch(payload) {
       const packing = goalPackingBonus(next.boxes, board);
       const dependencyDelta = supportDependencyDelta(dependencyGraph, next);
       const localRoomDelta = localRoomOrderingDelta(localRooms, next);
+      const doorway = typedDoorwayFlow(next.boxes, board);
+      const doorwayDelta = doorwayFlowDelta(doorwayBefore, state, next);
       let score = 2.5 * estimate + topology - 0.8 * packing;
       if (profile === "detour") score = 1.5 * estimate + 1.4 * topology - packing;
       if (profile === "setup" && childCost <= 12) score = -estimate + topology - packing;
@@ -2512,6 +2660,8 @@ function boundedPushDepthFirstSearch(payload) {
       if (profile === "evacuation") score = estimate + 8 * evacuation + topology - packing;
       score += (payload.supportDependencyWeight ?? 0.8) * dependencyDelta;
       score += (payload.localRoomWeight ?? 0.6) * localRoomDelta;
+      score += (payload.doorwayFlowWeight ?? 0.35) *
+        (0.2 * doorway.penalty + doorwayDelta);
       score += (payload.diversity ?? 1.5) *
         signatureNoise(exactPushKey(next, board), seed + childCost);
       candidates.push({next, cost: childCost, score});
@@ -2661,6 +2811,7 @@ function pushIterativeDeepeningAStar(payload) {
       ...exactLocalRoomAnalyses(state, board, reachable),
       ...exactLocalCorralAnalyses(state, board, reachable),
     ];
+    const doorwayBefore = typedDoorwayFlow(state.boxes, board);
     let nextThreshold = Infinity;
     const candidates = [];
     for (const rawNext of pushNeighbors(state, board, reachable)) {
@@ -2689,6 +2840,10 @@ function pushIterativeDeepeningAStar(payload) {
           (payload.supportDependencyWeight ?? 0.5) *
             supportDependencyDelta(dependencyGraph, next) +
           (payload.localRoomWeight ?? 0.4) * localRoomOrderingDelta(localRooms, next) +
+          (payload.doorwayFlowWeight ?? 0.25) * (
+            0.2 * typedDoorwayFlow(next.boxes, board).penalty +
+            doorwayFlowDelta(doorwayBefore, state, next)
+          ) +
           (payload.diversity ?? 0.2) *
             signatureNoise(exactPushKey(next, board), seed + childCost),
       });
