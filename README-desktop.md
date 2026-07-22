@@ -73,8 +73,9 @@ Recommended algorithms:
 
 - `ultimate`: recommended mode; combines Sokoban-specific mechanics including
   a bounded push-beam opening, forced-push macros, dead-square pruning,
-  robot-reachability canonicalization, exact distinct label-aware goal matching,
-  and push-distance heuristics.
+  2x2 and mutually frozen box-group detection, robot-reachability
+  canonicalization, exact distinct label-aware goal matching, and push-distance
+  heuristics.
 - `fast` / `portfolio`: older aliases for the same recommended portfolio.
 - `push-greedy`: usually the quickest way to find a playable solution on big
   levels, though it may not be shortest.
@@ -95,6 +96,10 @@ push-level reachability stores compact parent directions so walking paths are
 reconstructed only for legal retained pushes. Globally forced push chains are
 collapsed into one search edge while retaining every walking and pushing move
 needed for GUI replay.
+Multi-box pruning also rejects adjacent unfinished box components only when no
+member has both a free destination and free support square in any direction.
+This conservative rule is checked against every solvable transition in the
+generated 2x3 two-box test corpus before being used by local searches.
 
 Puzzle symbols are `O` wall, `R` robot, `X` generic box, `S` generic goal,
 and spaces for floor. Other uppercase letters are dedicated boxes and their

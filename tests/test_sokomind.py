@@ -2,7 +2,9 @@ import io
 import json
 import tempfile
 import unittest
+from collections import deque
 from contextlib import redirect_stdout
+from itertools import combinations
 from pathlib import Path
 from threading import Event
 
@@ -18,6 +20,7 @@ from Searches.Sokomind import (
     apply_move,
     a_star_search,
     collapse_forced_pushes,
+    creates_frozen_component_deadlock,
     get_push_neighbors,
     get_neighbors,
     main,
@@ -212,6 +215,101 @@ class SokomindTests(unittest.TestCase):
         ])
         moves = [move for _, move in get_neighbors(state)]
         self.assertNotIn("Right", moves)
+
+    def test_frozen_components_reject_only_immovable_unfinished_groups(self):
+        frozen = parse_puzzle(["OOOOOOOOO", "ORXXXSSSO", "OOOOOOOOO"])
+        self.assertTrue(creates_frozen_component_deadlock(
+            frozen.boxes, frozen.board, (1, 3),
+        ))
+
+        movable = parse_puzzle([
+            "OOOOOOOOO", "O       O", "O XXXSSSO", "OR      O", "OOOOOOOOO",
+        ])
+        self.assertFalse(creates_frozen_component_deadlock(
+            movable.boxes, movable.board, (2, 3),
+        ))
+
+    def test_frozen_component_pruning_preserves_exhaustively_solvable_tiny_pushes(self):
+        interior = [(y, x) for y in (1, 2) for x in (1, 2, 3)]
+        solvable_layouts = 0
+        checked_pushes = 0
+        checked_adjacent_groups = 0
+        for goal_indexes in combinations(range(len(interior)), 2):
+            remaining = [index for index in range(len(interior))
+                         if index not in goal_indexes]
+            for box_indexes in combinations(remaining, 2):
+                robot_indexes = [index for index in remaining if index not in box_indexes]
+                for robot_index in robot_indexes:
+                    rows = [list("OOOOO") for _ in range(4)]
+                    for y, x in interior:
+                        rows[y][x] = " "
+                    for index in goal_indexes:
+                        y, x = interior[index]
+                        rows[y][x] = "S"
+                    for index in box_indexes:
+                        y, x = interior[index]
+                        rows[y][x] = "X"
+                    robot_y, robot_x = interior[robot_index]
+                    rows[robot_y][robot_x] = "R"
+                    initial = parse_puzzle(["".join(row) for row in rows])
+
+                    states = {initial}
+                    edges: dict[object, list[object]] = {}
+                    reverse: dict[object, set[object]] = {}
+                    queue = deque([initial])
+                    while queue:
+                        parent = queue.popleft()
+                        children = [child for child, _move in get_neighbors(
+                            parent, prune_deadlocks=False,
+                        )]
+                        edges[parent] = children
+                        for child in children:
+                            reverse.setdefault(child, set()).add(parent)
+                            if child in states:
+                                continue
+                            states.add(child)
+                            queue.append(child)
+
+                    solvable = {state for state in states if state.is_goal()}
+                    solved_queue = deque(solvable)
+                    while solved_queue:
+                        child = solved_queue.popleft()
+                        for parent in reverse.get(child, set()):
+                            if parent in solvable:
+                                continue
+                            solvable.add(parent)
+                            solved_queue.append(parent)
+                    if not solvable:
+                        continue
+                    solvable_layouts += 1
+
+                    for parent in solvable:
+                        retained = {
+                            (child.robot_pos, child.boxes)
+                            for child, _move in get_neighbors(parent)
+                        }
+                        for child in edges.get(parent, []):
+                            if child not in solvable or child.boxes == parent.boxes:
+                                continue
+                            moved = next(
+                                pos for label, pos in child.boxes
+                                if (label, pos) not in parent.boxes
+                            )
+                            checked_pushes += 1
+                            if any(
+                                pos != moved and
+                                abs(pos[0] - moved[0]) + abs(pos[1] - moved[1]) == 1
+                                for _label, pos in child.boxes
+                            ):
+                                checked_adjacent_groups += 1
+                            self.assertFalse(creates_frozen_component_deadlock(
+                                child.boxes, child.board, moved,
+                            ))
+                            self.assertIn((child.robot_pos, child.boxes), retained)
+
+        self.assertGreater(solvable_layouts, 0)
+        self.assertGreater(checked_pushes, 0)
+        self.assertGreater(checked_adjacent_groups, 0)
 
     def test_apply_move_and_render_preserve_goals(self):
         state = parse_puzzle(["OOOOO", "O R O", "O A O", "O a O", "OOOOO"])

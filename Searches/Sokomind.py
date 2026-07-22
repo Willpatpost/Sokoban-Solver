@@ -371,6 +371,56 @@ def creates_2x2_deadlock(
     return False
 
 
+def creates_frozen_component_deadlock(
+    boxes: Iterable[Box],
+    board: Board,
+    moved_box: Position,
+) -> bool:
+    """Detect an adjacent box group with no geometrically possible member push.
+
+    Robot reachability is deliberately ignored: requiring both the destination
+    and support cells to be free makes this a conservative hard-pruning rule.
+    """
+    occupied = {pos: label for label, pos in boxes}
+    if moved_box not in occupied:
+        return False
+    component = {moved_box}
+    queue = deque([moved_box])
+    while queue:
+        y, x = queue.popleft()
+        for dy, dx in DIRECTIONS.values():
+            adjacent = (y + dy, x + dx)
+            if adjacent not in occupied or adjacent in component:
+                continue
+            component.add(adjacent)
+            queue.append(adjacent)
+
+    for y, x in component:
+        for dy, dx in DIRECTIONS.values():
+            destination = (y + dy, x + dx)
+            support = (y - dy, x - dx)
+            if (
+                destination in board.floor
+                and support in board.floor
+                and destination not in occupied
+                and support not in occupied
+            ):
+                return False
+    return any(pos not in board.goals_for(occupied[pos]) for pos in component)
+
+
+def creates_dynamic_deadlock(
+    boxes: Iterable[Box],
+    board: Board,
+    moved_box: Position,
+) -> bool:
+    """Combine the currently proven local multi-box deadlock rules."""
+    frozen_boxes = tuple(boxes)
+    return creates_2x2_deadlock(frozen_boxes, board, moved_box) or (
+        creates_frozen_component_deadlock(frozen_boxes, board, moved_box)
+    )
+
+
 def get_neighbors(
     state: State,
     algorithm: str = "astar",
@@ -403,7 +453,7 @@ def get_neighbors(
             moved.remove((label, destination))
             moved.append((label, box_destination))
             boxes = tuple(sorted(moved))
-            if prune_deadlocks and creates_2x2_deadlock(
+            if prune_deadlocks and creates_dynamic_deadlock(
                 boxes, state.board, box_destination
             ):
                 continue
@@ -481,7 +531,7 @@ def get_push_neighbors(
             moved.remove((label, box))
             moved.append((label, box_destination))
             boxes = tuple(sorted(moved))
-            if creates_2x2_deadlock(boxes, state.board, box_destination):
+            if creates_dynamic_deadlock(boxes, state.board, box_destination):
                 continue
             segment = [*_reconstruct_walk(reachable, robot_support), push_move]
             neighbors.append(
