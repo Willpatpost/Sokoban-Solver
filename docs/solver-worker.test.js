@@ -291,6 +291,38 @@ test("dense board reachability preserves reference regions and exact walking pat
   }
 });
 
+test("dynamic support dependencies identify blocker routes and enabling pushes", () => {
+  const worker = loadWorker();
+  const parsed = stateFromRows([
+    "OOOOOOO", "O  S  O", "O  X  O", "O  X  O", "OR S  O", "OOOOOOO",
+  ]);
+  const board = worker.parse(parsed);
+  const state = {
+    robot: parsed.robot,
+    boxes: parsed.boxes.map(([position, label]) => [
+      ...position.split(",").map(Number), label,
+    ]),
+  };
+  const reachable = worker.reachablePaths(state, board);
+  const graph = worker.supportDependencyGraph(state, board, reachable);
+  const upperBox = graph.nodes.find(node => node.box === "2,3");
+
+  assert.equal(upperBox.available, false);
+  assert.equal(upperBox.options[0].support, "3,3");
+  assert.deepEqual(Array.from(upperBox.options[0].blockers), ["3,3"]);
+  assert.ok(graph.prerequisiteDemand.get("3,3") > 0);
+  assert.ok(worker.supportDependencyDelta(
+    graph, {pushedFrom: "3,3", pushedTo: "3,4"},
+  ) < 0);
+  assert.ok(worker.supportDependencyDelta(
+    graph, {pushedFrom: "4,4", pushedTo: "3,3"},
+  ) > 0);
+
+  const cached = worker.supportDependencyGraph(state, board, reachable);
+  assert.equal(cached, graph);
+  assert.equal(board.metrics.supportDependencyCacheHits, 1);
+});
+
 test("compact box signatures are permutation-invariant and collision-free on a small board", () => {
   const worker = loadWorker();
   const board = worker.parse(stateFromRows([
@@ -342,6 +374,7 @@ test("prepared board seeds are clone-safe and preserve search results", () => {
   const secondBoard = worker.parse({...state, preparedBoard});
   assert.notEqual(firstBoard.heuristicMemo, secondBoard.heuristicMemo);
   assert.notEqual(firstBoard.deadlockMemo, secondBoard.deadlockMemo);
+  assert.notEqual(firstBoard.supportDependencyMemo, secondBoard.supportDependencyMemo);
   assert.notEqual(firstBoard.boxSignatureMemo, secondBoard.boxSignatureMemo);
   assert.equal(firstBoard.topology, secondBoard.topology);
   const baseline = worker.search({algorithm: "push-astar", state});
@@ -393,6 +426,8 @@ test("search results expose bounded hot-path performance telemetry", () => {
   assert.ok(result.performance.signatureMs >= 0);
   assert.equal(result.performance.preparedBoardReuses, 0);
   assert.ok(result.performance.heuristicCalls > 0);
+  assert.ok(result.performance.supportDependencyCalls > 0);
+  assert.ok(result.performance.supportDependencyMs >= 0);
   assert.ok(result.performance.reachabilityCalls > 0);
   assert.ok(result.performance.pushNeighborCalls > 0);
   assert.ok(result.performance.pushesRetained > 0);

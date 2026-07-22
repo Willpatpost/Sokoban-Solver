@@ -50,6 +50,7 @@ function exactPushKey(state, board = null) {
 const HEURISTIC_MEMO_LIMIT = 20000;
 const DEADLOCK_MEMO_LIMIT = 10000;
 const COMMITMENT_MEMO_LIMIT = 10000;
+const SUPPORT_DEPENDENCY_MEMO_LIMIT = 10000;
 const GOAL_COMMITMENT = Object.freeze({
   TEMPORARY: "temporary",
   CONDITIONAL: "conditional",
@@ -81,6 +82,11 @@ function createPerformanceMetrics() {
     commitmentCalls: 0,
     commitmentCacheHits: 0,
     commitmentMs: 0,
+    supportDependencyCalls: 0,
+    supportDependencyCacheHits: 0,
+    supportDependencyOptions: 0,
+    supportDependencyBlockers: 0,
+    supportDependencyMs: 0,
     assignmentCalls: 0,
     pushDistanceCalls: 0,
     pushDistanceCacheHits: 0,
@@ -102,7 +108,7 @@ function performanceSnapshot(metrics) {
     totalMs: metrics._startedAt === null ? metrics.totalMs : now() - metrics._startedAt,
   };
   delete rounded._startedAt;
-  for (const key of ["totalMs", "parseMs", "graphCompileMs", "denseBuildMs", "signatureMs", "heuristicMs", "commitmentMs", "pushDistanceMs", "reachabilityMs"]) {
+  for (const key of ["totalMs", "parseMs", "graphCompileMs", "denseBuildMs", "signatureMs", "heuristicMs", "commitmentMs", "supportDependencyMs", "pushDistanceMs", "reachabilityMs"]) {
     rounded[key] = Math.round((rounded[key] || 0) * 1000) / 1000;
   }
   return rounded;
@@ -350,6 +356,7 @@ function hydratePreparedBoard(data, seed, metrics) {
     deadlockMemo: new Map(),
     commitmentMemo: new Map(),
     commitmentPushDistances: new Map(),
+    supportDependencyMemo: new Map(),
     boxSignatureMemo: new WeakMap(),
     metrics,
   };
@@ -431,6 +438,7 @@ function parse(data) {
     rows: data.rows, floor, walls, goals, goalsByLabel, pushDistances, goalPressure,
     topology, heuristicMemo: new Map(), playerPushDistances: new Map(),
     deadlockMemo: new Map(), commitmentMemo: new Map(), commitmentPushDistances: new Map(),
+    supportDependencyMemo: new Map(),
     boxSignatureMemo: new WeakMap(),
     singleBoxGraph, dense, metrics,
   };
@@ -1208,6 +1216,126 @@ function reachablePaths(state, board) {
   };
 }
 
+function minimumBlockerRoutes(reachable, board) {
+  const {dense} = board, size = dense.keys.length;
+  const distances = new Int16Array(size), parents = new Int32Array(size);
+  const settled = new Uint8Array(size);
+  distances.fill(32767);
+  parents.fill(-1);
+  for (const position of reachable.keys()) distances[dense.idByKey.get(position)] = 0;
+  for (let count = 0; count < size; count++) {
+    let current = -1, best = 32767;
+    for (let id = 0; id < size; id++) {
+      if (!settled[id] && distances[id] < best) {
+        current = id;
+        best = distances[id];
+      }
+    }
+    if (current < 0) break;
+    settled[current] = 1;
+    for (let direction = 0; direction < DIRECTION_ENTRIES.length; direction++) {
+      const next = dense.neighbors[current * DIRECTION_ENTRIES.length + direction];
+      if (next < 0 || settled[next]) continue;
+      const distance = best + (reachable.occupied[next] >= 0 ? 1 : 0);
+      if (distance >= distances[next]) continue;
+      distances[next] = distance;
+      parents[next] = current;
+    }
+  }
+  const routeTo = destination => {
+    if (destination < 0 || distances[destination] === 32767) return null;
+    const route = [], blockers = [];
+    for (let current = destination; current >= 0; current = parents[current]) {
+      route.push(dense.keys[current]);
+      if (reachable.occupied[current] >= 0) blockers.push(dense.keys[current]);
+    }
+    route.reverse();
+    blockers.reverse();
+    return {route, blockers, blockerCount: distances[destination]};
+  };
+  return {routeTo};
+}
+
+function supportDependencyGraph(state, board, reachable = reachablePaths(state, board)) {
+  const metrics = board.metrics;
+  metrics.supportDependencyCalls++;
+  const key = `${reachable.regionId}|${boxSignature(state.boxes, board)}`;
+  if (board.supportDependencyMemo.has(key)) {
+    metrics.supportDependencyCacheHits++;
+    return board.supportDependencyMemo.get(key);
+  }
+  const started = now(), routes = minimumBlockerRoutes(reachable, board);
+  const nodes = [], supportDemand = new Map(), prerequisiteDemand = new Map();
+  let penalty = 0, optionCount = 0;
+  for (const [y, x, label] of state.boxes) {
+    const box = pkey(y, x);
+    if (board.goals.get(box) === label) continue;
+    const targets = board.goalsByLabel.get(label) || [];
+    let bestDistance = Infinity;
+    for (const target of targets) {
+      bestDistance = Math.min(
+        bestDistance,
+        board.pushDistances.get(target)?.get(box) ?? Infinity,
+      );
+    }
+    if (!Number.isFinite(bestDistance) || bestDistance <= 0) continue;
+    const options = [], seen = new Set();
+    for (const target of targets) {
+      const targetDistances = board.pushDistances.get(target);
+      if ((targetDistances?.get(box) ?? Infinity) !== bestDistance) continue;
+      for (let direction = 0; direction < DIRECTION_ENTRIES.length; direction++) {
+        const [move, [dy, dx]] = DIRECTION_ENTRIES[direction];
+        const destination = pkey(y + dy, x + dx);
+        if ((targetDistances.get(destination) ?? Infinity) !== bestDistance - 1) continue;
+        const support = pkey(y - dy, x - dx);
+        const supportId = board.dense.idByKey.get(support);
+        if (supportId === undefined || seen.has(`${support}|${destination}`)) continue;
+        seen.add(`${support}|${destination}`);
+        const accessible = reachable.hasId(supportId);
+        const route = accessible
+          ? {route: [support], blockers: [], blockerCount: 0}
+          : routes.routeTo(supportId);
+        options.push({target, destination, support, move, accessible, ...route});
+      }
+    }
+    if (!options.length) continue;
+    optionCount += options.length;
+    const available = options.some(option => option.accessible);
+    const viable = options.filter(option => option.blockerCount !== undefined);
+    const minimumBlockers = viable.length
+      ? Math.min(...viable.map(option => option.blockerCount))
+      : Infinity;
+    const preferred = available
+      ? options.filter(option => option.accessible)
+      : viable.filter(option => option.blockerCount === minimumBlockers);
+    const share = 1 / Math.max(1, preferred.length);
+    for (const option of preferred) {
+      supportDemand.set(option.support, (supportDemand.get(option.support) || 0) + share);
+      for (const blocker of option.blockers || []) {
+        prerequisiteDemand.set(blocker, (prerequisiteDemand.get(blocker) || 0) + share);
+      }
+    }
+    penalty += available ? 0 : 1 + (Number.isFinite(minimumBlockers) ? minimumBlockers : 4);
+    nodes.push({box, label, distance: bestDistance, available, options: preferred});
+  }
+  const graph = {nodes, supportDemand, prerequisiteDemand, penalty};
+  metrics.supportDependencyOptions += optionCount;
+  metrics.supportDependencyBlockers += prerequisiteDemand.size;
+  metrics.supportDependencyMs += now() - started;
+  return memoizeBounded(
+    board.supportDependencyMemo,
+    key,
+    graph,
+    SUPPORT_DEPENDENCY_MEMO_LIMIT,
+  );
+}
+
+function supportDependencyDelta(graph, next) {
+  const destroysAccess = graph.supportDemand.get(next.pushedTo) || 0;
+  const enablesAccess = graph.prerequisiteDemand.get(next.pushedFrom) || 0;
+  return 1.25 * destroysAccess - enablesAccess;
+}
+
 function createsSealedCorralDeadlock(state, board, reachable) {
   const occupied = new Map(state.boxes.map(([y, x, label]) => [pkey(y, x), label]));
   const inaccessible = new Set([...board.floor].filter(position => !reachable.has(position)));
@@ -1654,6 +1782,7 @@ function beamSearch(payload) {
   const mobilityWeight = payload.mobilityWeight ?? 0.03;
   const topologyWeight = payload.topologyWeight ?? 0.7;
   const evacuationWeight = payload.evacuationWeight ?? 0;
+  const supportDependencyWeight = payload.supportDependencyWeight ?? 0.8;
   const beamProfile = payload.beamProfile || "balanced";
   const seed = payload.seed || 0;
   const transpositionLimit = payload.transpositionLimit || Math.max(12000, width * 60);
@@ -1694,6 +1823,7 @@ function beamSearch(payload) {
         beamCutoff = true;
         break searchLayers;
       }
+      const dependencyGraph = supportDependencyGraph(current, board, current.reachable);
       for (const rawNext of pushNeighbors(current, board, current.reachable)) {
         const expansions = payload.straightMacros
           ? expandStraightPushes(rawNext, board, payload.straightMacroLimit || 8)
@@ -1727,6 +1857,7 @@ function beamSearch(payload) {
         }
         const topology = topologyPenalty(child.boxes, board);
         const packing = goalPackingBonus(child.boxes, board);
+        const dependencyDelta = supportDependencyDelta(dependencyGraph, next);
         const evacuation = evacuationWeight
           ? roomEvacuationPenalty(child.boxes, board)
           : 0;
@@ -1743,9 +1874,11 @@ function beamSearch(payload) {
           weight * estimate + topologyWeight * topology +
           evacuationWeight * evacuation -
           goalPackingWeight * packing +
+          supportDependencyWeight * dependencyDelta +
           diversity * signatureNoise(child.exactSignature, seed);
         const exploreScore = topologyWeight * topology + evacuationWeight * evacuation -
           goalPackingWeight * packing +
+          supportDependencyWeight * dependencyDelta +
           diversity * signatureNoise(child.exactSignature, seed + 7919);
         const existing = candidates.get(child.exactSignature);
         if (!existing || score < existing.score) {
@@ -1755,6 +1888,7 @@ function beamSearch(payload) {
             estimate,
             topology,
             evacuation,
+            dependencyDelta,
             score,
             exploreScore,
             pushClass: next.pushClass,
@@ -2047,6 +2181,7 @@ function boundedPushDepthFirstSearch(payload) {
     activePath.add(signature);
     transpositions.set(signature, cost);
 
+    const dependencyGraph = supportDependencyGraph(state, board, reachable);
     const candidates = [];
     for (const rawNext of pushNeighbors(state, board, reachable)) {
       const next = expandPushMacro(rawNext, board, payload.forcedMacros !== false);
@@ -2095,11 +2230,13 @@ function boundedPushDepthFirstSearch(payload) {
       const topology = topologyPenalty(next.boxes, board);
       const evacuation = profile === "evacuation" ? roomEvacuationPenalty(next.boxes, board) : 0;
       const packing = goalPackingBonus(next.boxes, board);
+      const dependencyDelta = supportDependencyDelta(dependencyGraph, next);
       let score = 2.5 * estimate + topology - 0.8 * packing;
       if (profile === "detour") score = 1.5 * estimate + 1.4 * topology - packing;
       if (profile === "setup" && childCost <= 12) score = -estimate + topology - packing;
       if (profile === "room-flow") score = estimate + 6 * topology - packing;
       if (profile === "evacuation") score = estimate + 8 * evacuation + topology - packing;
+      score += (payload.supportDependencyWeight ?? 0.8) * dependencyDelta;
       score += (payload.diversity ?? 1.5) *
         signatureNoise(exactPushKey(next, board), seed + childCost);
       candidates.push({next, cost: childCost, score});
@@ -2244,6 +2381,7 @@ function pushIterativeDeepeningAStar(payload) {
     activePath.add(signature);
     transpositions.set(signature, cost);
 
+    const dependencyGraph = supportDependencyGraph(state, board, reachable);
     let nextThreshold = Infinity;
     const candidates = [];
     for (const rawNext of pushNeighbors(state, board, reachable)) {
@@ -2269,6 +2407,8 @@ function pushIterativeDeepeningAStar(payload) {
         cost: childCost,
         total: childCost + childEstimate,
         score: orderingScore(next, childCost) +
+          (payload.supportDependencyWeight ?? 0.5) *
+            supportDependencyDelta(dependencyGraph, next) +
           (payload.diversity ?? 0.2) *
             signatureNoise(exactPushKey(next, board), seed + childCost),
       });
