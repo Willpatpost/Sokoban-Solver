@@ -1,8 +1,8 @@
 Sokomind improvements and implementation status
 ===============================================
 
-Status reviewed against the repository after Improvement Sprint 1: general-purpose
-solver guardrails, pull-request CI, and machine-verifiable solution artifacts.
+Status reviewed against the repository after Improvement Sprint 2: conservative
+closed-diagonal hard pruning in both solver runtimes.
 
 Standing maintenance rules
 --------------------------
@@ -240,6 +240,30 @@ PARTIALLY DELIVERED
     - Promote only contradictions confirmed by exact reasoning into safe pruning;
       current flow contradictions remain diagnostic and ordering-only.
 
+18. Add closed-diagonal deadlock detection and more complete freeze detection.
+    Delivered so far:
+    - Browser and Python searches reject a conservative two-row wall-ended
+      diagonal when each open diagonal square is flanked by exactly one box and
+      one wall, both boxes face outward toward their wall endpoint, and no square
+      in the pattern offers a goal escape.
+    - The detector is board-derived and contains no level names, coordinates, or
+      saved-solution knowledge.
+    - Independent unpruned state graphs enumerate every two-box/two-wall border
+      arrangement and both mirror orientations. Only the two outward-facing cases
+      are accepted, and both are exhaustively proven unsolvable.
+    - The generated family exposed two tempting but solvable false-positive forms
+      during development; they remain rejected by the final detector. A goal-escape
+      variant is also proven solvable and participates in the combined hard-pruning
+      differential suite.
+    - The known Huge replay, generated validation families, and all existing hard
+      pruning differentials remain intact under solver build 2026-07-22.13.
+    Remaining:
+    - Recognize box-ended diagonals and safe goal/wall sequences without losing
+      valid inward-opening pushes.
+    - Add broader transformed, typed, multi-box, and generated diagonal families.
+    - Extend recursive freeze detection beyond the current conservative local
+      component rule, promoting new cases only after differential validation.
+
 32. Complete project and release hygiene.
     Delivered so far:
     - Added concise architecture documentation defining the general-purpose search
@@ -255,10 +279,6 @@ YET TO BE IMPLEMENTED AS BACKLOG CAPABILITIES
 
 17. Add reverse-proven goal-room packing tables that identify safe packing orders
     and reject room arrangements that cannot be completed from the doorway.
-
-18. Add closed-diagonal deadlock detection and more complete freeze detection,
-    including mutually frozen box groups beyond the current local checks. Treat
-    new rejection rules as hard pruning only after differential validation.
 
 19. Add small deadlock pattern databases and use exhaustive local enumeration to
     recognize additional unsalvageable box patterns safely.

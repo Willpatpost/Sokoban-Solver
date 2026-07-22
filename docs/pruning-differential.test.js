@@ -125,6 +125,15 @@ const DIFFERENTIAL_BOARDS = [
     "O R   O",
     "OOOOOOO",
   ],
+  [
+    "OOOOOOOO",
+    "O O    O",
+    "O XS O O",
+    "O  O X O",
+    "O    O O",
+    "O R S  O",
+    "OOOOOOOO",
+  ],
 ];
 
 function connectedFloor(cells) {
@@ -202,6 +211,34 @@ test("counterexample retention prefers the smallest reproducible board and state
   assert.equal(retainSmallestCounterexample(smaller, larger), smaller);
 });
 
+test("generated wall-ended closed diagonals are exhaustively unsolvable", () => {
+  const slots = [[2, 2], [2, 4], [3, 3], [3, 5]];
+  let checked = 0;
+  for (let mask = 0; mask < (1 << slots.length); mask++) {
+    if (slots.filter((_, index) => mask & (1 << index)).length !== 2) continue;
+    const grid = Array.from({length: 7}, (_, y) =>
+      [...(y === 0 || y === 6 ? "OOOOOOOO" : "O      O")]);
+    grid[1][2] = "O";
+    grid[4][5] = "O";
+    slots.forEach(([y, x], index) => { grid[y][x] = mask & (1 << index) ? "X" : "O"; });
+    grid[5][2] = "R";
+    grid[5][3] = "S";
+    grid[5][4] = "S";
+    const base = grid.map(row => row.join(""));
+    const variants = [base, base.map(row => [...row].reverse().join(""))];
+    for (const rows of variants) {
+      const {worker, board, states, solvable} = enumerateReachable(rows);
+      const initial = stateFromRows(rows);
+      const detected = initial.boxes.some(([y, x]) =>
+        worker.createsClosedDiagonalDeadlock(initial.boxes, board, [y, x]));
+      if (detected) assert.equal(solvable.size, 0, `false positive:\n${rows.join("\n")}`);
+      assert.ok(states.size > 0);
+      if (detected) checked++;
+    }
+  }
+  assert.equal(checked, 2);
+});
+
 test("hard pruning never rejects an exhaustively proven solvable small state", () => {
   let checkedStates = 0, checkedPushes = 0, solvableTinyLayouts = 0;
   let smallestCounterexample = null;
@@ -263,6 +300,9 @@ test("hard pruning never rejects an exhaustively proven solvable small state", (
         }
         if (worker.createsFrozenComponentDeadlock(edge.state.boxes, board, [y, x])) {
           record("freeze", state, edge);
+        }
+        if (worker.createsClosedDiagonalDeadlock(edge.state.boxes, board, [y, x])) {
+          record("closed-diagonal", state, edge);
         }
         if (worker.createsDynamicDeadlock(edge.state.boxes, board, [y, x])) {
           record("dynamic", state, edge);

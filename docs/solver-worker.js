@@ -1419,10 +1419,67 @@ function createsFrozenComponentDeadlock(boxes, board, movedBox) {
   return [...component].some(position => board.goals.get(position) !== occupied.get(position));
 }
 
+function createsClosedDiagonalDeadlock(boxes, board, movedBox) {
+  const occupied = new Map(boxes.map(([y, x, label]) => [pkey(y, x), label]));
+  const movedKey = pkey(movedBox[0], movedBox[1]);
+  if (!occupied.has(movedKey)) return false;
+  const limit = board.rows.length + Math.max(...board.rows.map(row => row.length)) + 2;
+  const blocked = (y, x) => board.walls.has(pkey(y, x)) || occupied.has(pkey(y, x));
+
+  const scanHalf = (startY, startX, stepY, stepX) => {
+    const boxesOnBorder = new Set();
+    const boxSides = [];
+    let y = startY, x = startX;
+    for (let distance = 0; distance < limit; distance++, y += stepY, x += stepX) {
+      const center = pkey(y, x);
+      if (board.walls.has(center)) {
+        return {closed: true, boxes: boxesOnBorder, boxSides, rows: distance};
+      }
+      if (!board.floor.has(center) || occupied.has(center) || board.goals.has(center)) {
+        return {closed: false, boxes: boxesOnBorder, boxSides, rows: distance};
+      }
+      let rowBoxSide = null;
+      for (const [sideOffset, sideX] of [[-1, x - 1], [1, x + 1]]) {
+        const side = pkey(y, sideX);
+        if (!blocked(y, sideX) || board.goals.has(side)) {
+          return {closed: false, boxes: boxesOnBorder, boxSides, rows: distance};
+        }
+        if (occupied.has(side)) {
+          if (rowBoxSide !== null) {
+            return {closed: false, boxes: boxesOnBorder, boxSides, rows: distance};
+          }
+          rowBoxSide = sideOffset;
+          boxesOnBorder.add(side);
+        }
+      }
+      if (rowBoxSide === null) {
+        return {closed: false, boxes: boxesOnBorder, boxSides, rows: distance};
+      }
+      boxSides.push(rowBoxSide);
+    }
+    return {closed: false, boxes: boxesOnBorder, boxSides, rows: limit};
+  };
+
+  for (const centerX of [movedBox[1] - 1, movedBox[1] + 1]) {
+    for (const slope of [-1, 1]) {
+      const up = scanHalf(movedBox[0], centerX, -1, -slope);
+      const down = scanHalf(movedBox[0] + 1, centerX + slope, 1, slope);
+      if (!up.closed || !down.closed || up.rows + down.rows < 2) continue;
+      const participants = new Set([...up.boxes, ...down.boxes]);
+      const boxSides = [...up.boxSides].reverse().concat(down.boxSides);
+      const outwardFacing = boxSides.length === 2 &&
+        boxSides[0] === -slope && boxSides[1] === slope;
+      if (outwardFacing && participants.has(movedKey) && participants.size >= 2) return true;
+    }
+  }
+  return false;
+}
+
 function createsDynamicDeadlock(boxes, board, movedBox) {
   const signature = `${boxSignature(boxes, board)}|${movedBox.join(",")}`;
   if (board.deadlockMemo.has(signature)) return board.deadlockMemo.get(signature);
   const deadlocked = creates2x2Deadlock(boxes, board, movedBox) ||
+    createsClosedDiagonalDeadlock(boxes, board, movedBox) ||
     createsFrozenComponentDeadlock(boxes, board, movedBox);
   return memoizeBounded(board.deadlockMemo, signature, deadlocked, DEADLOCK_MEMO_LIMIT);
 }

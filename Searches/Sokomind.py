@@ -409,6 +409,86 @@ def creates_frozen_component_deadlock(
     return any(pos not in board.goals_for(occupied[pos]) for pos in component)
 
 
+def creates_closed_diagonal_deadlock(
+    boxes: Iterable[Box],
+    board: Board,
+    moved_box: Position,
+) -> bool:
+    """Detect a conservative wall-ended closed diagonal with no goal escape.
+
+    This deliberately recognizes only a two-row proven subset: each open
+    diagonal square is flanked by exactly one box and one wall, the boxes face
+    outward toward wall endpoints, and none of the pattern squares is a goal.
+    """
+    occupied = {pos: label for label, pos in boxes}
+    if moved_box not in occupied:
+        return False
+    limit = len(board.rows) + max(map(len, board.rows)) + 2
+
+    def scan_half(
+        start: Position,
+        step: Position,
+    ) -> tuple[bool, set[Position], list[int], int]:
+        border_boxes: set[Position] = set()
+        box_sides: list[int] = []
+        y, x = start
+        step_y, step_x = step
+        for distance in range(limit):
+            center = (y, x)
+            if center in board.walls:
+                return True, border_boxes, box_sides, distance
+            if center not in board.floor or center in occupied or center in board.generic_goals:
+                return False, border_boxes, box_sides, distance
+            if any(center in goals for _label, goals in board.dedicated_goals):
+                return False, border_boxes, box_sides, distance
+            row_box_side: int | None = None
+            for side_offset, side in ((-1, (y, x - 1)), (1, (y, x + 1))):
+                if side not in board.walls and side not in occupied:
+                    return False, border_boxes, box_sides, distance
+                if side in board.generic_goals or any(
+                    side in goals for _label, goals in board.dedicated_goals
+                ):
+                    return False, border_boxes, box_sides, distance
+                if side in occupied:
+                    if row_box_side is not None:
+                        return False, border_boxes, box_sides, distance
+                    row_box_side = side_offset
+                    border_boxes.add(side)
+            if row_box_side is None:
+                return False, border_boxes, box_sides, distance
+            box_sides.append(row_box_side)
+            y += step_y
+            x += step_x
+        return False, border_boxes, box_sides, limit
+
+    box_y, box_x = moved_box
+    for center_x in (box_x - 1, box_x + 1):
+        for slope in (-1, 1):
+            up_closed, up_boxes, up_sides, up_rows = scan_half(
+                (box_y, center_x), (-1, -slope),
+            )
+            down_closed, down_boxes, down_sides, down_rows = scan_half(
+                (box_y + 1, center_x + slope), (1, slope),
+            )
+            participants = up_boxes | down_boxes
+            box_sides = list(reversed(up_sides)) + down_sides
+            outward_facing = (
+                len(box_sides) == 2
+                and box_sides[0] == -slope
+                and box_sides[1] == slope
+            )
+            if (
+                up_closed
+                and down_closed
+                and up_rows + down_rows >= 2
+                and outward_facing
+                and moved_box in participants
+                and len(participants) >= 2
+            ):
+                return True
+    return False
+
+
 def creates_dynamic_deadlock(
     boxes: Iterable[Box],
     board: Board,
@@ -416,8 +496,10 @@ def creates_dynamic_deadlock(
 ) -> bool:
     """Combine the currently proven local multi-box deadlock rules."""
     frozen_boxes = tuple(boxes)
-    return creates_2x2_deadlock(frozen_boxes, board, moved_box) or (
-        creates_frozen_component_deadlock(frozen_boxes, board, moved_box)
+    return (
+        creates_2x2_deadlock(frozen_boxes, board, moved_box)
+        or creates_closed_diagonal_deadlock(frozen_boxes, board, moved_box)
+        or creates_frozen_component_deadlock(frozen_boxes, board, moved_box)
     )
 
 

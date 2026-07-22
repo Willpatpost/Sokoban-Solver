@@ -125,8 +125,9 @@ a small contour around each checkpoint.
 The board analysis is puzzle-independent. It detects articulation gates and
 one-entrance rooms, derives farthest-first packing pressure and goal dependencies,
 and marks high-traffic packing cells. Hard pruning includes static and player-side
-dead squares, label-aware Hall deadlocks, 2x2 and frozen box groups, and sealed
-corrals. Globally forced pushes in straight tunnels are collapsed into macros.
+dead squares, label-aware Hall deadlocks, 2x2 blocks, conservative wall-ended
+closed diagonals, frozen box groups, and sealed corrals. Globally forced pushes in
+straight tunnels are collapsed into macros.
 Heuristic room ordering affects priority only; it never rejects a state.
 Boxes occupying the exterior approach to an unresolved one-entrance room add
 congestion pressure, encouraging the solver to clear staging gates before packing.

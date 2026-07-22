@@ -73,7 +73,8 @@ Recommended algorithms:
 
 - `ultimate`: recommended mode; combines Sokoban-specific mechanics including
   a bounded push-beam opening, forced-push macros, dead-square pruning,
-  2x2 and mutually frozen box-group detection, robot-reachability
+  2x2, conservative closed-diagonal, and mutually frozen box-group detection,
+  robot-reachability
   canonicalization, exact distinct label-aware goal matching, and push-distance
   heuristics.
 - `fast` / `portfolio`: older aliases for the same recommended portfolio.

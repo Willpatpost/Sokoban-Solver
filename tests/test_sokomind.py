@@ -20,6 +20,7 @@ from Searches.Sokomind import (
     apply_move,
     a_star_search,
     collapse_forced_pushes,
+    creates_closed_diagonal_deadlock,
     creates_frozen_component_deadlock,
     get_push_neighbors,
     get_neighbors,
@@ -227,6 +228,33 @@ class SokomindTests(unittest.TestCase):
         ])
         self.assertFalse(creates_frozen_component_deadlock(
             movable.boxes, movable.board, (2, 3),
+        ))
+
+    def test_closed_diagonal_requires_wall_ends_multiple_boxes_and_no_goal_escape(self):
+        state = parse_puzzle([
+            "OOOOOOOO",
+            "O O    O",
+            "O X O  O",
+            "O  O X O",
+            "O    O O",
+            "O RSS  O",
+            "OOOOOOOO",
+        ])
+        self.assertTrue(creates_closed_diagonal_deadlock(
+            state.boxes, state.board, (2, 2),
+        ))
+
+        escaped = parse_puzzle([
+            "OOOOOOOO",
+            "O O    O",
+            "O XS O O",
+            "O  O X O",
+            "O    O O",
+            "O R S  O",
+            "OOOOOOOO",
+        ])
+        self.assertFalse(creates_closed_diagonal_deadlock(
+            escaped.boxes, escaped.board, (2, 2),
         ))
 
     def test_frozen_component_pruning_preserves_exhaustively_solvable_tiny_pushes(self):

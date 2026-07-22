@@ -100,6 +100,28 @@ test("browser worker prunes 2x2 box deadlocks", () => {
   assert.equal(worker.creates2x2Deadlock(boxes, board, [3, 3]), true);
 });
 
+test("closed diagonals require wall ends, multiple boxes, and no goal escape", () => {
+  const worker = loadWorker();
+  const rows = [
+    "OOOOOOOO",
+    "O O    O",
+    "O X O  O",
+    "O  O X O",
+    "O    O O",
+    "O RSS  O",
+    "OOOOOOOO",
+  ];
+  const board = worker.parse({rows});
+  const boxes = [[2, 2, "X"], [3, 5, "X"]];
+  assert.equal(worker.createsClosedDiagonalDeadlock(boxes, board, [2, 2]), true);
+
+  const escapedRows = [...rows];
+  escapedRows[2] = "O XS O  O";
+  escapedRows[5] = "O R S  O";
+  const escaped = worker.parse({rows: escapedRows});
+  assert.equal(worker.createsClosedDiagonalDeadlock(boxes, escaped, [2, 2]), false);
+});
+
 test("bidirectional sides emit compatible compact records", () => {
   const rows = ["OOOOO", "O R O", "O A O", "O a O", "OOOOO"];
   const state = stateFromRows(rows);
