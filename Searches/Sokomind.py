@@ -618,10 +618,7 @@ def _relaxed_interaction_pattern(
     target_boxes: tuple[Box, ...],
 ) -> tuple[tuple[tuple[Box, ...], int], ...]:
     floor = frozenset(
-        (y, x)
-        for y, row in enumerate(rows)
-        for x, cell in enumerate(row)
-        if cell != "O"
+        (y, x) for y, row in enumerate(rows) for x, cell in enumerate(row) if cell != "O"
     )
     initial = _local_box_signature(target_boxes)
     distances: dict[tuple[Box, ...], int] = {initial: 0}
