@@ -31,6 +31,14 @@ packed `BigInt` identities that combine sorted typed-box cell tokens with the
 exact robot cell or canonical reachable-region ID. Immutable box arrays cache
 their packed identity, and diversity sharding hashes that dense value directly.
 Search telemetry reports both string-signature and packed-identity activity.
+Successor layouts also retain a weak parent hint for the one box that moved.
+When the parent's exact Hungarian assignment is cached, the heuristic reuses all
+unchanged cost rows and repairs the matching with one O(n-squared) augmenting-path
+update instead of rebuilding it in O(n-cubed). Repair is enabled for label groups
+of at least five boxes, where profiling supports the tradeoff; smaller groups keep
+the simpler full calculation. Deterministic matrix tests compare
+the repair against full recomputation, and telemetry reports repairs, fallbacks,
+and reused rows.
 
 Ultimate Bidirectional's planning worker also returns a clone-safe prepared-board
 seed. Subsequent portfolio workers reuse its immutable geometry, topology,

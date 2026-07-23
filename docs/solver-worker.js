@@ -182,6 +182,9 @@ function createPerformanceMetrics() {
     doorwayFlowCacheHits: 0,
     doorwayFlowMs: 0,
     assignmentCalls: 0,
+    incrementalAssignmentCalls: 0,
+    incrementalAssignmentFallbacks: 0,
+    incrementalAssignmentRowsReused: 0,
     pushDistanceCalls: 0,
     pushDistanceCacheHits: 0,
     pushDistanceMs: 0,
@@ -483,6 +486,8 @@ function hydratePreparedBoard(data, seed, metrics) {
     singleBoxGraph: seed.singleBoxGraph,
     dense: seed.dense,
     heuristicMemo: new Map(),
+    assignmentMemo: new WeakMap(),
+    assignmentParentMemo: new WeakMap(),
     playerPushDistances: new Map(),
     deadlockMemo: new Map(),
     commitmentMemo: new Map(),
@@ -573,7 +578,8 @@ function parse(data) {
   metrics.parseMs += now() - parseStarted;
   return {
     rows: data.rows, floor, walls, goals, goalsByLabel, pushDistances, goalPressure,
-    topology, heuristicMemo: new Map(), playerPushDistances: new Map(),
+    topology, heuristicMemo: new Map(), assignmentMemo: new WeakMap(),
+    assignmentParentMemo: new WeakMap(), playerPushDistances: new Map(),
     deadlockMemo: new Map(), commitmentMemo: new Map(), stateCommitmentMemo: new Map(),
     commitmentPushDistances: new Map(),
     supportDependencyMemo: new Map(),
@@ -627,11 +633,16 @@ function reversePushDistances(floor, goalKey) {
   }
   return distances;
 }
-function minimumAssignmentCost(costs) {
+function minimumAssignment(costs) {
   const size = costs.length;
-  if (!size) return 0;
+  if (!size) return {
+    cost: 0,
+    rowPotential: [0],
+    columnPotential: [0],
+    matching: [0],
+  };
   if (costs.some(row => row.length !== size || row.every(cost => !Number.isFinite(cost)))) {
-    return Infinity;
+    return {cost: Infinity};
   }
   const blocked = 1e9;
   const rowPotential = Array(size + 1).fill(0);
@@ -661,7 +672,7 @@ function minimumAssignmentCost(costs) {
           nextColumn = candidate;
         }
       }
-      if (delta >= blocked) return Infinity;
+      if (delta >= blocked) return {cost: Infinity};
       for (let candidate = 0; candidate <= size; candidate++) {
         if (used[candidate]) {
           rowPotential[matching[candidate]] += delta;
@@ -681,10 +692,80 @@ function minimumAssignmentCost(costs) {
   let total = 0;
   for (let column = 1; column <= size; column++) {
     const cost = costs[matching[column] - 1][column - 1];
-    if (!Number.isFinite(cost)) return Infinity;
+    if (!Number.isFinite(cost)) return {cost: Infinity};
     total += cost;
   }
-  return total;
+  return {cost: total, rowPotential, columnPotential, matching};
+}
+
+function repairMinimumAssignment(previous, costs, changedRow) {
+  const size = costs.length;
+  if (!previous || !Number.isInteger(changedRow) || changedRow < 0 || changedRow >= size ||
+      !Number.isFinite(previous.cost) || previous.matching?.length !== size + 1 ||
+      costs.some(row => row.length !== size || row.every(cost => !Number.isFinite(cost)))) {
+    return null;
+  }
+  const blocked = 1e9, row = changedRow + 1;
+  const rowPotential = [...previous.rowPotential];
+  const columnPotential = [...previous.columnPotential];
+  const matching = [...previous.matching];
+  const freedColumn = matching.findIndex((matchedRow, column) => column > 0 && matchedRow === row);
+  if (freedColumn < 1) return null;
+  matching[freedColumn] = 0;
+  rowPotential[row] = Math.min(...costs[changedRow].map((cost, index) =>
+    (Number.isFinite(cost) ? cost : blocked) - columnPotential[index + 1]));
+
+  matching[0] = row;
+  const minimum = Array(size + 1).fill(blocked);
+  const used = Array(size + 1).fill(false);
+  const predecessor = Array(size + 1).fill(0);
+  let column = 0;
+  do {
+    used[column] = true;
+    const matchedRow = matching[column];
+    let delta = blocked, nextColumn = 0;
+    for (let candidate = 1; candidate <= size; candidate++) {
+      if (used[candidate]) continue;
+      const cost = costs[matchedRow - 1][candidate - 1];
+      const reduced = (Number.isFinite(cost) ? cost : blocked) -
+        rowPotential[matchedRow] - columnPotential[candidate];
+      if (reduced < minimum[candidate]) {
+        minimum[candidate] = reduced;
+        predecessor[candidate] = column;
+      }
+      if (minimum[candidate] < delta) {
+        delta = minimum[candidate];
+        nextColumn = candidate;
+      }
+    }
+    if (delta >= blocked) return {cost: Infinity};
+    for (let candidate = 0; candidate <= size; candidate++) {
+      if (used[candidate]) {
+        rowPotential[matching[candidate]] += delta;
+        columnPotential[candidate] -= delta;
+      } else {
+        minimum[candidate] -= delta;
+      }
+    }
+    column = nextColumn;
+  } while (matching[column] !== 0);
+  do {
+    const previousColumn = predecessor[column];
+    matching[column] = matching[previousColumn];
+    column = previousColumn;
+  } while (column !== 0);
+
+  let total = 0;
+  for (let candidate = 1; candidate <= size; candidate++) {
+    const cost = costs[matching[candidate] - 1][candidate - 1];
+    if (!Number.isFinite(cost)) return {cost: Infinity};
+    total += cost;
+  }
+  return {cost: total, rowPotential, columnPotential, matching};
+}
+
+function minimumAssignmentCost(costs) {
+  return minimumAssignment(costs).cost;
 }
 
 function singleBoxReachable(floor, boxKey, startKey) {
@@ -810,6 +891,35 @@ function playerAwarePushDistances(board, startKey) {
   return distances;
 }
 
+function boxesByLabelWithIndices(boxes) {
+  const byLabel = new Map();
+  boxes.forEach(([y, x, label], index) => {
+    if (!byLabel.has(label)) byLabel.set(label, []);
+    byLabel.get(label).push({y, x, index});
+  });
+  return byLabel;
+}
+
+function cacheFullAssignmentDetail(boxes, board) {
+  if (board.assignmentMemo.has(boxes)) return board.assignmentMemo.get(boxes);
+  const labels = new Map();
+  let total = 0;
+  for (const [label, entries] of boxesByLabelWithIndices(boxes)) {
+    const targets = board.goalsByLabel.get(label) || [];
+    const costs = entries.map(({y, x}) => {
+      const distances = playerAwarePushDistances(board, pkey(y, x));
+      return targets.map(target => distances.get(target) ?? Infinity);
+    });
+    board.metrics.assignmentCalls++;
+    const assignment = minimumAssignment(costs);
+    labels.set(label, {boxIndices: entries.map(entry => entry.index), costs, assignment});
+    total += assignment.cost;
+  }
+  const detail = {labels, cost: total};
+  board.assignmentMemo.set(boxes, detail);
+  return detail;
+}
+
 function heuristic(boxes, board) {
   const metrics = board.metrics;
   metrics.heuristicCalls++;
@@ -819,20 +929,49 @@ function heuristic(boxes, board) {
     return board.heuristicMemo.get(signature);
   }
   const started = now();
-  const byLabel = new Map();
-  boxes.forEach(([y, x, label]) => {
-    if (!byLabel.has(label)) byLabel.set(label, []);
-    byLabel.get(label).push([y, x]);
-  });
+  const parentHint = board.assignmentParentMemo.get(boxes);
+  if (!parentHint) {
+    const detail = cacheFullAssignmentDetail(boxes, board);
+    metrics.heuristicMs += now() - started;
+    return memoizeBounded(board.heuristicMemo, signature, detail.cost);
+  }
+  const grouped = boxesByLabelWithIndices(boxes);
+  const changedEntries = [...grouped.values()].find(entries =>
+    entries.some(entry => entry.index === parentHint.changedIndex));
+  const parentDetail = changedEntries?.length >= 5
+    ? cacheFullAssignmentDetail(parentHint.parentBoxes, board)
+    : null;
   let total = 0;
-  for (const [label, positions] of byLabel) {
+  for (const [label, entries] of grouped) {
     const targets = board.goalsByLabel.get(label) || [];
-    const costs = positions.map(([y, x]) => {
+    const previous = parentDetail?.labels.get(label);
+    const boxIndices = entries.map(entry => entry.index);
+    const changedRow = parentHint ? boxIndices.indexOf(parentHint.changedIndex) : -1;
+    const canReuseRows = changedRow >= 0 && previous &&
+      previous.boxIndices.length === boxIndices.length &&
+      previous.boxIndices.every((index, row) => index === boxIndices[row]);
+    const costs = canReuseRows ? [...previous.costs] : entries.map(({y, x}) => {
       const distances = playerAwarePushDistances(board, pkey(y, x));
       return targets.map(target => distances.get(target) ?? Infinity);
     });
+    if (canReuseRows) {
+      const {y, x} = entries[changedRow];
+      const distances = playerAwarePushDistances(board, pkey(y, x));
+      costs[changedRow] = targets.map(target => distances.get(target) ?? Infinity);
+    }
     metrics.assignmentCalls++;
-    total += minimumAssignmentCost(costs);
+    let assignment = canReuseRows
+      ? repairMinimumAssignment(previous.assignment, costs, changedRow)
+      : null;
+    if (canReuseRows) {
+      metrics.incrementalAssignmentCalls++;
+      metrics.incrementalAssignmentRowsReused += Math.max(0, entries.length - 1);
+    }
+    if (!assignment) {
+      if (canReuseRows) metrics.incrementalAssignmentFallbacks++;
+      assignment = minimumAssignment(costs);
+    }
+    total += assignment.cost;
   }
   metrics.heuristicMs += now() - started;
   return memoizeBounded(board.heuristicMemo, signature, total);
@@ -2131,6 +2270,7 @@ function pushNeighbors(state, board, reachable = reachablePaths(state, board), o
         board.metrics.dynamicDeadPrunes++;
         continue;
       }
+      board.assignmentParentMemo.set(boxes, {parentBoxes: state.boxes, changedIndex: index});
       result.push({
         robot: [y, x],
         boxes,
@@ -2177,6 +2317,7 @@ function pushBoxNeighbors(
       boxIndex === index ? [destinationY, destinationX, label] : box);
     if (staticDead(destinationY, destinationX, board, label) ||
         createsDynamicDeadlock(boxes, board, [destinationY, destinationX])) continue;
+    board.assignmentParentMemo.set(boxes, {parentBoxes: state.boxes, changedIndex: index});
     result.push({
       robot: [y, x],
       boxes,

@@ -1,8 +1,8 @@
 Sokomind improvements and implementation status
 ===============================================
 
-Status reviewed against the repository after Improvement Sprint 3: bounded
-reverse-proven goal-room packing tables and a visible homepage build badge.
+Status reviewed against the repository after Improvement Sprint 4: exact
+incremental Hungarian repair and external solver-proposal review.
 
 Standing maintenance rules
 --------------------------
@@ -58,6 +58,13 @@ DONE
     explicitly documented as evidence that is never consumed by production search.
     A source guard rejects saved-route consumption and built-in-level branches in
     both production solver implementations.
+
+38. Collapse genuinely forced box sequences into macro edges.
+    The browser and Python solvers collapse globally forced push chains while
+    preserving replay moves. The browser also has tunnel-entry, straight-run,
+    and bounded same-box sequence macros with commitment and deadlock checks.
+    This covers the external forced-corridor proposal without assuming that a
+    visually narrow passage is forced when another legal box push exists.
 
 
 STRONG IMPLEMENTATION, WITH BOUNDED LIMITATIONS
@@ -225,6 +232,9 @@ PARTIALLY DELIVERED
       same nearest goal.
     - Represent recursive prerequisite box moves and dependency chains.
     - Track recent enabling actions and explicit staging-side requirements.
+    - Estimate the minimum displacement needed when one box occupies another
+      box's assigned route. Keep this ordering-only until costs are proven
+      independent; one displacement can clear several apparent conflicts.
     - Use contradictions for pruning only after they are proven and differentially
       validated.
 
@@ -302,7 +312,7 @@ PARTIALLY DELIVERED
     Delivered so far:
     - The homepage now displays a compact solver-build badge populated directly
       from the same SOLVER_BUILD constant used to version the worker URL and
-      search-log events. Build 2026-07-22.14 is visible without opening developer
+      search-log events. Build 2026-07-22.15 is visible without opening developer
       tools, making a stale cached application immediately recognizable.
     - A policy test requires the badge, binding, and app.js cache-busting query to
       agree with the loaded solver build.
@@ -310,6 +320,28 @@ PARTIALLY DELIVERED
     - Generate or centrally inject the version into index.html so styles,
       levels, policy modules, the application, and worker cannot drift.
     - Add a release/deploy check that rejects mismatched cache revisions.
+
+36. Incrementally update exact box-to-goal assignments after one box moves.
+    Delivered so far:
+    - Browser successor layouts carry a weak parent hint identifying the single
+      changed box row. Cached label assignments reuse every unchanged distance
+      row and repair the Hungarian solution with one augmenting path.
+    - Repair activates for label groups of at least five boxes; profiling showed
+      that full matching is faster and leaner for the common smaller groups.
+    - The repair is O(n^2) worst case rather than the proposed O(n); it remains
+      an improvement over rebuilding the O(n^3) assignment and returns exactly
+      the same admissible value.
+    - Deterministic randomized tests compare 840 one-row repairs, including
+      unreachable edges, against full Hungarian recomputation.
+    - Telemetry counts incremental calls, fallbacks, and reused matrix rows.
+      Solver build 2026-07-22.15 exposes these counters.
+    Bounded limitations:
+    - The optimization currently applies to the browser solver; Python still
+      recomputes each label's assignment after a cache miss.
+    - Layouts without a parent assignment safely use the full solver.
+    - Assignment details are weakly keyed by the box-array object and structurally
+      share unchanged rows, so they follow search-state lifetime rather than
+      accumulating in a separate strong cache.
 
 
 YET TO BE IMPLEMENTED AS BACKLOG CAPABILITIES
@@ -325,7 +357,10 @@ YET TO BE IMPLEMENTED AS BACKLOG CAPABILITIES
 21. Add admissible lower-bound terms where they can be proven, and otherwise
     ordering penalties, for boxes competing over corridors, gates, staging cells,
     or robot support squares. Existing doorway and support penalties are useful
-    foundations but do not yet constitute this general capability.
+    foundations but do not yet constitute this general capability. Merely sharing
+    a shortest-path chokepoint is not additive because boxes may traverse it
+    sequentially. A conflict term must prove unavoidable extra pushes and avoid
+    double-counting overlapping conflicts before entering the exact lower bound.
 
 22. Introduce true feature-space search queues rather than relying only on fixed
     heuristic beam bands. Preserve candidates across dimensions such as room
@@ -379,3 +414,9 @@ YET TO BE IMPLEMENTED AS BACKLOG CAPABILITIES
     range instead of only Python 3.12, retain the supported Node version check,
     and add formatting, linting, type checking, and coverage reporting with
     explicit thresholds appropriate to the dependency-free project.
+
+37. Add proven goal-cut decomposition. Detect separators that divide goals and
+    candidate boxes into closed, label-compatible components, then solve and
+    combine truly independent subproblems. The proof must account for robot
+    traversal, box crossings, shared staging/support cells, and ordering; a visual
+    partition or a cut made only of goals is not sufficient for completeness.

@@ -175,6 +175,55 @@ test("Hungarian matching enforces distinct goals and detects Hall deadlocks", ()
   ]), Infinity);
 });
 
+test("one-row Hungarian repair exactly matches full recomputation", () => {
+  const worker = loadWorker();
+  let seed = 0x51f15e;
+  const random = () => {
+    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+    return seed / 0x100000000;
+  };
+  for (let size = 1; size <= 7; size++) {
+    for (let sample = 0; sample < 120; sample++) {
+      const costs = Array.from({length: size}, (_, row) =>
+        Array.from({length: size}, (_, column) =>
+          row === column || random() > 0.12 ? Math.floor(random() * 30) : Infinity));
+      const previous = worker.minimumAssignment(costs);
+      const changedRow = Math.floor(random() * size);
+      const changed = costs.map(row => [...row]);
+      changed[changedRow] = Array.from({length: size}, (_, column) =>
+        column === changedRow || random() > 0.12 ? Math.floor(random() * 30) : Infinity);
+      const repaired = worker.repairMinimumAssignment(previous, changed, changedRow);
+      assert.ok(repaired);
+      assert.equal(
+        repaired.cost,
+        worker.minimumAssignmentCost(changed),
+        `size=${size} sample=${sample} row=${changedRow}`,
+      );
+    }
+  }
+});
+
+test("successor heuristics reuse unchanged assignment rows", () => {
+  const worker = loadWorker();
+  const parsed = stateFromRows([
+    "OOOOOOOOO", "O R     O", "O XXXXX O", "O       O", "O SSSSS O", "OOOOOOOOO",
+  ]);
+  const board = worker.parse(parsed);
+  const state = {
+    robot: parsed.robot,
+    boxes: parsed.boxes.map(([position, label]) => [
+      ...position.split(",").map(Number), label,
+    ]),
+  };
+  assert.ok(Number.isFinite(worker.heuristic(state.boxes, board)));
+  const next = worker.pushNeighbors(state, board)[0];
+  assert.ok(next);
+  assert.ok(Number.isFinite(worker.heuristic(next.boxes, board)));
+  assert.equal(board.metrics.incrementalAssignmentCalls, 1);
+  assert.equal(board.metrics.incrementalAssignmentFallbacks, 0);
+  assert.equal(board.metrics.incrementalAssignmentRowsReused, 4);
+});
+
 test("goal commitment oracle distinguishes temporary, conditional, and proven placements", () => {
   const worker = loadWorker();
 
