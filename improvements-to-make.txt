@@ -611,6 +611,16 @@ through setup moves without making exact search incomplete.
    - Add per-worker useful-progress telemetry and retire or simplify a profile
      when expensive signals do not improve its best checkpoint, projected cost,
      solved-goal count, or a replay-validated incumbent within a reviewed window.
+   Follow-up evidence from the 2026-07-23.29 twenty-one-minute Huge run:
+   - Detour and balanced guided workers both settled at h=137, four new pushes,
+     73 total pushes, and projected cost 210. Those best-result signatures then
+     remained unchanged for 816 and 776 seconds respectively while each lane ran
+     near 23 states/second.
+   - Those two workers accumulated 73.1/71.6 and 66.4/67.6 seconds in support
+     dependency/commitment analysis, yet both reported zero strategic-ordering
+     evaluations or changes. Attribute expensive signals to their actual beam
+     scoring, proof, or ordering consumer, then gate each consumer by measured
+     useful progress rather than treating aggregate profile time as sufficient.
 
 Sprint completion gate:
 All four items are Done; ordering is assignment-aware, measurable, and complete,
@@ -695,6 +705,15 @@ Sprint 16 supplies deterministic resource gates.
      1,400,062 states while its release entry retained the preceding 1,375,062
      progress sample, and the four workers terminated by user stop had no
      individual release records.
+   Follow-up evidence from the 2026-07-23.29 twenty-one-minute Huge run:
+   - Twenty-two exact continuation slices accumulated 815.2 seconds of worker
+     wall time and 189.9 seconds before first progress, but their inter-slice
+     relaunch gaps totaled only 2.9 seconds and termination calls totaled 0.5 ms.
+     This makes the timing split essential: the current first-message number is
+     mostly compatible with the first 25,000 expansions, not demonstrated worker
+     startup or checkpoint-restore loss.
+   - User stop again ended with four active workers and no per-worker cancellation
+     releases, so cancellation-path lifecycle accounting remains unfinished.
 
 40. Reduce exact transposition churn without multiplying memory.
     Current status: Strong, bounded in build 2026-07-22.20.
@@ -714,6 +733,15 @@ Sprint 16 supplies deterministic resource gates.
      checkpoint boundary, distinguish cumulative retained states from live table
      occupancy, and trade demonstrably unused capacity for safe parallel shards
      before increasing any memory limit.
+   Follow-up evidence from the 2026-07-23.29 twenty-one-minute Huge run:
+   - The same contour reached 2.3 million completed states plus an in-flight
+     partial slice at threshold 208; h=154, g=54, next threshold 210, and maximum
+     depth 54 remained unchanged. The shard continuously made search progress,
+     but still did not finish the first contour.
+   - Its live transposition high-water mark remained roughly 25,000-27,000 with
+     zero evictions under the 320,000-entry allocation. Treat cumulative retained
+     states and live transposition occupancy as separate resource signals when
+     deciding whether another exact shard is affordable.
 
 43. Keep available Ultimate worker capacity productively occupied.
     Current status: Strong, bounded in build 2026-07-22.21.
@@ -740,6 +768,25 @@ Sprint 16 supplies deterministic resource gates.
      and only one productive target. Batch or preflight cheap compatibility,
      deduplicate equivalent landmark targets, and lower a generation's bridge
      budget when its measured compatibility rate collapses.
+   Follow-up evidence from the 2026-07-23.29 twenty-one-minute Huge run:
+   - The exact shard advanced essentially continuously to more than 2.3 million
+     states, while detour and balanced guided lanes held identical best-result
+     signatures without improvement for about 13 minutes. Use profile overlap and
+     lack of best-result change as explicit replacement signals; a different
+     profile name is not evidence of useful diversity.
+   - The checkpoint registry saw 43 publications but only 39 canonical state IDs.
+     Four states were republished with six-push-cheaper prefixes. The registry
+     correctly upserts those paths; expose publication versus unique-state counts
+     separately, do not treat the update as fresh strategic diversity, and retry
+     prior budget-limited work only when the improved bound can change its outcome.
+   - The best published checkpoint by remaining estimate had h=22, while the
+     exact-phase guided lanes were seeded around h=139-157 from lower-f states.
+     The first-solution and bound-quality lanes therefore still need separate,
+     observable checkpoint selection policies.
+   - The bridge breaker opened after 16 zero-state incompatibilities, but already
+     queued work drained to 21 incompatible launches. It successfully bounded the
+     campaign, yet cheap compatibility preflight and cancellation of queued
+     members should happen before more worker slots are consumed.
 
 44. Prevent superseded opening work from delaying handoffs and exact search.
     Current status: Strong, bounded in build 2026-07-22.23.
@@ -751,6 +798,12 @@ Sprint 16 supplies deterministic resource gates.
      and exact transition in deterministic browser campaigns.
    - Add resource-aware cancellation/demotion criteria for active opportunistic
      work while preserving productive solution discovery.
+   Evidence from the 2026-07-23.29 twenty-one-minute Huge run:
+   - The first persistent exact contour did not start until 394 seconds into the
+     run, after opening, reverse, macro, packing, exact-handoff, and restart work
+     had produced no incumbent. Measure time-to-first-exact-progress as a campaign
+     outcome and reserve earlier proof capacity when opening work's marginal yield
+     falls below the exact lane.
 
 Sprint completion gate:
 All four items are Done, browser campaigns prove checkpoint-to-exact progress, and
@@ -811,6 +864,9 @@ capabilities and interfaces stabilize, avoiding repeated parity and UI rewrites.
      per-strategy states and wall time, lifecycle totals, and memory support. The
      eight-minute Huge log ended with only active-worker count and required manual
      reconstruction of the run outcome.
+     Build .29 repeated this after 1,264,357 ms: the final event only reported
+     `activeWorkers: 4`, `status: cancelled`, and `reason: user-stop`, despite a
+     1.8 MB log whose useful final state again had to be reconstructed manually.
 
 48. Consolidate public search modes and remove redundant compatibility bloat.
     Current status: Backlog.
