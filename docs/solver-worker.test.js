@@ -1107,6 +1107,29 @@ test("bounded beams return replayable checkpoints for worker handoff", () => {
   assert.ok(result.checkpoint.path.length > 0);
 });
 
+test("bounded beams report liveness by elapsed time before their state interval", () => {
+  const messages = [];
+  const worker = loadWorker(message => messages.push(message));
+  worker.search({
+    algorithm: "push-beam",
+    state: stateFromRows([
+      "OOOOOOOO",
+      "O R X SO",
+      "OOOOOOOO",
+    ]),
+    beamWidth: 4,
+    maxVisited: 2,
+    progressInterval: 5000,
+    progressIntervalMs: -1,
+    forcedMacros: false,
+  });
+
+  const progress = messages.find(message => message.type === "progress");
+  assert.ok(progress);
+  assert.ok(progress.visited > 0);
+  assert.ok(progress.visited < 5000);
+});
+
 test("forced push macro collapses a globally forced corridor", () => {
   const worker = loadWorker();
   const state = stateFromRows([
@@ -1341,6 +1364,25 @@ test("bounded push DFS returns its best checkpoint when its contour is incomplet
   assert.ok(result.checkpoint);
   assert.ok(result.checkpoint.estimate < 3);
   assert.ok(result.checkpoint.path.length > 0);
+});
+
+test("bounded push DFS reports liveness by elapsed time", () => {
+  const messages = [];
+  const worker = loadWorker(message => messages.push(message));
+  worker.search({
+    algorithm: "bounded-push-dfs",
+    state: stateFromRows([
+      "OOOOOOOO",
+      "O R X SO",
+      "OOOOOOOO",
+    ]),
+    maxVisited: 2,
+    progressInterval: 5000,
+    progressIntervalMs: -1,
+    forcedMacros: false,
+  });
+
+  assert.ok(messages.some(message => message.type === "progress" && message.visited < 5000));
 });
 
 test("push IDA star finds a solution on its admissible contour", () => {

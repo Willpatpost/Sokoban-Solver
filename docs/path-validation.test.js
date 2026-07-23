@@ -44,6 +44,7 @@ test("web UI exposes a separate copyable search log", () => {
   assert.match(html, /id="solver-build"/);
   const build = app.match(/const SOLVER_BUILD = "([^"]+)";/)?.[1];
   assert.ok(build);
+  assert.match(html, new RegExp(`director-policy\\.js\\?build=${build.replaceAll(".", "\\.")}`));
   assert.match(app, /\$\("solver-build"\)\.textContent = SOLVER_BUILD/);
   assert.match(html, new RegExp(`app\\.js\\?build=${build.replaceAll(".", "\\.")}`));
   assert.match(app, /function appendSearchLog\(/);
@@ -61,6 +62,9 @@ test("Ultimate scheduling retires stale phases and reclaims silent workers", () 
   assert.match(app, /packing checkpoint superseded opening and bridge exploration/);
   assert.match(app, /silentSeconds >= 120/);
   assert.match(app, /abandonWorker\("watchdog"\)/);
+  assert.match(app, /Recovering silent discovery worker/);
+  assert.match(app, /watchdogRecovery/);
+  assert.match(app, /sequenceMacros: false/);
   assert.match(app, /bridgeOutstanding = Math\.max\(0, bridgeOutstanding - 1\)/);
   assert.match(app, /bridgeCampaignViable/);
   assert.match(app, /Candidate landmark bridges queued/);

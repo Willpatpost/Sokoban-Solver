@@ -6,6 +6,7 @@ const {
   createRequiredWorkTracker,
   evaluateBridgeContinuation,
   selectAnytimeCheckpoints,
+  exactTranspositionLimit,
 } = require("./director-policy.js");
 
 test("anytime checkpoint selection minimizes projected cost and preserves phase diversity", () => {
@@ -23,6 +24,14 @@ test("anytime checkpoint selection minimizes projected cost and preserves phase 
 
   assert.deepEqual(selected.map(candidate => candidate.id), ["evacuation", "packing-best"]);
   assert.deepEqual(selected.map(candidate => candidate.projectedCost), [210, 260]);
+});
+
+test("exact transposition capacity grows for a lone shard without unbounded multi-shard memory", () => {
+  assert.equal(exactTranspositionLimit(8, 1), 320000);
+  assert.equal(exactTranspositionLimit(8, 3), 213333);
+  assert.equal(exactTranspositionLimit(4, 3), 160000);
+  assert.equal(exactTranspositionLimit(2, 1), 240000);
+  assert.equal(exactTranspositionLimit(undefined, 1), 320000);
 });
 
 test("opportunistic bridge churn cannot delay completion of required work", () => {

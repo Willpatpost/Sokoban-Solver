@@ -3097,8 +3097,10 @@ function beamSearch(payload) {
   const seenExactDepth = new BoundedDepthMap(Math.max(8000, Math.floor(transpositionLimit / 2)));
   const handoffLimit = payload.checkpointLimit || 12;
   const progressInterval = payload.progressInterval || 5000;
+  const progressIntervalMs = payload.progressIntervalMs || 5000;
   const handoffCheckpoints = new Map();
   let visited = 0, reported = 0, bestEstimate = Infinity, bestPushes = 0;
+  let lastProgressAt = now();
   let beamCutoff = false;
   let bestCheckpoint = null;
   let bestHandoff = null;
@@ -3297,11 +3299,14 @@ function beamSearch(payload) {
         }
         }
       }
-      if (visited - reported >= progressInterval) {
+      const progressNow = now();
+      if (visited - reported >= progressInterval ||
+          progressNow - lastProgressAt >= progressIntervalMs) {
         postMessage({type: "progress", visited: (payload.progressOffset || 0) + visited,
           bestEstimate, bestPushes, frontier: beam.length, depth,
           performance: performanceSnapshot(board.metrics)});
         reported = visited;
+        lastProgressAt = progressNow;
       }
     }
     const shortlist = selectBeamLayer(
@@ -3514,6 +3519,9 @@ function boundedPushDepthFirstSearch(payload) {
   const checkpointLimit = payload.checkpointLimit || 8;
   const checkpoints = new Map();
   let visited = 0, reported = 0, cutoff = false, solution = null;
+  const progressInterval = payload.progressInterval || 5000;
+  const progressIntervalMs = payload.progressIntervalMs || 5000;
+  let lastProgressAt = now();
   let bestEstimate = Infinity, bestPushes = 0;
   let bestCheckpoint = null;
   let trackedThrough = payload.trackedSignatures ? 0 : undefined;
@@ -3525,11 +3533,14 @@ function boundedPushDepthFirstSearch(payload) {
       cutoff = true;
       return;
     }
-    if (visited - reported >= 5000) {
+    const progressNow = now();
+    if (visited - reported >= progressInterval ||
+        progressNow - lastProgressAt >= progressIntervalMs) {
       postMessage({type: "progress", visited: (payload.progressOffset || 0) + visited,
         bestEstimate, bestPushes, depth: cost, retained: transpositions.size,
         performance: performanceSnapshot(board.metrics)});
       reported = visited;
+      lastProgressAt = progressNow;
     }
     if (goal(state.boxes, board.goals)) {
       solution = segments.flatMap(segment => segment);

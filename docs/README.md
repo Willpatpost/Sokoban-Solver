@@ -243,10 +243,21 @@ Packing checkpoints retire active bridge work and extreme puzzles run only the t
 best local exact handoffs, allowing the anytime workers to begin earlier. No stored
 solution path or puzzle-specific coordinate is used.
 
+Guided beam and bounded DFS workers publish progress on both state-count and
+elapsed-time intervals, so expensive states cannot make a productive worker appear
+dead merely because it has not reached a large state-reporting threshold. If a
+guided beam nevertheless remains silent for the full watchdog interval, the
+director launches one reduced-cost recovery from the same general state. Sequence
+macros and nested endgame probes are disabled, width and state count are bounded,
+and a second watchdog failure is final rather than an unbounded restart loop.
+
 Persistent exact progress reports generated successors, threshold and incumbent-bound
 prunes, corral and cycle prunes, transposition hits and evictions, shard acceptance,
-shard rejection, maximum depth, and the next known contour threshold. Exact and
-anytime progress is sampled every 25,000 states to reduce search-log rendering cost.
+shard rejection, maximum depth, and the next known contour threshold. Exact progress
+is sampled by state count while guided workers also send bounded elapsed-time
+liveness reports. Exact transposition capacity is divided from a device-memory-aware
+total budget: a lone proof shard can retain more states, while parallel shards remain
+collectively bounded.
 
 Very large puzzles can still hit browser memory limits before the search space
 is exhausted. Ultimate Bidirectional uses compact parent records, caps each

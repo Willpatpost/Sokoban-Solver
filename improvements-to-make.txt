@@ -1,8 +1,8 @@
 Sokomind improvements and implementation status
 ===============================================
 
-Status reviewed against the repository after Improvement Sprint 8: bounded
-feature-space archives for guided beam retention.
+Status reviewed against the repository after Improvement Sprint 9: search-worker
+liveness recovery and memory-aware exact transposition capacity.
 
 Standing maintenance rules
 --------------------------
@@ -197,6 +197,43 @@ STRONG IMPLEMENTATION, WITH BOUNDED LIMITATIONS
     - Rooms, domains, or box sets over conservative size limits are skipped.
     - Some large built-in puzzle regions therefore receive no local exact result.
     - Corral conclusions are currently used conservatively as ordering signals.
+
+39. Keep expensive discovery workers live and recover a silent search lane.
+    Strong, bounded implementation in solver build 2026-07-22.20:
+    - Guided beam and bounded DFS searches report progress after either a bounded
+      number of states or five seconds, preventing their state thresholds from
+      exceeding the watchdog window on expensive puzzles.
+    - Macro workers use a 250-state reporting interval even though their primary
+      budget is only 4,000 states; anytime workers retain coarse state logging but
+      gain elapsed-time liveness reports.
+    - A watchdog-terminated guided beam is retried once from the same generic state
+      with a reduced width and budget, sequence macros disabled, and nested
+      continuation/endgame probes disabled. A second failure is final, preventing
+      an infinite restart cycle.
+    - Required-work accounting includes required recovery workers, so exact search
+      cannot launch merely because an opening phase was replaced.
+    - Regression tests cover elapsed-time progress below the state threshold and
+      the bounded director recovery policy.
+    Bounded limitations:
+    - JavaScript cannot preempt a single synchronous state expansion; an individual
+      expansion lasting the entire watchdog window can still be replaced.
+    - A fresh Huge browser run is still required to confirm that the evacuation
+      checkpoint now reaches packing and landmark-bridge consumers in production.
+
+40. Reduce exact transposition churn without multiplying browser memory use.
+    Strong, bounded implementation in solver build 2026-07-22.20:
+    - Exact workers divide a device-memory-aware total transposition budget across
+      active shards instead of always receiving 160,000 entries each.
+    - A lone shard receives up to 320,000 entries, directly addressing the observed
+      saturation and eviction slowdown, while parallel shards remain collectively
+      bounded and low-memory devices receive a smaller total budget.
+    - The selected per-shard capacity is written to the search log and deterministic
+      policy tests cover low-memory, default, and multi-shard allocations.
+    Bounded limitations:
+    - Browser device-memory reporting is coarse and sometimes unavailable; the
+      default is conservative rather than based on live heap pressure.
+    - The table still uses bounded insertion-order replacement and does not resize
+      during a contour.
 
 
 PARTIALLY DELIVERED
@@ -534,3 +571,17 @@ YET TO BE IMPLEMENTED AS BACKLOG CAPABILITIES
     combine truly independent subproblems. The proof must account for robot
     traversal, box crossings, shared staging/support cells, and ordering; a visual
     partition or a cut made only of goals is not sufficient for completeness.
+
+41. Make expensive strategic ordering analyses productivity-aware. The Huge
+    build-19 trace spent 83.6 seconds in commitment analysis while proving zero box
+    locks, and support/doorway analyses also consumed time without demonstrated
+    pruning. Instrument each analysis separately for ordering changes, proven
+    locks, and prunes; then skip or sample only ordering-only work after sustained
+    non-productivity while retaining every sound pruning and completeness rule.
+
+42. Add an end-to-end Ultimate campaign regression for checkpoint consumption.
+    Assert that an evacuation phase publishes a replayable checkpoint, packing or
+    milestone work consumes it, and eligible checkpoint/landmark pairs either start
+    a bridge or log a precise incompatibility reason. This should be a bounded
+    deterministic fixture plus a real-browser test, not an assertion tied to the
+    Huge board.

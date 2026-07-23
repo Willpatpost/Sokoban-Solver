@@ -134,11 +134,19 @@
     return selected;
   }
 
+  function exactTranspositionLimit(deviceMemory = 4, shardCount = 1) {
+    const memory = Number.isFinite(deviceMemory) && deviceMemory > 0 ? deviceMemory : 4;
+    const shards = Math.max(1, Math.floor(shardCount) || 1);
+    const totalBudget = memory >= 8 ? 640000 : memory >= 4 ? 480000 : 240000;
+    return Math.max(120000, Math.min(320000, Math.floor(totalBudget / shards)));
+  }
+
   return {
     DEFAULT_BRIDGE_LIMITS,
     createBridgeCampaignTracker,
     createRequiredWorkTracker,
     evaluateBridgeContinuation,
     selectAnytimeCheckpoints,
+    exactTranspositionLimit,
   };
 });

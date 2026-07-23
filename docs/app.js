@@ -1,7 +1,7 @@
 const LEVELS = SokomindLevels.LEVELS;
 const DIRS = {Up: [-1, 0], Down: [1, 0], Left: [0, -1], Right: [0, 1]};
 const CODE_MOVE = {U: "Up", D: "Down", L: "Left", R: "Right"};
-const SOLVER_BUILD = "2026-07-22.19";
+const SOLVER_BUILD = "2026-07-22.20";
 const SOLVER_WORKER_URL = `solver-worker.js?build=${SOLVER_BUILD}`;
 const PUSH_BOUNDS_KEY = "sokomind-push-bounds-v1";
 const KEYS = {ArrowUp: "Up", ArrowDown: "Down", ArrowLeft: "Left", ArrowRight: "Right",
@@ -545,6 +545,8 @@ function runBidirectionalSolver(purpose, analysis) {
       {beamProfile: "balanced", weight: 4, topologyWeight: 0.35,
         goalPackingWeight: 1.8, diversity: 1.1},
     ],
+    progressInterval: 250,
+    progressIntervalMs: 5000,
     phaseScope: index === 0 && recommendations.useEvacuation ? "evacuation" : "opening",
     ...settings,
   })) : [];
@@ -1020,6 +1022,7 @@ function runBidirectionalSolver(purpose, analysis) {
         endgameAttempts: 12,
         endgameProfiles: ["room-flow", "balanced", "setup"],
         progressInterval: 25000,
+        progressIntervalMs: 5000,
         ...profiles[index % profiles.length],
       });
     });
@@ -1037,13 +1040,17 @@ function runBidirectionalSolver(purpose, analysis) {
     const anytimeWorkers = launchAnytimeDiscovery(Math.max(0, Math.min(2, availableSlots - 1)));
     exactRoundShardCount = anytimeWorkers
       ? 1 : Math.max(1, Math.min(3, hardware, availableSlots));
+    const exactTranspositionLimit = SokomindDirectorPolicy.exactTranspositionLimit(
+      navigator.deviceMemory,
+      exactRoundShardCount,
+    );
     const round = ++exactRound;
     const exactBound = discardedExactIncumbent ? Infinity : currentUpperBound() ?? Infinity;
     expectedWorkers += exactRoundShardCount;
     appendSearchLog("director", "Started persistent partitioned exact contour", {
       round, shards: exactRoundShardCount, shardDepth: 4, anytimeWorkers,
       bound: Number.isFinite(exactBound) ? exactBound : "unbounded",
-      transpositionsPerShard: "160,000",
+      transpositionsPerShard: exactTranspositionLimit.toLocaleString(),
     });
     for (let index = 0; index < exactRoundShardCount; index++) {
       launch({
@@ -1056,7 +1063,7 @@ function runBidirectionalSolver(purpose, analysis) {
         exactShard: {index, count: exactRoundShardCount, depth: 4},
         upperBound: exactBound,
         maxVisited: Number.MAX_SAFE_INTEGER,
-        transpositionLimit: 160000,
+        transpositionLimit: exactTranspositionLimit,
         progressInterval: 25000,
         forcedMacros: false,
         seed: 911 + index * 104729,
@@ -1203,6 +1210,31 @@ function runBidirectionalSolver(purpose, analysis) {
         appendSearchLog("director", "Recovering interrupted exact shard", {
           shard: `${plan.exactShard.index + 1}/${plan.exactShard.count}`,
           reason,
+        });
+        launch(recovery);
+        return;
+      }
+      if (reason === "watchdog" && plan.algorithm === "push-beam" &&
+          (plan.watchdogRecovery || 0) < 1) {
+        expectedWorkers++;
+        const recovery = {
+          ...plan,
+          label: `${plan.label} Recovery`,
+          watchdogRecovery: (plan.watchdogRecovery || 0) + 1,
+          beamWidth: Math.min(plan.beamWidth || 200, 200),
+          maxVisited: Math.min(plan.maxVisited || 100000, 100000),
+          progressInterval: Math.min(plan.progressInterval || 1000, 1000),
+          progressIntervalMs: 5000,
+          sequenceMacros: false,
+          continuationVisited: 0,
+          endgameVisited: 0,
+        };
+        if (isRequiredPlan(recovery)) requiredWork.schedule();
+        appendSearchLog("director", "Recovering silent discovery worker", {
+          source: plan.label,
+          recovery: recovery.label,
+          width: recovery.beamWidth,
+          budget: recovery.maxVisited.toLocaleString(),
         });
         launch(recovery);
         return;
