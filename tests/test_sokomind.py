@@ -1,5 +1,7 @@
 import io
 import json
+import math
+import random
 import tempfile
 import unittest
 from collections import deque
@@ -12,10 +14,15 @@ from Searches.Sokomind import (
     BUILTIN_PUZZLES,
     CONFORMANCE_PATH,
     HEURISTIC_CACHE_SIZE,
+    ASSIGNMENT_TELEMETRY,
+    PYTHON_INCREMENTAL_ASSIGNMENT_CROSSOVER,
     PuzzleError,
     SearchStatus,
     _heuristic_for_layout,
+    _matching_cost,
     _minimum_assignment_cost,
+    _minimum_assignment,
+    _repair_minimum_assignment,
     _reachable_parents,
     _reconstruct_walk,
     apply_move,
@@ -158,6 +165,86 @@ class SokomindTests(unittest.TestCase):
         for index in range(2, 9):
             costs[index][index] = 0
         self.assertEqual(float("inf"), _minimum_assignment_cost(costs))
+
+    def test_one_row_assignment_repair_matches_full_hungarian(self):
+        generator = random.Random(1729)
+        for size in range(1, 8):
+            for _sample in range(120):
+                costs = [
+                    [
+                        generator.randrange(30)
+                        if row == column or generator.random() > 0.12
+                        else math.inf
+                        for column in range(size)
+                    ]
+                    for row in range(size)
+                ]
+                previous = _minimum_assignment(costs)
+                changed_row = generator.randrange(size)
+                changed = [list(row) for row in costs]
+                changed[changed_row] = [
+                    generator.randrange(30)
+                    if column == changed_row or generator.random() > 0.12
+                    else math.inf
+                    for column in range(size)
+                ]
+                repaired = _repair_minimum_assignment(previous, changed, changed_row)
+                self.assertIsNotNone(repaired)
+                self.assertEqual(
+                    _minimum_assignment_cost(changed),
+                    repaired.cost,
+                    (size, changed_row),
+                )
+
+    def test_one_row_assignment_repair_rejects_an_unreachable_row(self):
+        costs = [[0, 5, math.inf], [4, 0, 6], [7, 8, 0]]
+        previous = _minimum_assignment(costs)
+        changed = [list(row) for row in costs]
+        changed[1] = [math.inf, math.inf, math.inf]
+        self.assertEqual(math.inf, _minimum_assignment_cost(changed))
+        self.assertIsNone(_repair_minimum_assignment(previous, changed, 1))
+
+    def test_python_successors_reuse_unchanged_assignment_rows(self):
+        profile = json.loads(
+            (Path(__file__).parents[1] / "bench" / "assignment-crossover.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(
+            profile["python"]["crossover"],
+            PYTHON_INCREMENTAL_ASSIGNMENT_CROSSOVER,
+        )
+        state = parse_puzzle(
+            [
+                "OOOOOOOOO",
+                "O R     O",
+                "O XXXXX O",
+                "O       O",
+                "O SSSSS O",
+                "OOOOOOOOO",
+            ]
+        )
+        self.assertEqual(5, PYTHON_INCREMENTAL_ASSIGNMENT_CROSSOVER)
+        self.assertTrue(math.isfinite(state.heuristic))
+        before = dict(ASSIGNMENT_TELEMETRY)
+        child = get_push_neighbors(state)[0][0]
+        self.assertTrue(math.isfinite(child.heuristic))
+        self.assertEqual(
+            before["incremental_calls"] + 1,
+            ASSIGNMENT_TELEMETRY["incremental_calls"],
+        )
+        self.assertEqual(
+            before["rows_reused"] + 4,
+            ASSIGNMENT_TELEMETRY["rows_reused"],
+        )
+        self.assertEqual(
+            _matching_cost(
+                tuple(position for label, position in child.boxes if label == "X"),
+                tuple(sorted(child.board.generic_goals)),
+                child.board.rows,
+            ),
+            child.heuristic,
+        )
 
     def test_heuristic_cache_is_bounded_and_keyed_by_layout(self):
         state = parse_puzzle(["OOOOO", "O R O", "O A O", "O a O", "OOOOO"])

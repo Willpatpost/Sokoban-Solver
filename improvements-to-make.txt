@@ -344,7 +344,7 @@ These hot-path foundations reduce the cost of every later exact, heuristic, and
 decomposition feature.
 
 8. Replace repeated single-box searches with a compiled push graph.
-   Current status: Strong, bounded.
+   Current status: Done in build 2026-07-23.28.
    Existing foundation:
    - Geometry nodes encode box cells and robot-region representatives; compiled
      transitions match the reference implementation.
@@ -352,9 +352,14 @@ decomposition feature.
    - Compile reusable reverse feasibility/distance tables from typed goals.
    - Preserve generic-goal compatibility and prove equivalence against the current
      player-aware search on generated boards.
+   Completion notes:
+   - Typed and generic goals now own reusable reverse feasibility/distance tables
+     compiled from the single-box graph.
+   - Mirrored and rotated generated-board tests compare every floor-to-goal entry
+     with the independent player-aware reference search.
 
 9. Replace string-heavy hot-path state data with dense representations.
-   Current status: Strong, bounded.
+   Current status: Done in build 2026-07-23.28.
    Existing foundation:
    - Dense cell IDs, typed arrays, packed collision-free BigInt identities, compact
      parents, and deferred walk reconstruction serve all major browser searches.
@@ -364,9 +369,15 @@ decomposition feature.
    - Add box occupancy bitsets and incrementally updated identities where profiling
      proves a gain.
    - Retain readable boundary formats only for protocol, logs, and diagnostics.
+   Completion notes:
+   - Immutable layouts cache typed cells, labels, tokens, cell indices, occupancy
+     bitsets, compact signatures, and collision-free identities.
+   - Successors use copy-on-write dense containers and update only the moved box,
+     affected occupancy words, and identity; telemetry separates builds and
+     derivations.
 
 10. Reuse immutable board analysis across web workers.
-    Current status: Strong, bounded.
+    Current status: Done in build 2026-07-23.28.
     Existing foundation:
     - Prepared seeds share topology, push distances, dense indices, graphs, and
       completed interaction tables through structured cloning.
@@ -375,18 +386,31 @@ decomposition feature.
      reuse every safe immutable analysis product.
    - Treat lack of SharedArrayBuffer on ordinary GitHub Pages as a platform
      boundary, not a reason to duplicate avoidable computation.
+   Completion notes:
+   - Prepared seeds now reuse typed-goal tables, seeded player push distances, and
+     goal-room packing tables in addition to topology, indices, and compiled graph.
+   - The reviewed Huge Node profile records a 106,838-byte estimate and median
+     55.463 ms build, 2.377 ms structured clone, and 19.354 ms hydration. Standard
+     cloning remains the portable GitHub Pages boundary.
 
 36. Incrementally update exact box-to-goal assignments after one box moves.
-    Current status: Strong, bounded.
+    Current status: Done in build 2026-07-23.28.
     Existing foundation:
-    - Browser matching reuses unchanged rows and repairs groups of at least five
-      boxes with one O(n^2) augmenting path, exactly matching full Hungarian results.
+    - Browser matching already reused unchanged rows and repaired larger groups
+      with one O(n^2) augmenting path, exactly matching full Hungarian results.
    Finish gate:
    - Profile and select the optimal crossover automatically or from reviewed data.
    - Port the safe incremental representation to Python.
    - Retain randomized equivalence tests, unreachable-edge coverage, and telemetry;
      document why O(n) is unattainable if the exact assignment update requires
      O(n^2) information.
+   Completion notes:
+   - Reviewed seven-sample profiles select crossover 3 for JavaScript and 5 for
+     Python; both runtimes retain exact full-Hungarian fallback.
+   - Python now carries safe parent assignment hints and repairs one row exactly.
+     Randomized, unreachable-edge, successor, and telemetry tests cover both paths.
+   - An exact augmenting path may inspect every row/goal edge, so the general
+     one-row repair is O(n^2), not O(n).
 
 Sprint completion gate:
 All four items are Done, both runtimes retain exact assignment semantics, and the

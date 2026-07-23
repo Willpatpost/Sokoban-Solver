@@ -80,7 +80,7 @@ test("every public algorithm returns the same versioned performance schema", () 
     const keys = Object.keys(result.performance).sort();
     if (expectedKeys === null) expectedKeys = keys;
     else assert.deepEqual(keys, expectedKeys, `${algorithm} changed performance schema`);
-    assert.equal(result.performance.schemaVersion, 1);
+    assert.equal(result.performance.schemaVersion, 2);
     assert.deepEqual(Object.keys(result.performance.memory).sort(), MEMORY_KEYS);
     assert.deepEqual(JSON.parse(JSON.stringify(result.performance.memory)), {
       supported: false,

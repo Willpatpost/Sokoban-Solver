@@ -42,17 +42,20 @@ rather than exact retained-object measurements.
 Canonical box layouts retain collision-free dense base-36 keys for memo tables
 and worker boundaries. Hot search transposition maps instead use collision-free
 packed `BigInt` identities that combine sorted typed-box cell tokens with the
-exact robot cell or canonical reachable-region ID. Immutable box arrays cache
-their packed identity, and diversity sharding hashes that dense value directly.
-Search telemetry reports both string-signature and packed-identity activity.
-Successor layouts also retain a weak parent hint for the one box that moved.
+exact robot cell or canonical reachable-region ID. Each immutable layout caches
+typed cell/label/token arrays, a cell-to-box index, and an occupancy bitset.
+Successors copy only those dense containers and update the moved box, its bit
+words, and its identity; readable coordinates remain at protocol and diagnostic
+boundaries. Search telemetry distinguishes full layout builds from these
+copy-on-write derivations.
 When the parent's exact Hungarian assignment is cached, the heuristic reuses all
 unchanged cost rows and repairs the matching with one O(n-squared) augmenting-path
-update instead of rebuilding it in O(n-cubed). Repair is enabled for label groups
-of at least five boxes, where profiling supports the tradeoff; smaller groups keep
-the simpler full calculation. Deterministic matrix tests compare
-the repair against full recomputation, and telemetry reports repairs, fallbacks,
-and reused rows.
+update instead of rebuilding it in O(n-cubed). Reviewed profiles select groups of
+at least three boxes in JavaScript and five in Python; smaller groups keep the
+simpler full calculation. The exact update may inspect every row/goal edge while
+finding its augmenting path, so O(n) is not generally possible. Randomized and
+unreachable-edge tests compare repair against full recomputation, and telemetry
+reports repairs, fallbacks, and reused rows.
 
 Bounded goal rooms can also compile relaxed multi-box pattern tables for groups
 of two to four labels whose complete goal sets belong to that room. The reverse
@@ -75,13 +78,17 @@ assignments retain the Hungarian bound.
 
 Ultimate Bidirectional's planning worker also returns a clone-safe prepared-board
 seed. Subsequent portfolio workers reuse its immutable geometry, topology,
-reverse-distance tables, dense indices, and compiled single-box graph while
+typed-goal reverse-distance tables, seeded player-aware push distances, dense
+indices, compiled single-box graph, and goal-room packing tables while
 creating private heuristic, deadlock, and signature caches. Workers verify the
 exact board contents and schema before reuse and rebuild normally on a mismatch.
 Compiled room-pattern and pair-conflict tables are included in that seed so
 portfolio workers do not repeat their bounded reverse enumeration.
 This uses standard structured cloning because shared memory requires
 cross-origin isolation headers that GitHub Pages does not reliably provide.
+The reviewed Huge profile estimates a 106,838-byte seed and measured median
+55.463 ms construction, 2.377 ms cloning, and 19.354 ms hydration under Node
+24.14.0; browser lifecycle telemetry remains the authoritative deployment view.
 The adjacent `{ }` control copies the complete run as newline-delimited JSON.
 Each event includes a schema version, run ID, sequence number, timestamp, elapsed
 milliseconds, solver build, level, category, message, and typed statistics.

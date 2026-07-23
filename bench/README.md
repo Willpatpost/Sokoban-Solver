@@ -31,6 +31,31 @@ Gate the reviewed smoke and validation counters and heap envelopes:
 node bench/performance-gate.js
 ```
 
+Profile the exact-assignment one-row repair crossover in both runtimes:
+
+```powershell
+node bench/profile-assignment.js
+python bench/profile_assignment.py
+```
+
+The reviewed result is stored in `assignment-crossover.json`. JavaScript repairs
+groups of at least three boxes and Python repairs groups of at least five; below
+those thresholds a full Hungarian calculation was faster on the reviewed
+runtimes. An exact one-row update still needs an augmenting path across the
+matching and therefore reads O(n-squared) cost information in the worst case;
+it cannot generally be reduced to O(n).
+
+Profile construction, structured cloning, and hydration of the Huge prepared
+board:
+
+```powershell
+node bench/profile-prepared-board.js
+```
+
+`prepared-board-profile.json` records the reviewed machine result. It is
+diagnostic rather than a timing gate because worker startup and structured-clone
+latency vary by browser and machine.
+
 `performance-baselines.json` records visited/generated/retained states, frontier
 peaks, transposition evictions, and isolated-process heap peaks. Deterministic
 counters use narrow reviewed tolerances. Heap has a separate wider tolerance,
@@ -72,8 +97,9 @@ The final JSON object contains:
 - `performance`: worker-owned hot-path timings, call counts, cache hits, compiled
   graph size, dense-board build size/time, generated push candidates, retained
   pushes, compact-signature construction/cache behavior, and deadlock prunes.
-  Prepared-board reuse and safe-fallback counts are included when a caller
-  supplies a planner-generated immutable board seed.
+  Dense-layout derivations, occupancy-bitset copies, typed-goal reverse-table
+  hits, assignment repairs, prepared-board hydration, and safe-fallback counts
+  are included when applicable.
 - Each case also includes `runnerLifecycle` for worker loading, search,
   validation, total time, and heap delta, plus `processLifecycle` for first
   output, result delivery, shutdown, and total child-process time. Heap fields

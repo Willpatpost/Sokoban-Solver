@@ -3,6 +3,8 @@ const fs = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
 const vm = require("node:vm");
+const assignmentProfile = require("../bench/assignment-crossover.json");
+const {mirrorRows, rotateRows} = require("../bench/generated-cases.js");
 
 function loadWorker(postMessage = () => {}) {
   const source = ["solver-engine.js", "solver-search.js"]
@@ -207,6 +209,10 @@ test("Hungarian matching enforces distinct goals and detects Hall deadlocks", ()
 
 test("one-row Hungarian repair exactly matches full recomputation", () => {
   const worker = loadWorker();
+  assert.equal(
+    worker.incrementalAssignmentCrossover(),
+    assignmentProfile.javascript.crossover,
+  );
   let seed = 0x51f15e;
   const random = () => {
     seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
@@ -446,6 +452,38 @@ test("compiled single-box graph matches the reference search on medium and Huge 
   }
 });
 
+test("typed reverse goal tables match player-aware searches on transformed boards", () => {
+  const worker = loadWorker();
+  const source = ["OOOOOOO", "Oa   SO", "O A X O", "O  R  O", "OOOOOOO"];
+  const boards = [source, mirrorRows(source), rotateRows(source)];
+  for (const rows of boards) {
+    const board = worker.parse(stateFromRows(rows));
+    for (const [goal, label] of board.goals) {
+      assert.ok(
+        board.goalPushTables.byLabel.get(label).some(table => table.goal === goal),
+        `${label} omitted ${goal}`,
+      );
+      for (const start of board.floor) {
+        const reference = worker.playerAwarePushDistancesReference(board.floor, start);
+        assert.equal(
+          worker.compiledGoalPushDistance(board, start, goal),
+          reference.get(goal) ?? Infinity,
+          `${start} -> ${goal}`,
+        );
+      }
+    }
+    for (const label of ["A", "X"]) {
+      assert.deepEqual(
+        [...board.goalPushTables.byLabel.get(label)].map(table => table.goal).sort(),
+        [...board.goals]
+          .filter(([, goalLabel]) => goalLabel === label)
+          .map(([goal]) => goal)
+          .sort(),
+      );
+    }
+  }
+});
+
 test("dense board reachability preserves reference regions and exact walking paths", () => {
   const worker = loadWorker();
   const parsed = stateFromRows([
@@ -478,6 +516,40 @@ test("dense board reachability preserves reference regions and exact walking pat
   for (const [position, id] of board.dense.idByKey) {
     assert.equal(board.dense.keys[id], position);
   }
+});
+
+test("successors derive immutable dense layouts and occupancy indices", () => {
+  const worker = loadWorker();
+  const parsed = stateFromRows([
+    "OOOOOO", "O R  O", "O AX O", "O aS O", "OOOOOO",
+  ]);
+  const board = worker.parse(parsed);
+  const state = {
+    robot: parsed.robot,
+    boxes: parsed.boxes.map(([position, label]) => [...position.split(",").map(Number), label]),
+  };
+  const parentLayout = worker.denseBoxLayout(state.boxes, board);
+  const child = worker.pushNeighbors(state, board)[0];
+  assert.ok(child);
+  const childLayout = worker.denseBoxLayout(child.boxes, board);
+  assert.notEqual(childLayout.cells, parentLayout.cells);
+  assert.notEqual(childLayout.indexByCell, parentLayout.indexByCell);
+  assert.equal(parentLayout.indexByCell[parentLayout.cells[0]], 0);
+  childLayout.cells.forEach((cell, index) => {
+    assert.equal(childLayout.indexByCell[cell], index);
+    assert.notEqual(childLayout.occupancyBits[cell >>> 5] & (1 << (cell & 31)), 0);
+  });
+  assert.equal(
+    worker.boxSignature(child.boxes, board),
+    worker.boxSignature(child.boxes.map(box => [...box]), board),
+  );
+  assert.equal(
+    worker.packedBoxIdentity(child.boxes, board),
+    worker.packedBoxIdentity(child.boxes.map(box => [...box]), board),
+  );
+  assert.ok(board.metrics.denseLayoutDerivations > 0);
+  assert.ok(board.metrics.denseIdentityUpdates > 0);
+  assert.ok(board.metrics.occupancyWordCopies > 0);
 });
 
 test("dynamic support dependencies identify blocker routes and enabling pushes", () => {
@@ -812,8 +884,12 @@ test("prepared board seeds are clone-safe and preserve search results", () => {
   assert.notEqual(firstBoard.shortestCorridorMemo, secondBoard.shortestCorridorMemo);
   assert.notEqual(firstBoard.localCorralMemo, secondBoard.localCorralMemo);
   assert.notEqual(firstBoard.doorwayFlowMemo, secondBoard.doorwayFlowMemo);
+  assert.notEqual(firstBoard.denseBoxMemo, secondBoard.denseBoxMemo);
   assert.notEqual(firstBoard.boxSignatureMemo, secondBoard.boxSignatureMemo);
   assert.equal(firstBoard.topology, secondBoard.topology);
+  assert.equal(firstBoard.goalPushTables, secondBoard.goalPushTables);
+  assert.ok(preparedBoard.playerPushDistances.size > 0);
+  assert.ok(preparedBoard.estimatedBytes > 0);
   const baseline = worker.search({algorithm: "push-astar", state});
   const reused = worker.search({
     algorithm: "push-astar",
@@ -826,6 +902,12 @@ test("prepared board seeds are clone-safe and preserve search results", () => {
   assert.equal(reused.performance.preparedBoardFallbacks, 0);
   assert.equal(reused.performance.graphCompileMs, 0);
   assert.equal(reused.performance.denseBuildMs, 0);
+  assert.equal(reused.performance.goalTableMs, 0);
+  assert.ok(reused.performance.preparedBoardHydrateMs >= 0);
+  assert.equal(
+    reused.performance.preparedPlayerDistanceTables,
+    preparedBoard.playerPushDistances.size,
+  );
   assert.ok(reused.performance.graphNodes > 0);
 });
 
@@ -998,6 +1080,14 @@ test("puzzle analysis builds a board-derived worker plan", () => {
   assert.ok(analysis.reverseStartRegions >= 1);
   assert.ok(analysis.productiveReverseStartRegions >= 1);
   assert.ok(analysis.reverseStartPulls >= analysis.productiveReverseStartRegions);
+  assert.ok(analysis.preparedBoardStats.estimatedBytes > 0);
+  assert.ok(analysis.preparedBoardStats.buildMs >= 0);
+  assert.equal(analysis.preparedBoardStats.goalTables, analysis.goals);
+  assert.ok(analysis.preparedBoardStats.playerDistanceTables > 0);
+  assert.equal(
+    analysis.preparedBoardStats.playerDistanceTables,
+    analysis.preparedBoard.playerPushDistances.size,
+  );
   assert.deepEqual(
     Array.from(analysis.phases, phase => phase.id).slice(0, 2),
     ["evacuation", "room-packing"],

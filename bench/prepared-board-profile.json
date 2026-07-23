@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "reviewed": "2026-07-23",
+  "build": "2026-07-23.28",
+  "runtime": "Node 24.14.0",
+  "level": "huge",
+  "rounds": 7,
+  "preparedBytesEstimate": 106838,
+  "goalTables": 17,
+  "playerDistanceTables": 60,
+  "graphNodes": 130,
+  "graphEdges": 286,
+  "medianBuildMs": 55.463,
+  "medianStructuredCloneMs": 2.377,
+  "medianHydrateMs": 19.354
+}

@@ -8,6 +8,85 @@ function boxSignatureReference(boxes) {
   return boxes.map(box => box.join(",")).sort().join(";");
 }
 
+function packedIdentityFromTokens(tokens, board) {
+  const sorted = Uint32Array.from(tokens);
+  sorted.sort();
+  const shift = BigInt(board.dense.tokenBits);
+  let identity = BigInt(tokens.length);
+  for (const value of sorted) identity = (identity << shift) | BigInt(value);
+  return {
+    identity,
+    signature: [...sorted].map(value => value.toString(36)).join("."),
+  };
+}
+
+function denseBoxLayout(boxes, board) {
+  const cached = board.denseBoxMemo.get(boxes);
+  if (cached) return cached;
+  const cells = new Uint32Array(boxes.length);
+  const labels = new Uint16Array(boxes.length);
+  const tokens = new Uint32Array(boxes.length);
+  const indexByCell = new Int32Array(board.dense.keys.length);
+  const occupancyBits = new Uint32Array(Math.ceil(board.dense.keys.length / 32));
+  indexByCell.fill(-1);
+  let valid = true;
+  for (let index = 0; index < boxes.length; index++) {
+    const [y, x, label] = boxes[index];
+    const cell = board.dense.idByKey.get(pkey(y, x));
+    const labelId = board.dense.labelIds.get(label);
+    if (cell === undefined || labelId === undefined) {
+      valid = false;
+      continue;
+    }
+    cells[index] = cell;
+    labels[index] = labelId;
+    tokens[index] = labelId * board.dense.keys.length + cell;
+    indexByCell[cell] = index;
+    occupancyBits[cell >>> 5] |= 1 << (cell & 31);
+  }
+  const packed = valid
+    ? packedIdentityFromTokens(tokens, board)
+    : {identity: null, signature: boxSignatureReference(boxes)};
+  const layout = {cells, labels, tokens, indexByCell, occupancyBits, valid, ...packed};
+  board.denseBoxMemo.set(boxes, layout);
+  board.metrics.denseLayoutBuilds++;
+  board.metrics.occupancyWordsBuilt += occupancyBits.length;
+  return layout;
+}
+
+function deriveDenseBoxLayout(parentBoxes, boxes, changedIndex, destinationId, board) {
+  const parent = denseBoxLayout(parentBoxes, board);
+  if (!parent.valid) {
+    denseBoxLayout(boxes, board);
+    return;
+  }
+  const cells = parent.cells.slice();
+  const labels = parent.labels;
+  const tokens = parent.tokens.slice();
+  const indexByCell = parent.indexByCell.slice();
+  const occupancyBits = parent.occupancyBits.slice();
+  const previousId = cells[changedIndex];
+  cells[changedIndex] = destinationId;
+  tokens[changedIndex] = labels[changedIndex] * board.dense.keys.length + destinationId;
+  indexByCell[previousId] = -1;
+  indexByCell[destinationId] = changedIndex;
+  occupancyBits[previousId >>> 5] &= ~(1 << (previousId & 31));
+  occupancyBits[destinationId >>> 5] |= 1 << (destinationId & 31);
+  const packed = packedIdentityFromTokens(tokens, board);
+  board.denseBoxMemo.set(boxes, {
+    cells,
+    labels,
+    tokens,
+    indexByCell,
+    occupancyBits,
+    valid: true,
+    ...packed,
+  });
+  board.metrics.denseLayoutDerivations++;
+  board.metrics.occupancyWordCopies += occupancyBits.length;
+  board.metrics.denseIdentityUpdates++;
+}
+
 function boxSignature(boxes, board = null) {
   const metrics = board?.metrics;
   if (metrics) metrics.signatureCalls++;
@@ -18,20 +97,7 @@ function boxSignature(boxes, board = null) {
   const started = metrics ? now() : 0;
   let signature = null;
   if (board) {
-    const encoded = [];
-    for (const [y, x, label] of boxes) {
-      const cell = board.dense.idByKey.get(pkey(y, x));
-      const labelId = board.dense.labelIds.get(label);
-      if (cell === undefined || labelId === undefined) {
-        encoded.length = 0;
-        break;
-      }
-      encoded.push(labelId * board.dense.keys.length + cell);
-    }
-    if (encoded.length === boxes.length) {
-      encoded.sort((left, right) => left - right);
-      signature = encoded.map(value => value.toString(36)).join(".");
-    }
+    signature = denseBoxLayout(boxes, board).signature;
   }
   signature ??= boxSignatureReference(boxes);
   if (board) board.boxSignatureMemo.set(boxes, signature);
@@ -49,22 +115,13 @@ function packedBoxIdentity(boxes, board) {
     metrics.packedIdentityCacheHits++;
     return board.boxIdentityMemo.get(boxes);
   }
-  const encoded = new Uint32Array(boxes.length);
-  for (let index = 0; index < boxes.length; index++) {
-    const [y, x, label] = boxes[index];
-    const cell = board.dense.idByKey.get(pkey(y, x));
-    const labelId = board.dense.labelIds.get(label);
-    if (cell === undefined || labelId === undefined) {
-      throw new Error(`Cannot densely encode box ${label} at ${y},${x}.`);
-    }
-    encoded[index] = labelId * board.dense.keys.length + cell;
+  const layout = denseBoxLayout(boxes, board);
+  if (!layout.valid) {
+    throw new Error("Cannot densely encode a box outside the prepared board.");
   }
-  encoded.sort();
-  const shift = BigInt(board.dense.tokenBits);
-  let identity = BigInt(boxes.length);
-  for (const value of encoded) identity = (identity << shift) | BigInt(value);
+  const identity = layout.identity;
   board.boxIdentityMemo.set(boxes, identity);
-  metrics.packedIdentityValues += encoded.length;
+  metrics.packedIdentityValues += layout.tokens.length;
   return identity;
 }
 
@@ -97,6 +154,10 @@ const PATTERN_DEADLOCK_MEMO_LIMIT = 10000;
 const ROOM_PATTERN_MAX_STATES = 12000;
 const PAIR_CONFLICT_MAX_STATES = 4000;
 const PAIR_CONFLICT_DISTANCE_LIMIT = 18;
+const INCREMENTAL_ASSIGNMENT_CROSSOVER = 3;
+function incrementalAssignmentCrossover() {
+  return INCREMENTAL_ASSIGNMENT_CROSSOVER;
+}
 const COMMITMENT_MEMO_LIMIT = 10000;
 const SUPPORT_DEPENDENCY_MEMO_LIMIT = 10000;
 const LOCAL_ROOM_MEMO_LIMIT = 5000;
@@ -145,7 +206,7 @@ function createPerformanceMetrics() {
     _startedAt: now(),
     _heapStartBytes: null,
     _heapSource: null,
-    schemaVersion: 1,
+    schemaVersion: 2,
     totalMs: 0,
     heapSupported: false,
     heapUsedBytes: null,
@@ -158,6 +219,11 @@ function createPerformanceMetrics() {
     graphEdges: 0,
     denseCells: 0,
     denseBuildMs: 0,
+    denseLayoutBuilds: 0,
+    denseLayoutDerivations: 0,
+    denseIdentityUpdates: 0,
+    occupancyWordsBuilt: 0,
+    occupancyWordCopies: 0,
     signatureCalls: 0,
     signatureCacheHits: 0,
     signatureCharacters: 0,
@@ -167,6 +233,9 @@ function createPerformanceMetrics() {
     packedIdentityValues: 0,
     preparedBoardReuses: 0,
     preparedBoardFallbacks: 0,
+    preparedBoardHydrateMs: 0,
+    preparedSeedBytes: 0,
+    preparedPlayerDistanceTables: 0,
     heuristicCalls: 0,
     heuristicCacheHits: 0,
     heuristicMs: 0,
@@ -215,6 +284,10 @@ function createPerformanceMetrics() {
     pushDistanceCalls: 0,
     pushDistanceCacheHits: 0,
     pushDistanceMs: 0,
+    goalTableBuilds: 0,
+    goalTableStates: 0,
+    goalTableHits: 0,
+    goalTableMs: 0,
     reachabilityCalls: 0,
     reachabilityCells: 0,
     reachabilityMs: 0,
@@ -250,7 +323,10 @@ function performanceSnapshot(metrics) {
     samples: metrics.heapSamples,
     gcControlled: false,
   };
-  for (const key of ["totalMs", "parseMs", "graphCompileMs", "denseBuildMs", "signatureMs", "heuristicMs", "commitmentMs", "supportDependencyMs", "localRoomMs", "localCorralMs", "doorwayFlowMs", "pushDistanceMs", "reachabilityMs"]) {
+  for (const key of ["totalMs", "parseMs", "graphCompileMs", "denseBuildMs",
+    "preparedBoardHydrateMs", "signatureMs", "heuristicMs", "commitmentMs",
+    "supportDependencyMs", "localRoomMs", "localCorralMs", "doorwayFlowMs",
+    "pushDistanceMs", "goalTableMs", "reachabilityMs"]) {
     rounded[key] = Math.round((rounded[key] || 0) * 1000) / 1000;
   }
   return rounded;
@@ -503,10 +579,35 @@ function analyzeTopology(floor, goals) {
   return {articulations, rooms, tunnels};
 }
 
-const PREPARED_BOARD_SCHEMA = 2;
+const PREPARED_BOARD_SCHEMA = 3;
 const boardContentKey = rows => rows.join("\n");
 
+function estimatePreparedBoardBytes(board) {
+  const stringBytes = values => [...values].reduce((sum, value) => sum + 2 * value.length, 0);
+  const nestedMapEntries = map => [...map.values()].reduce(
+    (sum, value) => sum + (value?.size || 0),
+    0,
+  );
+  return (
+    stringBytes(board.rows) +
+    stringBytes(board.floor) +
+    stringBytes(board.walls) +
+    stringBytes(board.goals.keys()) +
+    board.dense.y.byteLength +
+    board.dense.x.byteLength +
+    board.dense.neighbors.byteLength +
+    board.singleBoxGraph.nodes.size * 32 +
+    board.metrics.graphEdges * 16 +
+    nestedMapEntries(board.pushDistances) * 12 +
+    nestedMapEntries(board.goalPushTables.byGoal) * 12 +
+    nestedMapEntries(board.playerPushDistances) * 12
+  );
+}
+
 function createPreparedBoardSeed(board) {
+  const estimatedBytes = estimatePreparedBoardBytes(board);
+  board.metrics.preparedSeedBytes = estimatedBytes;
+  board.metrics.preparedPlayerDistanceTables = board.playerPushDistances.size;
   return {
     schemaVersion: PREPARED_BOARD_SCHEMA,
     boardContentKey: boardContentKey(board.rows),
@@ -518,11 +619,15 @@ function createPreparedBoardSeed(board) {
     goalPressure: board.goalPressure,
     topology: board.topology,
     singleBoxGraph: board.singleBoxGraph,
+    goalPushTables: board.goalPushTables,
+    playerPushDistances: board.playerPushDistances,
     dense: board.dense,
+    goalRoomPackingTables: board.goalRoomPackingTables,
     roomPatternTables: board.roomPatternTables,
     pairConflictTables: board.pairConflictTables,
     graphNodes: board.metrics.graphNodes,
     graphEdges: board.metrics.graphEdges,
+    estimatedBytes,
   };
 }
 
@@ -531,15 +636,22 @@ function preparedBoardMatches(data, seed) {
     seed.boardContentKey === boardContentKey(data.rows) &&
     typeof seed.floor?.has === "function" && typeof seed.goals?.get === "function" &&
     typeof seed.singleBoxGraph?.nodes?.get === "function" &&
+    typeof seed.goalPushTables?.byGoal?.get === "function" &&
     typeof seed.dense?.idByKey?.get === "function";
 }
 
 function hydratePreparedBoard(data, seed, metrics) {
+  const started = now();
   metrics.preparedBoardReuses++;
   metrics.graphNodes = seed.graphNodes;
   metrics.graphEdges = seed.graphEdges;
   metrics.denseCells = seed.dense.keys.length;
-  return {
+  metrics.preparedSeedBytes = seed.estimatedBytes || 0;
+  metrics.preparedPlayerDistanceTables = seed.playerPushDistances?.size || 0;
+  metrics.goalTableBuilds = seed.goalPushTables.byGoal.size;
+  metrics.goalTableStates = [...seed.goalPushTables.byGoal.values()]
+    .reduce((sum, distances) => sum + distances.size, 0);
+  const board = {
     rows: data.rows,
     floor: seed.floor,
     walls: seed.walls,
@@ -549,11 +661,12 @@ function hydratePreparedBoard(data, seed, metrics) {
     goalPressure: seed.goalPressure,
     topology: seed.topology,
     singleBoxGraph: seed.singleBoxGraph,
+    goalPushTables: seed.goalPushTables,
     dense: seed.dense,
     heuristicMemo: new Map(),
     assignmentMemo: new WeakMap(),
     assignmentParentMemo: new WeakMap(),
-    playerPushDistances: new Map(),
+    playerPushDistances: new Map(seed.playerPushDistances || []),
     deadlockMemo: new Map(),
     patternDeadlockMemo: new Map(),
     patternWindowMemo: new Map(),
@@ -562,16 +675,19 @@ function hydratePreparedBoard(data, seed, metrics) {
     commitmentPushDistances: new Map(),
     supportDependencyMemo: new Map(),
     localRoomMemo: new Map(),
-    goalRoomPackingTables: new Map(),
+    goalRoomPackingTables: new Map(seed.goalRoomPackingTables || []),
     roomPatternTables: new Map(seed.roomPatternTables || []),
     pairConflictTables: new Map(seed.pairConflictTables || []),
     shortestCorridorMemo: new Map(),
     localCorralMemo: new Map(),
     doorwayFlowMemo: new Map(),
+    denseBoxMemo: new WeakMap(),
     boxSignatureMemo: new WeakMap(),
     boxIdentityMemo: new WeakMap(),
     metrics,
   };
+  metrics.preparedBoardHydrateMs += now() - started;
+  return board;
 }
 
 function validatePuzzleRows(rows) {
@@ -642,9 +758,10 @@ function parse(data) {
     goal,
     floor.size / Math.max(1, pushDistances.get(goal).size),
   ]));
-  const topology = analyzeTopology(floor, goals);
   const dense = compileDenseBoard(floor, goals, metrics);
   const singleBoxGraph = compileSingleBoxPushGraph(floor, metrics);
+  const goalPushTables = compileGoalPushTables(singleBoxGraph, goals, metrics);
+  const topology = analyzeTopology(floor, goals);
   metrics.parseMs += now() - parseStarted;
   return {
     rows: data.rows, floor, walls, goals, goalsByLabel, pushDistances, goalPressure,
@@ -662,9 +779,10 @@ function parse(data) {
     shortestCorridorMemo: new Map(),
     localCorralMemo: new Map(),
     doorwayFlowMemo: new Map(),
+    denseBoxMemo: new WeakMap(),
     boxSignatureMemo: new WeakMap(),
     boxIdentityMemo: new WeakMap(),
-    singleBoxGraph, dense, metrics,
+    singleBoxGraph, goalPushTables, dense, metrics,
   };
 }
 
@@ -899,6 +1017,58 @@ function compileSingleBoxPushGraph(floor, metrics = createPerformanceMetrics()) 
   return {nodes, startsByBox};
 }
 
+function compileGoalPushTables(singleBoxGraph, goals, metrics = createPerformanceMetrics()) {
+  const started = now();
+  const predecessors = new Map();
+  for (const [nodeKey, node] of singleBoxGraph.nodes) {
+    for (const transition of node.transitions) {
+      if (!predecessors.has(transition.nodeKey)) predecessors.set(transition.nodeKey, []);
+      predecessors.get(transition.nodeKey).push(nodeKey);
+    }
+  }
+  const byGoal = new Map();
+  const byLabel = new Map();
+  for (const [goal, label] of goals) {
+    const nodeDistances = new Map();
+    const queue = [];
+    for (const nodeKey of singleBoxGraph.startsByBox.get(goal) || []) {
+      nodeDistances.set(nodeKey, 0);
+      queue.push(nodeKey);
+    }
+    for (let head = 0; head < queue.length; head++) {
+      const nodeKey = queue[head];
+      const distance = nodeDistances.get(nodeKey);
+      for (const previous of predecessors.get(nodeKey) || []) {
+        if (nodeDistances.has(previous)) continue;
+        nodeDistances.set(previous, distance + 1);
+        queue.push(previous);
+      }
+    }
+    const distances = new Map();
+    for (const [box, starts] of singleBoxGraph.startsByBox) {
+      let best = Infinity;
+      for (const nodeKey of starts) {
+        best = Math.min(best, nodeDistances.get(nodeKey) ?? Infinity);
+      }
+      if (Number.isFinite(best)) distances.set(box, best);
+    }
+    byGoal.set(goal, distances);
+    if (!byLabel.has(label)) byLabel.set(label, []);
+    byLabel.get(label).push({goal, distances});
+    metrics.goalTableBuilds++;
+    metrics.goalTableStates += nodeDistances.size;
+  }
+  metrics.goalTableMs += now() - started;
+  return {byGoal, byLabel};
+}
+
+function compiledGoalPushDistance(board, start, goal) {
+  const table = board.goalPushTables.byGoal.get(goal);
+  if (!table) return Infinity;
+  board.metrics.goalTableHits++;
+  return table.get(start) ?? Infinity;
+}
+
 function playerAwarePushDistancesReference(floor, startKey) {
   const initialRegions = [], unassigned = new Set(floor);
   unassigned.delete(startKey);
@@ -981,10 +1151,8 @@ function cacheFullAssignmentDetail(boxes, board) {
   let total = 0;
   for (const [label, entries] of boxesByLabelWithIndices(boxes)) {
     const targets = board.goalsByLabel.get(label) || [];
-    const costs = entries.map(({y, x}) => {
-      const distances = playerAwarePushDistances(board, pkey(y, x));
-      return targets.map(target => distances.get(target) ?? Infinity);
-    });
+    const costs = entries.map(({y, x}) =>
+      targets.map(target => compiledGoalPushDistance(board, pkey(y, x), target)));
     board.metrics.assignmentCalls++;
     const assignment = minimumAssignment(costs);
     labels.set(label, {boxIndices: entries.map(entry => entry.index), costs, assignment});
@@ -1018,7 +1186,7 @@ function heuristic(boxes, board) {
   const grouped = boxesByLabelWithIndices(boxes);
   const changedEntries = [...grouped.values()].find(entries =>
     entries.some(entry => entry.index === parentHint.changedIndex));
-  const parentDetail = changedEntries?.length >= 5
+  const parentDetail = changedEntries?.length >= INCREMENTAL_ASSIGNMENT_CROSSOVER
     ? cacheFullAssignmentDetail(parentHint.parentBoxes, board)
     : null;
   let total = 0;
@@ -1031,14 +1199,12 @@ function heuristic(boxes, board) {
     const canReuseRows = changedRow >= 0 && previous &&
       previous.boxIndices.length === boxIndices.length &&
       previous.boxIndices.every((index, row) => index === boxIndices[row]);
-    const costs = canReuseRows ? [...previous.costs] : entries.map(({y, x}) => {
-      const distances = playerAwarePushDistances(board, pkey(y, x));
-      return targets.map(target => distances.get(target) ?? Infinity);
-    });
+    const costs = canReuseRows ? [...previous.costs] : entries.map(({y, x}) =>
+      targets.map(target => compiledGoalPushDistance(board, pkey(y, x), target)));
     if (canReuseRows) {
       const {y, x} = entries[changedRow];
-      const distances = playerAwarePushDistances(board, pkey(y, x));
-      costs[changedRow] = targets.map(target => distances.get(target) ?? Infinity);
+      costs[changedRow] = targets.map(target =>
+        compiledGoalPushDistance(board, pkey(y, x), target));
     }
     metrics.assignmentCalls++;
     let assignment = canReuseRows
@@ -1283,6 +1449,7 @@ function analyzePuzzleForSearch(data) {
   const surplusBoxes = roomSummaries.reduce((sum, room) => sum + room.surplus, 0);
   const reversePortfolio = reverseStartPortfolio(board, boxes);
   const productiveReverseRegions = reversePortfolio.filter(entry => entry.pullOptions > 0);
+  for (const [y, x] of boxes) playerAwarePushDistances(board, pkey(y, x));
   const pressure = searchScale * (1 + 0.18 * board.topology.rooms.length) *
     (1 + 0.08 * dependencyCount) * (1 + 0.06 * Math.max(0, legalPushes - 2));
   const difficulty = pressure >= 1800 ? "extreme" : pressure >= 700 ? "complex" :
@@ -1307,6 +1474,7 @@ function analyzePuzzleForSearch(data) {
     useMilestoneReverse: difficulty === "complex" || difficulty === "extreme",
     checkpointLimit: difficulty === "extreme" ? 12 : 8,
   };
+  const preparedBoard = createPreparedBoardSeed(board);
   return {
     dimensions: {rows: data.rows.length, columns: Math.max(...data.rows.map(row => row.length))},
     floorCells: board.floor.size,
@@ -1330,7 +1498,15 @@ function analyzePuzzleForSearch(data) {
     difficulty,
     phases,
     recommendations,
-    preparedBoard: createPreparedBoardSeed(board),
+    preparedBoard,
+    preparedBoardStats: {
+      estimatedBytes: preparedBoard.estimatedBytes,
+      goalTables: preparedBoard.goalPushTables.byGoal.size,
+      playerDistanceTables: preparedBoard.playerPushDistances.size,
+      graphNodes: board.metrics.graphNodes,
+      graphEdges: board.metrics.graphEdges,
+      buildMs: Math.round(board.metrics.parseMs * 1000) / 1000,
+    },
   };
 }
 
@@ -1797,9 +1973,11 @@ function neighbors(state, board, pruneDeadlocks = true) {
       if (beyondId < 0 || occupied[beyondId] >= 0) continue;
       const by = board.dense.y[beyondId], bx = board.dense.x[beyondId];
       const index = occupied[nextId], label = boxes[index][2];
-      boxes = boxes.map((b, i) => i === index ? [by, bx, label] : b);
-      if (pruneDeadlocks && (staticDead(by, bx, board, label) ||
-          createsDynamicDeadlock(boxes, board, [by, bx]))) continue;
+      boxes = boxes.slice();
+      boxes[index] = [by, bx, label];
+      if (pruneDeadlocks && staticDead(by, bx, board, label)) continue;
+      deriveDenseBoxLayout(state.boxes, boxes, index, beyondId, board);
+      if (pruneDeadlocks && createsDynamicDeadlock(boxes, board, [by, bx])) continue;
     }
     result.push({robot: [ny, nx], boxes, move});
   }
@@ -1838,13 +2016,7 @@ function reachablePathsReference(state, board) {
 }
 
 function denseOccupancy(state, board) {
-  const occupied = new Int32Array(board.dense.keys.length);
-  occupied.fill(-1);
-  state.boxes.forEach((box, index) => {
-    const id = board.dense.idByKey.get(pkey(box[0], box[1]));
-    if (id !== undefined) occupied[id] = index;
-  });
-  return occupied;
+  return denseBoxLayout(state.boxes, board).indexByCell;
 }
 
 function reachablePaths(state, board) {
@@ -2654,11 +2826,13 @@ function pushNeighbors(state, board, reachable = reachablePaths(state, board), o
       const destinationY = board.dense.y[destinationId], destinationX = board.dense.x[destinationId];
       const dest = board.dense.keys[destinationId];
       board.metrics.pushCandidates++;
-      const boxes = state.boxes.map((b, i) => i === index ? [destinationY, destinationX, label] : b);
+      const boxes = state.boxes.slice();
+      boxes[index] = [destinationY, destinationX, label];
       if (staticDead(destinationY, destinationX, board, label)) {
         board.metrics.staticDeadPrunes++;
         continue;
       }
+      deriveDenseBoxLayout(state.boxes, boxes, index, destinationId, board);
       if (createsDynamicDeadlock(boxes, board, [destinationY, destinationX])) {
         board.metrics.dynamicDeadPrunes++;
         continue;
@@ -2706,10 +2880,11 @@ function pushBoxNeighbors(
     if (!reachable.hasId(supportId) || destinationId < 0 || occupied[destinationId] >= 0) continue;
     const destinationY = board.dense.y[destinationId], destinationX = board.dense.x[destinationId];
     const destination = board.dense.keys[destinationId];
-    const boxes = state.boxes.map((box, boxIndex) =>
-      boxIndex === index ? [destinationY, destinationX, label] : box);
-    if (staticDead(destinationY, destinationX, board, label) ||
-        createsDynamicDeadlock(boxes, board, [destinationY, destinationX])) continue;
+    const boxes = state.boxes.slice();
+    boxes[index] = [destinationY, destinationX, label];
+    if (staticDead(destinationY, destinationX, board, label)) continue;
+    deriveDenseBoxLayout(state.boxes, boxes, index, destinationId, board);
+    if (createsDynamicDeadlock(boxes, board, [destinationY, destinationX])) continue;
     board.assignmentParentMemo.set(boxes, {parentBoxes: state.boxes, changedIndex: index});
     result.push({
       robot: [y, x],
@@ -2878,7 +3053,9 @@ function reversePullNeighbors(state, board, reachable = reachablePaths(state, bo
       if (robotAfterPullId < 0 || occupied[robotAfterPullId] >= 0) continue;
       const boxY = board.dense.y[boxBeforeId], boxX = board.dense.x[boxBeforeId];
       if (staticDead(boxY, boxX, board, label)) continue;
-      const boxes = state.boxes.map((b, i) => i === index ? [boxY, boxX, label] : b);
+      const boxes = state.boxes.slice();
+      boxes[index] = [boxY, boxX, label];
+      deriveDenseBoxLayout(state.boxes, boxes, index, boxBeforeId, board);
       if (creates2x2Deadlock(boxes, board, [boxY, boxX]) ||
           createsFrozenComponentDeadlock(boxes, board, [boxY, boxX])) continue;
       const walkToPullSpot = reachable.getId(boxBeforeId);

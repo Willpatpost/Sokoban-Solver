@@ -14,7 +14,7 @@ import json
 import logging
 import math
 import time
-from collections import deque
+from collections import OrderedDict, deque
 from dataclasses import dataclass, field
 from enum import Enum
 from functools import lru_cache
@@ -39,6 +39,14 @@ with CONFORMANCE_PATH.open(encoding="utf-8") as conformance_file:
 
 Position = tuple[int, int]
 Box = tuple[str, Position]
+
+
+@dataclass(frozen=True)
+class AssignmentHint:
+    parent_boxes: tuple[Box, ...]
+    label: str
+    previous_position: Position
+    position: Position
 
 
 class PuzzleError(ValueError):
@@ -122,6 +130,9 @@ class State:
     boxes: tuple[Box, ...]
     board: Board = field(repr=False)
     cost: int = field(default=0, compare=False, hash=False)
+    assignment_hint: AssignmentHint | None = field(
+        default=None, repr=False, compare=False, hash=False
+    )
 
     def is_goal(self) -> bool:
         return all(pos in self.board.goals_for(label) for label, pos in self.boxes)
@@ -274,13 +285,21 @@ def _matching_cost(
     return _minimum_assignment_cost(costs)
 
 
-def _minimum_assignment_cost(costs: Sequence[Sequence[float]]) -> float:
-    """Return an exact distinct assignment cost, or infinity without a perfect matching."""
+@dataclass(frozen=True)
+class _Assignment:
+    cost: float
+    row_potential: tuple[float, ...] = ()
+    column_potential: tuple[float, ...] = ()
+    matching: tuple[int, ...] = ()
+
+
+def _minimum_assignment(costs: Sequence[Sequence[float]]) -> _Assignment:
+    """Return an exact assignment and reusable Hungarian dual state."""
     size = len(costs)
     if size == 0:
-        return 0
+        return _Assignment(0, (0,), (0,), (0,))
     if any(len(row) != size for row in costs):
-        return math.inf
+        return _Assignment(math.inf)
     blocked = 1_000_000_000.0
     finite_costs = [[blocked if math.isinf(cost) else cost for cost in row] for row in costs]
     row_potential: list[float] = [0.0] * (size + 1)
@@ -327,10 +346,244 @@ def _minimum_assignment_cost(costs: Sequence[Sequence[float]]) -> float:
             if column == 0:
                 break
     result = -col_potential[0]
-    return math.inf if result >= blocked / 2 else result
+    if result >= blocked / 2:
+        return _Assignment(math.inf)
+    return _Assignment(
+        result,
+        tuple(row_potential),
+        tuple(col_potential),
+        tuple(matching),
+    )
+
+
+def _repair_minimum_assignment(
+    previous: _Assignment,
+    costs: Sequence[Sequence[float]],
+    changed_row: int,
+) -> _Assignment | None:
+    """Repair one changed Hungarian row in O(n²), or request a full fallback."""
+    size = len(costs)
+    if (
+        changed_row < 0
+        or changed_row >= size
+        or not math.isfinite(previous.cost)
+        or len(previous.matching) != size + 1
+        or any(len(row) != size or not any(math.isfinite(cost) for cost in row) for row in costs)
+    ):
+        return None
+    blocked = 1_000_000_000.0
+    row = changed_row + 1
+    row_potential = list(previous.row_potential)
+    column_potential = list(previous.column_potential)
+    matching = list(previous.matching)
+    freed_column = next(
+        (
+            column
+            for column, matched_row in enumerate(matching)
+            if column > 0 and matched_row == row
+        ),
+        -1,
+    )
+    if freed_column < 1:
+        return None
+    matching[freed_column] = 0
+    row_potential[row] = min(
+        (cost if math.isfinite(cost) else blocked) - column_potential[index + 1]
+        for index, cost in enumerate(costs[changed_row])
+    )
+    matching[0] = row
+    minimum = [blocked] * (size + 1)
+    used = [False] * (size + 1)
+    predecessor = [0] * (size + 1)
+    column = 0
+    while True:
+        used[column] = True
+        matched_row = matching[column]
+        delta = blocked
+        next_column = 0
+        for candidate in range(1, size + 1):
+            if used[candidate]:
+                continue
+            cost = costs[matched_row - 1][candidate - 1]
+            reduced = (
+                (cost if math.isfinite(cost) else blocked)
+                - row_potential[matched_row]
+                - column_potential[candidate]
+            )
+            if reduced < minimum[candidate]:
+                minimum[candidate] = reduced
+                predecessor[candidate] = column
+            if minimum[candidate] < delta:
+                delta = minimum[candidate]
+                next_column = candidate
+        if delta >= blocked:
+            return _Assignment(math.inf)
+        for candidate in range(size + 1):
+            if used[candidate]:
+                row_potential[matching[candidate]] += delta
+                column_potential[candidate] -= delta
+            else:
+                minimum[candidate] -= delta
+        column = next_column
+        if matching[column] == 0:
+            break
+    while True:
+        previous_column = predecessor[column]
+        matching[column] = matching[previous_column]
+        column = previous_column
+        if column == 0:
+            break
+    total = 0.0
+    for candidate in range(1, size + 1):
+        cost = costs[matching[candidate] - 1][candidate - 1]
+        if not math.isfinite(cost):
+            return _Assignment(math.inf)
+        total += cost
+    return _Assignment(
+        total,
+        tuple(row_potential),
+        tuple(column_potential),
+        tuple(matching),
+    )
+
+
+def _minimum_assignment_cost(costs: Sequence[Sequence[float]]) -> float:
+    """Return an exact distinct assignment cost, or infinity without a perfect matching."""
+    return _minimum_assignment(costs).cost
 
 
 HEURISTIC_CACHE_SIZE = 20_000
+PYTHON_INCREMENTAL_ASSIGNMENT_CROSSOVER = 5
+
+
+@dataclass(frozen=True)
+class _LabelAssignment:
+    positions: tuple[Position, ...]
+    costs: tuple[tuple[float, ...], ...]
+    assignment: _Assignment
+
+
+@dataclass(frozen=True)
+class _AssignmentDetail:
+    labels: tuple[tuple[str, _LabelAssignment], ...]
+    cost: float
+
+    def by_label(self) -> dict[str, _LabelAssignment]:
+        return dict(self.labels)
+
+
+_ASSIGNMENT_DETAIL_CACHE: OrderedDict[tuple[object, ...], _AssignmentDetail] = OrderedDict()
+ASSIGNMENT_TELEMETRY = {
+    "full_calls": 0,
+    "incremental_calls": 0,
+    "incremental_fallbacks": 0,
+    "rows_reused": 0,
+}
+
+
+def _assignment_key(
+    rows: tuple[str, ...],
+    boxes: tuple[Box, ...],
+    generic_goals: frozenset[Position],
+    dedicated_goals: tuple[tuple[str, frozenset[Position]], ...],
+) -> tuple[object, ...]:
+    return rows, boxes, generic_goals, dedicated_goals
+
+
+def _cache_assignment_detail(
+    key: tuple[object, ...],
+    detail: _AssignmentDetail,
+) -> _AssignmentDetail:
+    _ASSIGNMENT_DETAIL_CACHE[key] = detail
+    _ASSIGNMENT_DETAIL_CACHE.move_to_end(key)
+    while len(_ASSIGNMENT_DETAIL_CACHE) > HEURISTIC_CACHE_SIZE:
+        _ASSIGNMENT_DETAIL_CACHE.popitem(last=False)
+    return detail
+
+
+def _full_assignment_detail(
+    rows: tuple[str, ...],
+    boxes: tuple[Box, ...],
+    generic_goals: frozenset[Position],
+    dedicated_goals: tuple[tuple[str, frozenset[Position]], ...],
+) -> _AssignmentDetail:
+    key = _assignment_key(rows, boxes, generic_goals, dedicated_goals)
+    cached = _ASSIGNMENT_DETAIL_CACHE.get(key)
+    if cached is not None:
+        _ASSIGNMENT_DETAIL_CACHE.move_to_end(key)
+        return cached
+    goals_by_label = dict(dedicated_goals)
+    goals_by_label["X"] = generic_goals
+    by_label: dict[str, list[Position]] = {}
+    for label, position in boxes:
+        by_label.setdefault(label, []).append(position)
+    details: list[tuple[str, _LabelAssignment]] = []
+    total = 0.0
+    for label, positions in sorted(by_label.items()):
+        ordered_positions = tuple(sorted(positions))
+        targets = tuple(sorted(goals_by_label.get(label, ())))
+        costs = tuple(
+            tuple(_push_distance(rows, position, goal) for goal in targets)
+            for position in ordered_positions
+        )
+        assignment = _minimum_assignment(costs)
+        details.append((label, _LabelAssignment(ordered_positions, costs, assignment)))
+        total += assignment.cost
+        ASSIGNMENT_TELEMETRY["full_calls"] += 1
+    return _cache_assignment_detail(key, _AssignmentDetail(tuple(details), total))
+
+
+def _incremental_assignment_detail(state: State) -> _AssignmentDetail | None:
+    hint = state.assignment_hint
+    if hint is None:
+        return None
+    board = state.board
+    key = _assignment_key(
+        board.rows,
+        state.boxes,
+        board.generic_goals,
+        board.dedicated_goals,
+    )
+    cached = _ASSIGNMENT_DETAIL_CACHE.get(key)
+    if cached is not None:
+        _ASSIGNMENT_DETAIL_CACHE.move_to_end(key)
+        return cached
+    parent = _full_assignment_detail(
+        board.rows,
+        hint.parent_boxes,
+        board.generic_goals,
+        board.dedicated_goals,
+    )
+    parent_labels = parent.by_label()
+    previous = parent_labels.get(hint.label)
+    if previous is None or len(previous.positions) < PYTHON_INCREMENTAL_ASSIGNMENT_CROSSOVER:
+        return None
+    try:
+        changed_row = previous.positions.index(hint.previous_position)
+    except ValueError:
+        ASSIGNMENT_TELEMETRY["incremental_fallbacks"] += 1
+        return None
+    targets = tuple(sorted(board.goals_for(hint.label)))
+    positions = list(previous.positions)
+    positions[changed_row] = hint.position
+    costs = list(previous.costs)
+    costs[changed_row] = tuple(_push_distance(board.rows, hint.position, goal) for goal in targets)
+    assignment = _repair_minimum_assignment(previous.assignment, costs, changed_row)
+    if assignment is None:
+        ASSIGNMENT_TELEMETRY["incremental_fallbacks"] += 1
+        return None
+    parent_labels[hint.label] = _LabelAssignment(
+        tuple(positions),
+        tuple(costs),
+        assignment,
+    )
+    detail = _AssignmentDetail(
+        tuple(sorted(parent_labels.items())),
+        sum(label_detail.assignment.cost for label_detail in parent_labels.values()),
+    )
+    ASSIGNMENT_TELEMETRY["incremental_calls"] += 1
+    ASSIGNMENT_TELEMETRY["rows_reused"] += len(previous.positions) - 1
+    return _cache_assignment_detail(key, detail)
 
 
 @lru_cache(maxsize=HEURISTIC_CACHE_SIZE)
@@ -341,19 +594,14 @@ def _heuristic_for_layout(
     dedicated_goals: tuple[tuple[str, frozenset[Position]], ...],
 ) -> float:
     """Cache the lower bound by immutable layout data without retaining State objects."""
-    goals_by_label = dict(dedicated_goals)
-    goals_by_label["X"] = generic_goals
-    by_label: dict[str, list[Position]] = {}
-    for label, pos in boxes:
-        by_label.setdefault(label, []).append(pos)
-    return sum(
-        _matching_cost(tuple(sorted(positions)), tuple(sorted(goals_by_label.get(label, ()))), rows)
-        for label, positions in by_label.items()
-    )
+    return _full_assignment_detail(rows, boxes, generic_goals, dedicated_goals).cost
 
 
 def heuristic(state: State) -> float:
     """Admissible lower bound based on exact distinct box-to-goal assignment."""
+    incremental = _incremental_assignment_detail(state)
+    if incremental is not None:
+        return incremental.cost
     return _heuristic_for_layout(
         state.board.rows,
         state.boxes,
@@ -564,6 +812,7 @@ def get_neighbors(
             continue
         label = occupied.get(destination)
         boxes = state.boxes
+        assignment_hint = None
         if label is not None:
             box_destination = (destination[0] + dy, destination[1] + dx)
             if box_destination not in state.board.floor or box_destination in occupied:
@@ -576,7 +825,24 @@ def get_neighbors(
             boxes = tuple(sorted(moved))
             if prune_deadlocks and creates_dynamic_deadlock(boxes, state.board, box_destination):
                 continue
-        neighbors.append((State(destination, boxes, state.board, state.cost + 1), move))
+            assignment_hint = AssignmentHint(
+                state.boxes,
+                label,
+                destination,
+                box_destination,
+            )
+        neighbors.append(
+            (
+                State(
+                    destination,
+                    boxes,
+                    state.board,
+                    state.cost + 1,
+                    assignment_hint,
+                ),
+                move,
+            )
+        )
     return neighbors
 
 
@@ -655,6 +921,7 @@ def get_push_neighbors(
                         boxes,
                         state.board,
                         state.cost + 1,
+                        AssignmentHint(state.boxes, label, box, box_destination),
                     ),
                     segment,
                 )
