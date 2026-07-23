@@ -1,3 +1,66 @@
+const EXACT_CHECKPOINT_STORAGE_KEY = "sokomind-exact-checkpoints-v1";
+
+function exactCheckpointProblemHash(serialized) {
+  const boxes = [...serialized.boxes]
+    .map(([position, label]) => `${label}@${position}`).sort();
+  const source = `${serialized.rows.join("\n")}|r:${serialized.robot.join(",")}|b:${boxes.join(";")}`;
+  let hash = 2166136261;
+  for (let index = 0; index < source.length; index++) {
+    hash ^= source.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `fnv1a-${(hash >>> 0).toString(16).padStart(8, "0")}`;
+}
+
+function readExactCheckpoints() {
+  try {
+    return JSON.parse(globalThis.localStorage?.getItem(EXACT_CHECKPOINT_STORAGE_KEY) || "{}");
+  } catch (_error) {
+    return {};
+  }
+}
+
+function saveExactCheckpoint(checkpoint) {
+  if (!checkpoint?.problemHash || !checkpoint?.exactShard) return false;
+  try {
+    const saved = readExactCheckpoints();
+    const shard = `${checkpoint.exactShard.index}/${checkpoint.exactShard.count}`;
+    saved[`${checkpoint.problemHash}:${shard}`] = checkpoint;
+    globalThis.localStorage?.setItem(EXACT_CHECKPOINT_STORAGE_KEY, JSON.stringify(saved));
+    return true;
+  } catch (_error) {
+    return false;
+  }
+}
+
+function loadExactCheckpoint(serialized, shard, upperBound) {
+  if (!shard) return null;
+  const problemHash = exactCheckpointProblemHash(serialized);
+  const saved = readExactCheckpoints();
+  const checkpoint = saved[`${problemHash}:${shard.index}/${shard.count}`];
+  const encodedBound = Number.isFinite(upperBound) ? upperBound : "Infinity";
+  if (!checkpoint || checkpoint.solverBuild !== SOLVER_BUILD ||
+      checkpoint.upperBound !== encodedBound) return null;
+  return checkpoint;
+}
+
+function clearExactCheckpoints(problemHash = null) {
+  try {
+    if (!problemHash) {
+      globalThis.localStorage?.removeItem(EXACT_CHECKPOINT_STORAGE_KEY);
+      return true;
+    }
+    const saved = readExactCheckpoints();
+    for (const key of Object.keys(saved)) {
+      if (key.startsWith(`${problemHash}:`)) delete saved[key];
+    }
+    globalThis.localStorage?.setItem(EXACT_CHECKPOINT_STORAGE_KEY, JSON.stringify(saved));
+    return true;
+  } catch (_error) {
+    return false;
+  }
+}
+
 function solverPlans(algorithm) {
   if (!["ultimate", "portfolio", "fast"].includes(algorithm)) {
     return [{algorithm, label: $("algorithm").selectedOptions[0].text}];
@@ -504,9 +567,11 @@ function runBidirectionalSolver(purpose, analysis) {
   const finish = (path, strategy = "Bidirectional") => {
     const validated = validatePathToGoal(path);
     if (validated === null) return false;
+    clearExactCheckpoints(exactCheckpointProblemHash(serializeState(state)));
     settled = true;
     appendSearchLog("solution", `${strategy} produced a replay-validated solution`, {
       moves: validated.length, states: totalVisited.toLocaleString(),
+      status: "solved", reason: "solution",
     });
     workers.forEach(worker => worker.terminate()); workers = [];
     clearSearchTelemetry();
@@ -698,6 +763,11 @@ function runBidirectionalSolver(purpose, analysis) {
       transpositionsPerShard: exactTranspositionLimit.toLocaleString(),
     });
     for (let index = 0; index < exactRoundShardCount; index++) {
+      const exactShard = {index, count: exactRoundShardCount, depth: 4};
+      const resumeExactCheckpoint = loadExactCheckpoint(
+        serializeState(state), exactShard, exactBound,
+      );
+      if (resumeExactCheckpoint?.visited) totalVisited += resumeExactCheckpoint.visited;
       launch({
         algorithm: "push-ida-star",
         side: "direct",
@@ -705,11 +775,13 @@ function runBidirectionalSolver(purpose, analysis) {
         exhaustiveFallback: true,
         persistentExact: true,
         exactRound: round,
-        exactShard: {index, count: exactRoundShardCount, depth: 4},
+        exactShard,
         upperBound: exactBound,
         maxVisited: Number.MAX_SAFE_INTEGER,
         transpositionLimit: exactTranspositionLimit,
         progressInterval: 25000,
+        pauseAfterVisited: 100000,
+        resumeExactCheckpoint,
         forcedMacros: false,
         seed: 911 + index * 104729,
       });
@@ -771,6 +843,7 @@ function runBidirectionalSolver(purpose, analysis) {
     if (plan.phaseScope === "evacuation") activeEvacuationWorkers++;
     workerStarted.set(worker, performance.now());
     workerLastMessage.set(worker, performance.now());
+    workerProgress.set(worker, plan.resumeExactCheckpoint?.visited || 0);
     workerSides.set(worker, plan.side);
     appendSearchLog("worker", `Started ${plan.label}`, {
       role: plan.side,
@@ -869,8 +942,24 @@ function runBidirectionalSolver(purpose, analysis) {
       }
       releaseWorker();
       if (plan.persistentExact) {
+        const recoveryCount = (plan.exactRecoveryCount || 0) + 1;
+        if (recoveryCount > 3) {
+          settled = true;
+          setControlsBusy(false);
+          setStatus(`Exact search failed after repeated ${reason} recovery attempts.`);
+          appendSearchLog("error", "Exact search recovery limit reached", {
+            status: "failed",
+            reason,
+            shard: `${plan.exactShard.index + 1}/${plan.exactShard.count}`,
+          });
+          return;
+        }
         expectedWorkers++;
-        const recovery = {...plan, label: `${plan.label} Recovery`};
+        const recovery = {
+          ...plan,
+          exactRecoveryCount: recoveryCount,
+          label: `${plan.label} Recovery ${recoveryCount}/3`,
+        };
         appendSearchLog("director", "Recovering interrupted exact shard", {
           shard: `${plan.exactShard.index + 1}/${plan.exactShard.count}`,
           reason,
@@ -974,6 +1063,10 @@ function runBidirectionalSolver(purpose, analysis) {
         return;
       }
       if (data.type === "progress") {
+        if (plan.persistentExact && data.exactCheckpoint) {
+          saveExactCheckpoint(data.exactCheckpoint);
+          plan.resumeExactCheckpoint = data.exactCheckpoint;
+        }
         const previous = workerProgress.get(worker) || 0;
         const delta = data.delta ?? Math.max(0, (data.visited || 0) - previous);
         workerProgress.set(worker, data.visited || previous + delta);
@@ -1047,6 +1140,10 @@ function runBidirectionalSolver(purpose, analysis) {
       if (settled) return;
       if (data.type === "done") {
         if (workerFinished) return;
+        if (data.status === "failed") {
+          abandonWorker("worker-failed", {message: data.error || data.terminationReason});
+          return;
+        }
         workerFinished = true;
         const previous = workerProgress.get(worker) || 0;
         const workerElapsedSeconds = Math.max(0,
@@ -1117,7 +1214,18 @@ function runBidirectionalSolver(purpose, analysis) {
           doorwayFlowCacheHits: data.performance?.doorwayFlowCacheHits,
           pushDistanceCacheHits: data.performance?.pushDistanceCacheHits,
           reason: data.terminationReason || (data.path ? "solution" : data.cutoff ? "budget" : "exhausted"),
+          status: data.status,
         });
+        if (plan.persistentExact && data.terminationReason === "checkpoint-yield" &&
+            data.exactCheckpoint) {
+          saveExactCheckpoint(data.exactCheckpoint);
+          plan.resumeExactCheckpoint = data.exactCheckpoint;
+          doneWorkers++;
+          releaseWorker();
+          expectedWorkers++;
+          launch({...plan, label: plan.label.replace(/ Continuation$/, "") + " Continuation"});
+          return;
+        }
         if (plan.handoffStage === "bridge" && data.path && data.finalState) {
           const reverseRecords = reverseRecordSets[plan.reverseRecordIndex];
           const prefixPath = [...(plan.prefixPath || []), ...data.path];
@@ -1217,6 +1325,7 @@ function runBidirectionalSolver(purpose, analysis) {
         finishRequiredPlan(plan);
         releaseWorker();
         if (provedUnsolvable) {
+          clearExactCheckpoints(exactCheckpointProblemHash(serializeState(state)));
           settled = true;
           setControlsBusy(false);
           setStatus(
@@ -1225,6 +1334,8 @@ function runBidirectionalSolver(purpose, analysis) {
           );
           appendSearchLog("proof", "Exact search exhausted the reachable push space", {
             states: totalVisited.toLocaleString(),
+            status: "proven-unsolvable",
+            reason: "state-space-exhausted",
           });
           return;
         }
@@ -1237,6 +1348,7 @@ function runBidirectionalSolver(purpose, analysis) {
       ...plan,
       state: {...planState, preparedBoard: analysis.preparedBoard},
       upperBound: effectiveUpperBound,
+      solverBuild: SOLVER_BUILD,
     });
   };
 
@@ -1324,6 +1436,8 @@ function startSolver(purpose) {
       appendSearchLog("worker", `Finished ${plan.label}`, {
         visited: (data.visited || 0).toLocaleString(), solved: Boolean(data.path),
         cutoff: Boolean(data.cutoff),
+        status: data.status,
+        reason: data.terminationReason,
         firstMessageMs: Math.round(firstMessageMs),
         wallMs: Math.round(performance.now() - launchedAt),
         terminateCallMs: Math.round(terminateCallMs * 1000) / 1000,
@@ -1357,6 +1471,7 @@ function startSolver(purpose) {
           settled = true;
           appendSearchLog("solution", `${plan.label} produced a replay-validated solution`, {
             moves: path.length, states: totalVisited.toLocaleString(),
+            status: "solved", reason: "solution",
           });
           const cancellationStarted = performance.now(), cancelledWorkers = workers.length;
           workers.forEach(item => item.terminate()); workers = [];
@@ -1379,9 +1494,21 @@ function startSolver(purpose) {
       finished.push(data);
       if (!queue.length && active.size === 0) {
         setControlsBusy(false);
-        setStatus(`No solution found (${totalVisited.toLocaleString()} states across ${finished.length} worker${finished.length === 1 ? "" : "s"}).`);
+        const statuses = finished.map(result => result.status || "failed");
+        const terminalStatus = statuses.every(status => status === "proven-unsolvable")
+          ? "proven-unsolvable"
+          : statuses.includes("failed") ? "failed" : "cutoff";
+        const summary = terminalStatus === "proven-unsolvable"
+          ? "Exact search proved this puzzle has no solution"
+          : terminalStatus === "failed"
+            ? "Search failed before a complete result"
+            : "Search ended without a proof in the current budget";
+        setStatus(`${summary} (${totalVisited.toLocaleString()} states across ${finished.length} worker${finished.length === 1 ? "" : "s"}).`);
         appendSearchLog("result", "Portfolio ended without a solution", {
           states: totalVisited.toLocaleString(), workers: finished.length,
+          status: terminalStatus,
+          reason: terminalStatus === "cutoff" ? "portfolio-incomplete" :
+            terminalStatus === "failed" ? "worker-failure" : "state-space-exhausted",
         });
         return;
       }
@@ -1399,16 +1526,20 @@ function startSolver(purpose) {
         wallMs: Math.round(failedAt - launchedAt),
         terminateCallMs: Math.round(terminateCallMs * 1000) / 1000,
       });
-      finished.push({visited: 0});
+      finished.push({visited: 0, status: "failed", terminationReason: "worker-error"});
       launchNext();
       if (!queue.length && active.size === 0) {
         setControlsBusy(false);
         setStatus("Solver worker failed.");
       }
     };
-    worker.postMessage({state: serializeState(state), upperBound: planUpperBound(plan), ...plan});
+    worker.postMessage({
+      state: serializeState(state),
+      upperBound: planUpperBound(plan),
+      solverBuild: SOLVER_BUILD,
+      ...plan,
+    });
     launchNext();
   };
   launchNext();
 }
-

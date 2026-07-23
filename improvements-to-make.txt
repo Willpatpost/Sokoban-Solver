@@ -1,7 +1,8 @@
 Sokomind improvement campaign and sprint plan
 ==============================================
 
-Plan reorganized after Improvement Sprint 13 on 2026-07-23.
+Plan reorganized after Improvement Sprint 13 and updated after Sprint 14 on
+2026-07-23.
 
 Mission
 -------
@@ -139,69 +140,61 @@ transposition dominance, sharding, bounds, termination, and result reporting.
 These contracts must be proven before adding more pruning or orchestration.
 
 45. Differentially certify the complete exact-search kernel.
-    Current status: Partial.
-    Existing foundation:
-    - Small tests cover canonical push identities, one partitioned contour,
-      transposition eviction, admissible assignment, and individual hard-pruning
-      rules.
-    Audit finding:
-    - Item 3 validates pruning rules, but no independent harness proves that the
-      composed exact engine preserves every reachable push state across robot-region
-      canonicalization, cost dominance, shard ownership, finite incumbent bounds,
-      contour transitions, commitment locking, and transposition eviction.
-   Finish gate:
-   - Compare browser exact IDA* and Python push A* against a deliberately simple
-     reference push BFS over exhaustive and generated multi-box/typed boards.
-   - Compare solvability and optimal push count, not merely whether a known route
-     survives. Exercise every exact option both enabled and disabled.
-   - Prove that shard unions cover each contour exactly as intended, eviction can
-     only repeat work, canonical robot regions preserve legal successors, and an
-     invalid incumbent is removed without producing a false proof.
-   - Make this a required CI gate for changes to state identity, successor
-     generation, exact bounds, pruning, macros, or sharding.
+    Status: Done in build 2026-07-23.25.
+    Delivered:
+    - Browser Push A* is compared with an independent unpruned step-state 0-1 BFS
+      over all 120 distinct box, goal, and robot placements on a connected 2x3
+      floor plus generic and typed multi-box boards.
+    - Browser exact IDA* is checked against the same oracle with commitment locking,
+      forced macros, and transposition capacities varied independently. Tests compare
+      solvability and optimal push count rather than route survival alone.
+    - Three-way shard unions, finite invalid incumbents, unbounded reruns,
+      transposition eviction, default finite bounds, and canonical push behavior
+      have explicit regression coverage.
+    - Python Push A* is compared with a separate unpruned step-state 0-1 BFS over
+      generic, typed, solvable, and unsolvable multi-box cases.
+    - The new exact-kernel differential suite is a required GitHub Actions gate.
 
 46. Define one trustworthy terminal-result contract.
-    Current status: Partial.
-    Existing foundation:
-    - Browser workers report cutoff flags and reasons; the advanced director
-      distinguishes a completed exact proof in its UI.
-    Audit finding:
-    - Python commonly returns the same `(None, None, ...)` shape for cancellation,
-      time budget, frontier exhaustion, and a proof of impossibility. Browser
-      strategies also expose partially different result fields. This makes "no
-      solution found" easy to confuse with "no solution exists."
-   Finish gate:
-   - Use the same explicit statuses across Python, workers, director, GUI, CLI,
-     benchmarks, and logs: solved, proven-unsolvable, cutoff, cancelled, and
-     failed, with a structured reason and resource counters.
-   - Permit proven-unsolvable only after the certified exact kernel exhausts the
-     full relevant state space; guided or budgeted searches may report only cutoff.
-   - Independently replay every returned solution before exposing success, reject
-     incomplete or illegal paths at the public solver boundary, and test every
-     status transition including worker crashes and stale messages.
+    Status: Done in build 2026-07-23.25.
+    Delivered:
+    - Python, browser search, Web Worker protocol, director, GUI, CLI, benchmark
+      results, and structured logs use solved, proven-unsolvable, cutoff, cancelled,
+      and failed with an explicit reason.
+    - Python's SearchResult remains tuple-unpack compatible while exposing status,
+      reason, and cutoff fields to new callers.
+    - Finite contours, guided portfolios, and bounded beams cannot claim
+      unsolvability. Only certified unbounded exact exhaustion can do so.
+    - Both production solvers independently replay and trim candidate solutions
+      before reporting solved. Illegal, incomplete, or state-mismatched paths become
+      failed results.
+    - Worker exceptions become structured failures, repeated proof-worker crashes
+      have a bounded recovery policy, user stops log cancellation, and existing
+      stale-message guards remain covered.
 
 47. Make persistent exact search stack-safe, resumable, and crash-recoverable.
-    Current status: Backlog.
-    Audit finding:
-    - Browser exact IDA* is recursive and its persistent state lives only inside a
-      worker. A deep push path can hit the JavaScript call-stack limit, while a tab
-      reload, browser suspension, or worker failure discards a long proof search.
-   Finish gate:
-   - Replace recursive exact traversal with an explicit bounded work stack or
-     equivalent resumable contour iterator and cooperative yield points.
-   - Save versioned, board-hashed exact checkpoints containing contour, shard,
-     traversal, and proof-progress state without treating heuristic checkpoints as
-     proof evidence.
-   - Resume after a worker restart or page reload without skipping work; reject
-     incompatible build/board checkpoints safely and make clearing saved search
-     state explicit.
-   - Add deterministic interruption-at-many-points tests whose resumed result and
-     proof match an uninterrupted reference run.
+    Status: Done in build 2026-07-23.25.
+    Delivered:
+    - Exact IDA* now uses an explicit traversal stack. A 600-push regression proves
+      deep paths no longer depend on the JavaScript call stack.
+    - Production exact workers yield after bounded state slices. Versioned
+      checkpoints include a board/state hash, build, bound, shard, contour,
+      traversal stack, counters, and a bounded recent transposition tail.
+    - Transpositions remain a performance cache: omitted entries can only repeat
+      work, while the serialized traversal stack preserves proof progress.
+    - Compatible checkpoints persist in browser storage and resume after worker
+      replacement or page reload. Board, build, bound, and shard mismatches are
+      rejected, and Clear Saved Search explicitly removes the current proof state.
+    - Deterministic tests interrupt at five different slice sizes, JSON-round-trip
+      every checkpoint, and require the resumed outcome and push count to match an
+      uninterrupted run. Storage round trips and incompatible checkpoints are
+      independently tested.
 
 Sprint completion gate:
-All three items are Done; exact search has an independently checked completeness
-contract, every terminal outcome is unambiguous, and interruption cannot silently
-turn a proof run into a restart, false failure, or false proof.
+Completed in build 2026-07-23.25. All three items are Done; exact search has an
+independently checked completeness contract, every terminal outcome is
+unambiguous, and interruption cannot silently turn a proof run into a restart,
+false failure, or false proof.
 
 
 Sprint 15 - End-to-end validation foundation

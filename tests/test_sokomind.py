@@ -13,6 +13,7 @@ from Searches.Sokomind import (
     CONFORMANCE_PATH,
     HEURISTIC_CACHE_SIZE,
     PuzzleError,
+    SearchStatus,
     _heuristic_for_layout,
     _minimum_assignment_cost,
     _reachable_parents,
@@ -37,6 +38,28 @@ class SokomindTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.conformance = json.loads(CONFORMANCE_PATH.read_text(encoding="utf-8"))
+
+    @staticmethod
+    def _reference_min_pushes(initial):
+        """Independent 0-1 step-state search with no production pruning."""
+        distances = {initial: 0}
+        queue = deque([initial])
+        while queue:
+            current = queue.popleft()
+            cost = distances[current]
+            if current.is_goal():
+                return cost
+            for child, _move in get_neighbors(current, prune_deadlocks=False):
+                pushed = child.boxes != current.boxes
+                next_cost = cost + int(pushed)
+                if next_cost >= distances.get(child, float("inf")):
+                    continue
+                distances[child] = next_cost
+                if pushed:
+                    queue.append(child)
+                else:
+                    queue.appendleft(child)
+        return None
 
     def test_shared_valid_conformance_cases(self):
         for case in self.conformance["validCases"]:
@@ -352,18 +375,22 @@ class SokomindTests(unittest.TestCase):
             "O R  O",
             "OOOOOO",
         ]
-        path, final, _, _ = solve(puzzle)
+        result = solve(puzzle)
+        path, final, _, _ = result
         self.assertIsNone(path)
         self.assertIsNone(final)
+        self.assertEqual(SearchStatus.PROVEN_UNSOLVABLE, result.status)
 
     def test_search_can_be_cancelled(self):
         state = parse_puzzle(["OOOOO", "O R O", "O A O", "O a O", "OOOOO"])
         cancelled = Event()
         cancelled.set()
-        path, final, _, visited = a_star_search(state, cancelled)
+        result = a_star_search(state, cancelled)
+        path, final, _, visited = result
         self.assertIsNone(path)
         self.assertIsNone(final)
         self.assertEqual(0, visited)
+        self.assertEqual(SearchStatus.CANCELLED, result.status)
 
     def test_push_neighbors_include_walk_to_push(self):
         state = parse_puzzle([
@@ -405,6 +432,35 @@ class SokomindTests(unittest.TestCase):
         self.assertIsNone(path)
         self.assertIsNone(final)
         self.assertEqual(1, visited)
+
+    def test_exact_push_search_matches_independent_step_reference(self):
+        cases = [
+            ["OOOOO", "O R O", "O X O", "O S O", "OOOOO"],
+            ["OOOOOOO", "O R   O", "O XX  O", "O SS  O", "OOOOOOO"],
+            ["OOOOOOO", "O R   O", "O AB  O", "O ab  O", "OOOOOOO"],
+            ["OOOOOO", "OX R O", "O   SO", "OOOOOO"],
+            ["OOOOOOO", "O S S O", "O X X O", "O  R  O", "OOOOOOO"],
+        ]
+        for rows in cases:
+            with self.subTest(rows=rows):
+                initial = parse_puzzle(rows)
+                expected = self._reference_min_pushes(initial)
+                result = push_a_star_search(initial)
+                if expected is None:
+                    self.assertEqual(SearchStatus.PROVEN_UNSOLVABLE, result.status)
+                    self.assertIsNone(result.path)
+                else:
+                    self.assertEqual(SearchStatus.SOLVED, result.status)
+                    self.assertEqual(expected, result.final.cost)
+
+    def test_solution_validation_rejects_corrupt_public_result(self):
+        initial = parse_puzzle(["OOOOO", "O R O", "O X O", "O S O", "OOOOO"])
+        from Searches.Sokomind import _validated_solution_result
+        result = _validated_solution_result(
+            initial, [("Left", (1, 1))], 0.0, 0,
+        )
+        self.assertEqual(SearchStatus.FAILED, result.status)
+        self.assertEqual("incomplete-solution-path", result.reason)
 
     def test_push_astar_returns_replayable_step_path(self):
         state = parse_puzzle([

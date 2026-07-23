@@ -176,6 +176,7 @@ function runCase(caseSpec) {
     moves: validation.valid ? validation.moves : 0,
     pushes: validation.valid ? validation.pushes : 0,
     visited: result.visited || 0,
+    status: result.status,
     cutoff: Boolean(result.cutoff),
     terminationReason: result.terminationReason,
     bestEstimate: result.bestEstimate,

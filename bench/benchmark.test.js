@@ -40,6 +40,8 @@ test("isolated benchmark cases report heap and process lifecycle telemetry", asy
   });
   assert.equal(result.valid, true);
   assert.equal(result.solved, true);
+  assert.equal(result.status, "solved");
+  assert.equal(result.terminationReason, "solution");
   assert.equal(result.performance.heapSupported, true);
   assert.ok(result.performance.heapUsedBytes > 0);
   assert.ok(result.performance.heapPeakBytes >= result.performance.heapUsedBytes);

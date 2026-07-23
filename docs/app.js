@@ -17,7 +17,7 @@ const {
   shortStateId,
 } = SokomindSearchLog;
 const CODE_MOVE = {U: "Up", D: "Down", L: "Left", R: "Right"};
-const SOLVER_BUILD = "2026-07-22.24";
+const SOLVER_BUILD = "2026-07-23.25";
 const SOLVER_WORKER_URL = `solver-worker.js?build=${SOLVER_BUILD}`;
 const PUSH_BOUNDS_KEY = "sokomind-push-bounds-v1";
 const KEYS = {ArrowUp: "Up", ArrowDown: "Down", ArrowLeft: "Left", ArrowRight: "Right",
@@ -229,7 +229,7 @@ function clearSearchTelemetry() {
 }
 function stop(message = true) {
   if (workers.length && message) appendSearchLog("control", "Search stopped by user",
-    {activeWorkers: workers.length});
+    {activeWorkers: workers.length, status: "cancelled", reason: "user-stop"});
   workers.forEach(worker => worker.terminate()); workers = [];
   clearSearchTelemetry();
   animation = []; clearTimeout(timer); timer = null;
@@ -363,6 +363,13 @@ $("home-button").onclick = showHome;
 $("start-game").onclick = hideHome;
 $("hint").onclick = () => startSolver("hint");
 $("stop").onclick = () => stop();
+$("clear-saved-search").onclick = () => {
+  const problemHash = state
+    ? exactCheckpointProblemHash(serializeState(state))
+    : null;
+  const cleared = clearExactCheckpoints(problemHash);
+  setStatus(cleared ? "Saved exact-search state cleared." : "Could not clear saved search state.");
+};
 $("undo").onclick = undo; $("reset").onclick = reset;
 $("copy-moves").onclick = async () => {
   try {

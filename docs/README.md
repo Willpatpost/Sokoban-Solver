@@ -230,12 +230,19 @@ than hard pruning.
 
 Small searches remain exhaustive. Complex boards use explicit state and cache
 budgets. After the bounded heuristic portfolio finishes, persistent push-IDA*
-workers hash-partition the contour at a shallow push depth. Each shard keeps working
-instead of restarting from the root at geometrically increasing state budgets. The
-union of the shards covers the contour, and an unsolvability proof is accepted only
-after every shard exhausts its partition. Search continues until it finds a solution,
-proves the state space unsolvable, or you press **Stop**; there is no fixed push-depth
-ceiling when no learned incumbent is available.
+workers hash-partition the contour at a shallow push depth. IDA* uses an explicit
+traversal stack rather than JavaScript recursion. Production proof workers yield
+after bounded work slices and save a versioned, board-hashed checkpoint containing
+their contour, shard, stack, and bounded recent performance cache. A compatible
+checkpoint resumes after a worker restart or page reload; incompatible board,
+build, bound, and shard data is rejected. **Clear Saved Search** explicitly discards
+the current puzzle's durable proof state.
+
+The union of the shards covers the contour, and an unsolvability proof is accepted
+only after every shard exhausts its partition. Search continues until it finds a
+solution, proves the state space unsolvable, reports a platform failure, or you
+press **Stop**; there is no fixed push-depth ceiling when no learned incumbent is
+available.
 Required phase work is tracked separately from opportunistic landmark bridges, so
 bridge churn cannot postpone exact search. When required handoffs finish, pending
 and active bridges are retired and remaining browser capacity transitions to the
@@ -266,6 +273,14 @@ liveness reports. Exact transposition capacity is divided from a device-memory-a
 total budget: a lone proof shard can retain more states, while parallel shards remain
 collectively bounded.
 
+Every public run ends with one of five meanings: `solved`,
+`proven-unsolvable`, `cutoff`, `cancelled`, or `failed`, plus a machine-readable
+reason. Only complete exact exhaustion may report `proven-unsolvable`; finite
+bounds and guided budgets report `cutoff`. Browser and Python solvers independently
+replay a candidate path before exposing `solved`. Repeated exact-worker failures
+resume from the last compatible proof checkpoint and stop with `failed` after a
+bounded recovery count rather than looping forever.
+
 Exact search separates commitment checks used for proven box locking from richer
 child-state signals used only to order equal-bound successors. Proven locking remains
 active on every expanded state. Child commitment and doorway scoring is evaluated
@@ -274,8 +289,9 @@ those signals actually change successor order, pauses them after an unproductive
 64-state window, and samples again after 512 eligible states. Progress telemetry
 reports strategic ordering evaluations, skips, and ordering changes.
 
-Very large puzzles can still hit browser memory limits before the search space
-is exhausted. Ultimate Bidirectional uses compact parent records, caps each
+Very large puzzles can still hit browser memory or storage limits before the search
+space is exhausted; such a platform failure is not an unsolvability proof. Ultimate
+Bidirectional uses compact parent records, caps each
 bidirectional side on complex boards, bounds worker transposition and memo
 tables, and automatically reduces its reverse-worker count. A priority work queue
 uses capacity released by completed forward and reverse workers. While evacuation
@@ -320,8 +336,9 @@ Then open `http://localhost:8000`.
 From the repository root:
 
 ```powershell
-node --test docs/solver-worker.test.js docs/browser-modules.test.js docs/path-validation.test.js docs/director-policy.test.js docs/keyboard-policy.test.js docs/conformance.test.js
-node --test docs/pruning-differential.test.js bench/evaluator.test.js bench/generated-cases.test.js bench/benchmark.test.js bench/conformance.test.js
+node --test docs/solver-worker.test.js docs/solver-worker-protocol.test.js docs/exact-kernel-differential.test.js docs/exact-checkpoint-storage.test.js docs/browser-modules.test.js docs/path-validation.test.js docs/director-policy.test.js docs/keyboard-policy.test.js docs/conformance.test.js
+node --test docs/pruning-differential.test.js bench/evaluator.test.js bench/generated-cases.test.js bench/benchmark.test.js bench/conformance.test.js bench/verify-solution.test.js bench/solver-generality.test.js
+node bench/verify-solution.js huge docs/optimalForHuge.txt
 node bench/benchmark.js --suite smoke
 node bench/benchmark.js --suite validation
 ```

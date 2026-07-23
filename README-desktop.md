@@ -90,6 +90,13 @@ Recommended algorithms:
 large board, try `push-greedy` directly or expect to add stronger
 Sokoban-specific deadlock/pattern-database logic for that level.
 
+Every search returns a structured terminal status: `solved`,
+`proven-unsolvable`, `cutoff`, `cancelled`, or `failed`, with a reason, elapsed
+time, and visited-state count. Existing callers may still unpack the result as
+`path, final, elapsed, visited`. A bounded Ultimate result is a `cutoff`, never a
+claim that the puzzle is impossible. Candidate solutions are independently
+replayed before the CLI or GUI exposes success.
+
 The local solver uses exact polynomial assignment for every box count, including
 Hall-failure detection when no distinct box-to-goal matching exists. Its bounded
 layout-only heuristic cache avoids retaining complete search states, and

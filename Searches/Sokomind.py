@@ -16,6 +16,7 @@ import math
 import time
 from collections import deque
 from dataclasses import dataclass, field
+from enum import Enum
 from functools import lru_cache
 from pathlib import Path
 from threading import Event
@@ -44,6 +45,49 @@ Box = tuple[str, Position]
 
 class PuzzleError(ValueError):
     """Raised when a puzzle definition is invalid."""
+
+
+class SearchStatus(str, Enum):
+    """Terminal meanings shared with the browser solver."""
+
+    SOLVED = "solved"
+    PROVEN_UNSOLVABLE = "proven-unsolvable"
+    CUTOFF = "cutoff"
+    CANCELLED = "cancelled"
+    FAILED = "failed"
+
+
+@dataclass(frozen=True)
+class SearchResult:
+    """Structured result that remains compatible with legacy tuple unpacking."""
+
+    status: SearchStatus
+    reason: str
+    path: list[tuple[str, Position]] | None
+    final: State | None
+    elapsed: float
+    visited: int
+
+    @property
+    def cutoff(self) -> bool:
+        return self.status is SearchStatus.CUTOFF
+
+    def __iter__(self):
+        yield self.path
+        yield self.final
+        yield self.elapsed
+        yield self.visited
+
+
+def _search_result(
+    status: SearchStatus,
+    reason: str,
+    path: list[tuple[str, Position]] | None,
+    final: State | None,
+    elapsed: float,
+    visited: int,
+) -> SearchResult:
+    return SearchResult(status, reason, path, final, elapsed, visited)
 
 
 @dataclass(frozen=True)
@@ -745,9 +789,15 @@ def _search(
     expanded: set[object] = set()
     while has_items():
         if cancel_event is not None and cancel_event.is_set():
-            return None, None, time.perf_counter() - started, len(expanded)
+            return _search_result(
+                SearchStatus.CANCELLED, "user-stop", None, None,
+                time.perf_counter() - started, len(expanded),
+            )
         if max_seconds is not None and time.perf_counter() - started >= max_seconds:
-            return None, None, time.perf_counter() - started, len(expanded)
+            return _search_result(
+                SearchStatus.CUTOFF, "time-budget", None, None,
+                time.perf_counter() - started, len(expanded),
+            )
         current = pop()
         current_reachable = _reachable_parents(current) if push_macro else None
         current_key = (
@@ -758,7 +808,10 @@ def _search(
         expanded.add(current_key)
         if current.is_goal():
             elapsed = time.perf_counter() - started
-            return reconstruct_path(came_from, current, initial), current, elapsed, len(expanded)
+            path = reconstruct_path(came_from, current, initial)
+            return _validated_solution_result(
+                initial, path, elapsed, len(expanded), expected_final=current,
+            )
 
         if push_macro:
             children = [
@@ -781,7 +834,10 @@ def _search(
                 came_from[neighbor] = (current, segment)
                 push(neighbor)
 
-    return None, None, time.perf_counter() - started, len(expanded)
+    return _search_result(
+        SearchStatus.PROVEN_UNSOLVABLE, "frontier-exhausted", None, None,
+        time.perf_counter() - started, len(expanded),
+    )
 
 
 def dfs_search(initial_state: State, cancel_event: Event | None = None):
@@ -860,18 +916,28 @@ def push_beam_search(
         candidates: dict[object, tuple[float, int, State, State, list[str]]] = {}
         for current in frontier:
             if cancel_event is not None and cancel_event.is_set():
-                return None, None, time.perf_counter() - started, visited
+                return _search_result(
+                    SearchStatus.CANCELLED, "user-stop", None, None,
+                    time.perf_counter() - started, visited,
+                )
             if max_seconds is not None and time.perf_counter() - started >= max_seconds:
-                return None, None, time.perf_counter() - started, visited
+                return _search_result(
+                    SearchStatus.CUTOFF, "time-budget", None, None,
+                    time.perf_counter() - started, visited,
+                )
             if current.is_goal():
-                return (
+                return _validated_solution_result(
+                    initial,
                     reconstruct_path(came_from, current, initial),
-                    current,
                     time.perf_counter() - started,
                     visited,
+                    expected_final=current,
                 )
             if visited >= max_visited:
-                return None, None, time.perf_counter() - started, visited
+                return _search_result(
+                    SearchStatus.CUTOFF, "state-budget", None, None,
+                    time.perf_counter() - started, visited,
+                )
             visited += 1
             reachable = _reachable_parents(current)
             for raw_state, raw_segment in get_push_neighbors(current, reachable):
@@ -898,7 +964,10 @@ def push_beam_search(
             came_from[neighbor] = (parent, segment)
             frontier.append(neighbor)
 
-    return None, None, time.perf_counter() - started, visited
+    return _search_result(
+        SearchStatus.CUTOFF, "bounded-frontier-exhausted", None, None,
+        time.perf_counter() - started, visited,
+    )
 
 
 def ultimate_search(initial_state: State, cancel_event: Event | None = None):
@@ -917,11 +986,17 @@ def ultimate_search(initial_state: State, cancel_event: Event | None = None):
         lambda: push_a_star_search(initial_state, cancel_event, max_seconds=30),
     )
     for attempt in attempts:
-        path, final, _elapsed, visited = attempt()
-        total_visited += visited
-        if path is not None or (cancel_event is not None and cancel_event.is_set()):
-            return path, final, time.perf_counter() - started, total_visited
-    return None, None, time.perf_counter() - started, total_visited
+        result = attempt()
+        total_visited += result.visited
+        if result.status in {SearchStatus.SOLVED, SearchStatus.CANCELLED}:
+            return _search_result(
+                result.status, result.reason, result.path, result.final,
+                time.perf_counter() - started, total_visited,
+            )
+    return _search_result(
+        SearchStatus.CUTOFF, "portfolio-budget", None, None,
+        time.perf_counter() - started, total_visited,
+    )
 
 
 def portfolio_search(initial_state: State, cancel_event: Event | None = None):
@@ -934,6 +1009,48 @@ def apply_move(state: State, move: str) -> State:
         if direction == move:
             return neighbor
     raise ValueError(f"Illegal move {move!r} from {state.robot_pos}.")
+
+
+def _validated_solution_result(
+    initial: State,
+    path: Sequence[tuple[str, Position]],
+    elapsed: float,
+    visited: int,
+    *,
+    expected_final: State | None = None,
+) -> SearchResult:
+    """Replay a candidate independently before exposing solver success."""
+    replay = State(initial.robot_pos, initial.boxes, initial.board)
+    validated: list[tuple[str, Position]] = []
+    try:
+        for move, reported_position in path:
+            replay = apply_move(replay, move)
+            if replay.robot_pos != reported_position:
+                return _search_result(
+                    SearchStatus.FAILED, "solution-position-mismatch", None, None,
+                    elapsed, visited,
+                )
+            validated.append((move, replay.robot_pos))
+            if replay.is_goal():
+                if expected_final is not None and (
+                    replay.robot_pos != expected_final.robot_pos or
+                    replay.boxes != expected_final.boxes
+                ):
+                    return _search_result(
+                        SearchStatus.FAILED, "solution-final-state-mismatch",
+                        None, None, elapsed, visited,
+                    )
+                return _search_result(
+                    SearchStatus.SOLVED, "solution", validated,
+                    expected_final or replay, elapsed, visited,
+                )
+    except ValueError:
+        return _search_result(
+            SearchStatus.FAILED, "illegal-solution-path", None, None, elapsed, visited,
+        )
+    return _search_result(
+        SearchStatus.FAILED, "incomplete-solution-path", None, None, elapsed, visited,
+    )
 
 
 def render_puzzle(state: State) -> str:
@@ -1019,19 +1136,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         puzzle = load_custom_puzzle(
             args.file) if args.file else BUILTIN_PUZZLES[args.puzzle]
         initial = parse_puzzle(puzzle)
-        path, final, elapsed, visited = solve(puzzle, args.algorithm)
+        result = solve(puzzle, args.algorithm)
+        path, final, elapsed, visited = result
     except (PuzzleError, ValueError) as exc:
         logging.error("%s", exc)
         return 2
 
     if path is None:
-        budget = (
-            " in current search budget"
-            if args.algorithm in {"fast", "portfolio", "ultimate"}
-            else ""
+        print(
+            f"Search ended: {result.status.value} ({result.reason}; "
+            f"{visited} states, {elapsed:.3f}s)."
         )
-        print(f"No solution found{budget} ({visited} states, {elapsed:.3f}s).")
-        return 1
+        return 1 if result.status is not SearchStatus.FAILED else 2
     if args.output:
         try:
             args.output.write_text(

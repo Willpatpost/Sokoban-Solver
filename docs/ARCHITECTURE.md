@@ -26,7 +26,8 @@ route and must remain correct when it is absent.
 - `docs/solver-engine.js` owns browser board parsing, state identities, topology,
   heuristics, deadlocks, dependencies, local analysis, and push generation.
 - `docs/solver-search.js` owns browser search algorithms, reconstruction,
-  checkpoints, progress messages, and result telemetry.
+  resumable exact proof checkpoints, progress messages, terminal statuses, and
+  result telemetry.
 - `shared/sokomind-conformance.json` is the canonical built-in level catalog and
   cross-runtime rule fixture.
 - `bench/` runs isolated, replay-validated search and solution checks.
@@ -40,3 +41,9 @@ Hard pruning requires independent differential evidence. A saved solution may
 prove that one route is retained, but it cannot establish that a pruning rule is
 safe for arbitrary puzzles; generated and exhaustive state families provide that
 broader evidence.
+
+The exact kernel is additionally compared with an independent step-state 0-1 BFS.
+The gate checks optimal push counts and solvability across exhaustive tiny states
+and generated generic/typed multi-box boards, with exact options, transposition
+eviction, finite bounds, and shard partitions varied independently. Exact proof
+checkpoints contain traversal progress; guided checkpoints never count as proof.

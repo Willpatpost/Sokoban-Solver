@@ -6,9 +6,20 @@ importScripts(
 );
 
 onmessage = ({data}) => {
-  if (data.mode === "bidir-forward" || data.mode === "bidir-reverse") {
-    bidirectionalSide(data);
-  } else {
-    postMessage({type: "done", ...search(data)});
+  try {
+    if (data.mode === "bidir-forward" || data.mode === "bidir-reverse") {
+      bidirectionalSide(data);
+    } else {
+      postMessage({type: "done", ...search(data)});
+    }
+  } catch (error) {
+    postMessage({
+      type: "done",
+      path: null,
+      status: "failed",
+      terminationReason: "worker-exception",
+      error: error instanceof Error ? error.message : String(error),
+      visited: 0,
+    });
   }
 };

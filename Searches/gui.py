@@ -546,12 +546,12 @@ class SokomindApp(tk.Tk):
                     continue
                 path, _final, elapsed, visited = result
                 if path is None:
-                    suffix = (
-                        " in current search budget"
-                        if algorithm in {"Ultimate Search", "Fast Portfolio"}
-                        else ""
+                    status = getattr(result, "status", None)
+                    reason = getattr(result, "reason", "unknown")
+                    label = getattr(status, "value", str(status or "unknown"))
+                    self.status.set(
+                        f"{algorithm}: {label} ({reason}; {visited:,} states)"
                     )
-                    self.status.set(f"{algorithm}: no solution{suffix} ({visited:,} states)")
                     continue
                 moves = [move for move, _position in path]
                 self.status.set(

@@ -80,7 +80,11 @@ test("Ultimate scheduling retires stale phases and reclaims silent workers", () 
   assert.match(app, /requiredAlternative/);
   assert.match(app, /maxWorkerConcurrency - activeSideWorkers/);
   assert.match(app, /persistent partitioned exact contour/);
-  assert.match(app, /exactShard: \{index, count: exactRoundShardCount, depth: 4\}/);
+  assert.match(app, /const exactShard = \{index, count: exactRoundShardCount, depth: 4\}/);
+  assert.match(app, /resumeExactCheckpoint/);
+  assert.match(app, /workerProgress\.set\(worker, plan\.resumeExactCheckpoint\?\.visited \|\| 0\)/);
+  assert.match(app, /checkpoint-yield/);
+  assert.match(app, /Exact search recovery limit reached/);
   assert.match(app, /requiredWork\.isComplete\(\)/);
   assert.match(app, /Bridge campaign circuit breaker opened/);
   assert.match(app, /Started anytime checkpoint discovery/);

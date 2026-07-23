@@ -789,6 +789,29 @@ function boundedPushDepthFirstSearch(payload) {
   };
 }
 
+const EXACT_CHECKPOINT_VERSION = 1;
+
+function exactProblemHash(state) {
+  const boxes = [...state.boxes].map(([position, label]) => `${label}@${position}`).sort();
+  const source = `${state.rows.join("\n")}|r:${state.robot.join(",")}|b:${boxes.join(";")}`;
+  let hash = 2166136261;
+  for (let index = 0; index < source.length; index++) {
+    hash ^= source.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `fnv1a-${(hash >>> 0).toString(16).padStart(8, "0")}`;
+}
+
+function encodeExactIdentity(identity) {
+  if (identity === null || identity === undefined) return null;
+  return typeof identity === "bigint" ? `b:${identity}` : `s:${identity}`;
+}
+
+function decodeExactIdentity(identity) {
+  if (identity === null || identity === undefined) return null;
+  return identity.startsWith("b:") ? BigInt(identity.slice(2)) : identity.slice(2);
+}
+
 function pushIterativeDeepeningAStar(payload) {
   const board = parse(payload.state);
   const initial = {
@@ -801,18 +824,51 @@ function pushIterativeDeepeningAStar(payload) {
   const maxVisited = payload.maxVisited || 300000;
   const seed = payload.seed || 0;
   const profile = payload.idaProfile || "balanced";
-  const segments = [], activePath = new Set();
-  let visited = 0, reported = 0, solution = null, cutoff = false;
-  let bestEstimate = heuristic(initial.boxes, board), bestPushes = 0;
-  let generated = 0, thresholdPrunes = 0, upperBoundPrunes = 0;
-  let corralPrunes = 0, cyclePrunes = 0, transpositionPrunes = 0;
-  let shardRejections = 0, shardAcceptances = 0, maxDepth = 0;
-  let transpositionEvictions = 0, maxTranspositions = 0;
-  let nextThresholdCandidate = Infinity;
-  const progressInterval = payload.progressInterval || 25000;
-  let trackedThrough = payload.trackedSignatures ? 0 : undefined;
   const exactShard = payload.exactShard;
+  const problemHash = exactProblemHash(payload.state);
+  const checkpointBuild = payload.solverBuild || "development";
   const lockProvenCommitments = payload.lockProvenCommitments !== false;
+  const progressInterval = payload.progressInterval || 25000;
+  const resume = payload.resumeExactCheckpoint;
+  if (resume && (
+    resume.version !== EXACT_CHECKPOINT_VERSION ||
+    resume.problemHash !== problemHash ||
+    resume.solverBuild !== checkpointBuild ||
+    JSON.stringify(resume.exactShard || null) !== JSON.stringify(exactShard || null) ||
+    resume.upperBound !== (Number.isFinite(upperBound) ? upperBound : "Infinity")
+  )) {
+    return {path: null, visited: 0, cutoff: false, failed: true,
+      terminationReason: "checkpoint-incompatible", checkpointRejected: true};
+  }
+
+  let visited = resume?.visited || 0, reported = visited, solution = null, cutoff = false;
+  let bestEstimate = resume?.bestEstimate ?? heuristic(initial.boxes, board);
+  let bestPushes = resume?.bestPushes || 0;
+  let generated = resume?.generated || 0, thresholdPrunes = resume?.thresholdPrunes || 0;
+  let upperBoundPrunes = resume?.upperBoundPrunes || 0;
+  let corralPrunes = resume?.corralPrunes || 0, cyclePrunes = resume?.cyclePrunes || 0;
+  let transpositionPrunes = resume?.transpositionPrunes || 0;
+  let shardRejections = resume?.shardRejected || 0, shardAcceptances = resume?.shardAccepted || 0;
+  let maxDepth = resume?.maxDepth || 0;
+  let transpositionEvictions = resume?.transpositionEvictions || 0;
+  let maxTranspositions = resume?.maxTranspositions || 0;
+  let nextThresholdCandidate = resume?.nextThreshold ?? Infinity;
+  let trackedThrough = payload.trackedSignatures ? (resume?.trackedThrough || 0) : undefined;
+  let threshold = resume?.threshold ?? bestEstimate;
+  let stack = (resume?.stack || []).map(frame => ({
+    ...frame,
+    identity: decodeExactIdentity(frame.identity),
+  }));
+  let transpositions = new BoundedDepthMap(payload.transpositionLimit || 80000);
+  if (resume?.transpositions) {
+    for (const [identity, cost] of resume.transpositions) {
+      transpositions.set(decodeExactIdentity(identity), cost);
+    }
+    transpositions.evictions = resume.currentTranspositionEvictions || 0;
+  }
+  const activePath = new Set(stack.filter(frame => frame.entered).map(frame => frame.identity));
+  const pauseAt = payload.pauseAfterVisited
+    ? visited + payload.pauseAfterVisited : Infinity;
   const strategicOrderingGate = createOrderingProductivityGate(
     payload.strategicOrderingWarmup || 64,
     payload.strategicOrderingCooldown || 512,
@@ -832,192 +888,255 @@ function pushIterativeDeepeningAStar(payload) {
     if (profile === "detour") return estimate + 1.25 * topology;
     return estimate + 0.6 * topology;
   };
-
-  const searchContour = (state, cost, threshold, transpositions, shardAccepted = false) => {
-    if (cutoff || solution) return Infinity;
-    maxDepth = Math.max(maxDepth, cost);
-    const estimate = heuristic(state.boxes, board);
-    const total = cost + estimate;
-    let accepted = shardAccepted;
-    if (!accepted && exactShard && cost >= exactShard.depth) {
-      const bucket = Math.floor(signatureNoise(exactPushIdentity(state, board), 0) * exactShard.count);
-      if (bucket !== exactShard.index) {
-        shardRejections++;
-        return Infinity;
-      }
-      accepted = true;
-      shardAcceptances++;
-    }
-    if (total > threshold) {
-      thresholdPrunes++;
-      nextThresholdCandidate = Math.min(nextThresholdCandidate, total);
-      return total;
-    }
-    if (goal(state.boxes, board.goals)) {
-      solution = segments.flatMap(segment => segment);
-      return total;
-    }
-    if (++visited >= maxVisited) {
-      cutoff = true;
-      return Infinity;
-    }
-    if (visited - reported >= progressInterval) {
-      postMessage({type: "progress", visited, threshold, bestEstimate, bestPushes,
-        depth: cost, maxDepth, generated, thresholdPrunes, upperBoundPrunes,
-        corralPrunes, cyclePrunes, transpositionPrunes,
-        shardRejected: shardRejections, shardAccepted: shardAcceptances,
-        transpositions: transpositions.size, transpositionEvictions: transpositions.evictions,
-        nextThreshold: Number.isFinite(nextThresholdCandidate) ? nextThresholdCandidate : undefined,
-        performance: performanceSnapshot(board.metrics)});
-      reported = visited;
-    }
-    const reachable = reachablePaths(state, board);
-    if (createsSealedCorralDeadlock(state, board, reachable)) {
-      corralPrunes++;
-      return Infinity;
-    }
-    const identity = pushIdentity(state, reachable);
-    if (payload.trackedSignatures &&
-        payload.trackedSignatures[cost] === pushKey(state, reachable)) {
-      trackedThrough = Math.max(trackedThrough, cost);
-    }
-    if (activePath.has(identity)) {
-      cyclePrunes++;
-      return Infinity;
-    }
-    if ((transpositions.get(identity) ?? Infinity) <= cost) {
-      transpositionPrunes++;
-      return Infinity;
-    }
-    activePath.add(identity);
-    transpositions.set(identity, cost);
-
-    const dependencyGraph = supportDependencyGraph(state, board, reachable);
-    const localRooms = [
-      ...exactLocalRoomAnalyses(state, board, reachable),
-      ...exactLocalCorralAnalyses(state, board, reachable),
-    ];
-    const doorwayBefore = typedDoorwayFlow(state.boxes, board);
-    const currentCommitments = lockProvenCommitments ? goalCommitments(state.boxes, board, {
-      doorway: doorwayBefore,
-      supportDependency: dependencyGraph,
-      localAnalyses: localRooms,
-    }) : null;
-    let nextThreshold = Infinity;
-    const candidates = [];
-    for (const rawNext of pushNeighbors(
-      state,
-      board,
-      reachable,
-      {commitments: currentCommitments},
-    )) {
-      generated++;
-      const next = expandPushMacro(
-        rawNext,
-        board,
-        payload.forcedMacros !== false,
-        {lockProven: lockProvenCommitments},
-      );
-      if (!next) continue;
-      const childCost = cost + next.pushes;
-      if (childCost > upperBound) {
-        upperBoundPrunes++;
-        continue;
-      }
-      const childEstimate = heuristic(next.boxes, board);
-      if (!Number.isFinite(childEstimate) || childCost + childEstimate > upperBound) {
-        upperBoundPrunes++;
-        continue;
-      }
-      if (childEstimate < bestEstimate) {
-        bestEstimate = childEstimate;
-        bestPushes = childCost;
-      }
-      const doorwayDelta = doorwayFlowDelta(doorwayBefore, state, next);
-      const baseScore = orderingScore(next, childCost) +
-        (payload.supportDependencyWeight ?? 0.5) *
-          supportDependencyDelta(dependencyGraph, next) +
-        (payload.localRoomWeight ?? 0.4) * localRoomOrderingDelta(localRooms, next) +
-        (payload.doorwayFlowWeight ?? 0.25) * doorwayDelta +
-        (payload.diversity ?? 0.2) *
-          signatureNoise(exactPushIdentity(next, board), seed + childCost);
-      candidates.push({
-        next,
-        cost: childCost,
-        total: childCost + childEstimate,
-        baseScore,
-        score: baseScore,
-      });
-    }
-    const orderable = candidates.filter(candidate => candidate.total <= threshold);
-    if (orderable.length > 1) {
-      if (strategicOrderingGate.shouldEvaluate()) {
-        board.metrics.strategicOrderingEvaluations++;
-        const baseline = [...orderable].sort((left, right) =>
-          left.total - right.total || left.baseScore - right.baseScore);
-        const packingWeight = ["milestone", "detour"].includes(profile) ? 1 : 0.8;
-        const doorwayWeight = payload.doorwayFlowWeight ?? 0.25;
-        for (const candidate of orderable) {
-          const doorway = typedDoorwayFlow(candidate.next.boxes, board);
-          const packing = goalPackingBonus(candidate.next.boxes, board, {
-            doorway,
-            supportDependency: dependencyGraph,
-            localAnalyses: localRooms,
-            transition: candidate.next,
-          });
-          candidate.score += 0.2 * doorwayWeight * doorway.penalty - packingWeight * packing;
-        }
-        const enriched = [...orderable].sort((left, right) =>
-          left.total - right.total || left.score - right.score);
-        const changed = baseline.some((candidate, index) => candidate !== enriched[index]);
-        if (changed) board.metrics.strategicOrderingChanges++;
-        strategicOrderingGate.observe(changed);
-      } else {
-        board.metrics.strategicOrderingSkips++;
-      }
-    }
-    candidates.sort((left, right) => left.total - right.total || left.score - right.score);
-    for (const candidate of candidates) {
-      if (candidate.total > threshold) {
-        thresholdPrunes++;
-        nextThresholdCandidate = Math.min(nextThresholdCandidate, candidate.total);
-        nextThreshold = Math.min(nextThreshold, candidate.total);
-        continue;
-      }
-      segments.push(candidate.next.path);
-      const exceeded = searchContour(
-        {robot: candidate.next.robot, boxes: candidate.next.boxes},
-        candidate.cost,
-        threshold,
-        transpositions,
-        accepted,
-      );
-      segments.pop();
-      nextThreshold = Math.min(nextThreshold, exceeded);
-      if (cutoff || solution) break;
-    }
-    activePath.delete(identity);
-    return nextThreshold;
+  const makeRootFrame = () => ({
+    state: initial, cost: 0, accepted: false, entered: false,
+    identity: null, candidates: null, nextIndex: 0, pathFromParent: [],
+  });
+  const makeCheckpoint = () => ({
+    version: EXACT_CHECKPOINT_VERSION,
+    problemHash,
+    solverBuild: checkpointBuild,
+    exactShard: exactShard || null,
+    upperBound: Number.isFinite(upperBound) ? upperBound : "Infinity",
+    threshold,
+    visited,
+    bestEstimate,
+    bestPushes,
+    generated,
+    thresholdPrunes,
+    upperBoundPrunes,
+    corralPrunes,
+    cyclePrunes,
+    transpositionPrunes,
+    shardRejected: shardRejections,
+    shardAccepted: shardAcceptances,
+    maxDepth,
+    transpositionEvictions,
+    maxTranspositions,
+    nextThreshold: Number.isFinite(nextThresholdCandidate) ? nextThresholdCandidate : null,
+    trackedThrough,
+    stack: stack.map(frame => ({
+      ...frame,
+      identity: encodeExactIdentity(frame.identity),
+      state: {
+        robot: [...frame.state.robot],
+        boxes: frame.state.boxes.map(box => [...box]),
+      },
+      candidates: frame.candidates?.map(candidate => ({
+        ...candidate,
+        state: {
+          robot: [...candidate.state.robot],
+          boxes: candidate.state.boxes.map(box => [...box]),
+        },
+        path: [...candidate.path],
+      })) || null,
+      pathFromParent: [...frame.pathFromParent],
+    })),
+    // Transpositions are a performance cache, not proof progress. Retaining only
+    // a recent bounded tail keeps durable checkpoints within browser storage
+    // limits; omitted entries can only cause repeated work after resume.
+    transpositions: [...transpositions.values].slice(-2000)
+      .map(([identity, cost]) => [encodeExactIdentity(identity), cost]),
+    currentTranspositionEvictions: transpositions.evictions,
+  });
+  const emitProgress = (cost, includeCheckpoint = false) => {
+    postMessage({type: "progress", visited, threshold, bestEstimate, bestPushes,
+      depth: cost, maxDepth, generated, thresholdPrunes, upperBoundPrunes,
+      corralPrunes, cyclePrunes, transpositionPrunes,
+      shardRejected: shardRejections, shardAccepted: shardAcceptances,
+      transpositions: transpositions.size, transpositionEvictions: transpositions.evictions,
+      nextThreshold: Number.isFinite(nextThresholdCandidate) ? nextThresholdCandidate : undefined,
+      exactCheckpoint: includeCheckpoint ? makeCheckpoint() : undefined,
+      performance: performanceSnapshot(board.metrics)});
+    reported = visited;
   };
 
-  let threshold = bestEstimate;
-  while (Number.isFinite(threshold) && threshold <= upperBound && !cutoff && !solution) {
-    postMessage({type: "contour", threshold, visited, exactShard});
-    activePath.clear();
-    const transpositions = new BoundedDepthMap(payload.transpositionLimit || 80000);
-    nextThresholdCandidate = Infinity;
-    const nextThreshold = searchContour(initial, 0, threshold, transpositions);
+  while (Number.isFinite(threshold) && threshold <= upperBound && !solution && !cutoff) {
+    if (!stack.length) {
+      postMessage({type: "contour", threshold, visited, exactShard});
+      activePath.clear();
+      transpositions = new BoundedDepthMap(payload.transpositionLimit || 80000);
+      nextThresholdCandidate = Infinity;
+      stack = [makeRootFrame()];
+    }
+    while (stack.length && !solution && !cutoff) {
+      const frame = stack[stack.length - 1];
+      const {state, cost} = frame;
+      maxDepth = Math.max(maxDepth, cost);
+      if (!frame.entered) {
+        const estimate = heuristic(state.boxes, board);
+        const total = cost + estimate;
+        if (!frame.accepted && exactShard && cost >= exactShard.depth) {
+          const bucket = Math.floor(
+            signatureNoise(exactPushIdentity(state, board), 0) * exactShard.count,
+          );
+          if (bucket !== exactShard.index) {
+            shardRejections++;
+            stack.pop();
+            continue;
+          }
+          frame.accepted = true;
+          shardAcceptances++;
+        }
+        if (total > threshold) {
+          thresholdPrunes++;
+          nextThresholdCandidate = Math.min(nextThresholdCandidate, total);
+          stack.pop();
+          continue;
+        }
+        if (goal(state.boxes, board.goals)) {
+          solution = stack.flatMap(candidate => candidate.pathFromParent);
+          break;
+        }
+        visited++;
+        if (visited >= maxVisited) {
+          cutoff = true;
+          break;
+        }
+        const reachable = reachablePaths(state, board);
+        if (createsSealedCorralDeadlock(state, board, reachable)) {
+          corralPrunes++;
+          stack.pop();
+          continue;
+        }
+        const identity = pushIdentity(state, reachable);
+        if (payload.trackedSignatures &&
+            payload.trackedSignatures[cost] === pushKey(state, reachable)) {
+          trackedThrough = Math.max(trackedThrough, cost);
+        }
+        if (activePath.has(identity)) {
+          cyclePrunes++;
+          stack.pop();
+          continue;
+        }
+        if ((transpositions.get(identity) ?? Infinity) <= cost) {
+          transpositionPrunes++;
+          stack.pop();
+          continue;
+        }
+        activePath.add(identity);
+        transpositions.set(identity, cost);
+        frame.identity = identity;
+        frame.entered = true;
+        const dependencyGraph = supportDependencyGraph(state, board, reachable);
+        const localRooms = [
+          ...exactLocalRoomAnalyses(state, board, reachable),
+          ...exactLocalCorralAnalyses(state, board, reachable),
+        ];
+        const doorwayBefore = typedDoorwayFlow(state.boxes, board);
+        const commitments = lockProvenCommitments ? goalCommitments(state.boxes, board, {
+          doorway: doorwayBefore,
+          supportDependency: dependencyGraph,
+          localAnalyses: localRooms,
+        }) : null;
+        const candidates = [];
+        for (const rawNext of pushNeighbors(state, board, reachable, {commitments})) {
+          generated++;
+          const next = expandPushMacro(rawNext, board, payload.forcedMacros !== false,
+            {lockProven: lockProvenCommitments});
+          if (!next) continue;
+          const childCost = cost + next.pushes;
+          const childEstimate = heuristic(next.boxes, board);
+          if (childCost > upperBound || !Number.isFinite(childEstimate) ||
+              childCost + childEstimate > upperBound) {
+            upperBoundPrunes++;
+            continue;
+          }
+          if (childEstimate < bestEstimate) {
+            bestEstimate = childEstimate;
+            bestPushes = childCost;
+          }
+          const doorwayDelta = doorwayFlowDelta(doorwayBefore, state, next);
+          const baseScore = orderingScore(next, childCost) +
+            (payload.supportDependencyWeight ?? 0.5) *
+              supportDependencyDelta(dependencyGraph, next) +
+            (payload.localRoomWeight ?? 0.4) * localRoomOrderingDelta(localRooms, next) +
+            (payload.doorwayFlowWeight ?? 0.25) * doorwayDelta +
+            (payload.diversity ?? 0.2) *
+              signatureNoise(exactPushIdentity(next, board), seed + childCost);
+          candidates.push({
+            state: {robot: next.robot, boxes: next.boxes},
+            path: next.path,
+            cost: childCost,
+            total: childCost + childEstimate,
+            baseScore,
+            score: baseScore,
+          });
+        }
+        const orderable = candidates.filter(candidate => candidate.total <= threshold);
+        if (orderable.length > 1 && strategicOrderingGate.shouldEvaluate()) {
+          board.metrics.strategicOrderingEvaluations++;
+          const baseline = [...orderable].sort((left, right) =>
+            left.total - right.total || left.baseScore - right.baseScore);
+          const packingWeight = ["milestone", "detour"].includes(profile) ? 1 : 0.8;
+          const doorwayWeight = payload.doorwayFlowWeight ?? 0.25;
+          for (const candidate of orderable) {
+            const candidateState = {...candidate.state, path: candidate.path};
+            const doorway = typedDoorwayFlow(candidate.state.boxes, board);
+            const packing = goalPackingBonus(candidate.state.boxes, board, {
+              doorway,
+              supportDependency: dependencyGraph,
+              localAnalyses: localRooms,
+              transition: candidateState,
+            });
+            candidate.score += 0.2 * doorwayWeight * doorway.penalty - packingWeight * packing;
+          }
+          const enriched = [...orderable].sort((left, right) =>
+            left.total - right.total || left.score - right.score);
+          const changed = baseline.some((candidate, index) => candidate !== enriched[index]);
+          if (changed) board.metrics.strategicOrderingChanges++;
+          strategicOrderingGate.observe(changed);
+        } else if (orderable.length > 1) {
+          board.metrics.strategicOrderingSkips++;
+        }
+        candidates.sort((left, right) => left.total - right.total || left.score - right.score);
+        frame.candidates = candidates;
+        if (visited >= pauseAt) {
+          cutoff = true;
+          break;
+        }
+      }
+      if (visited - reported >= progressInterval) emitProgress(cost, true);
+      let descended = false;
+      while (frame.nextIndex < frame.candidates.length) {
+        const candidate = frame.candidates[frame.nextIndex++];
+        if (candidate.total > threshold) {
+          thresholdPrunes++;
+          nextThresholdCandidate = Math.min(nextThresholdCandidate, candidate.total);
+          continue;
+        }
+        stack.push({
+          state: candidate.state,
+          cost: candidate.cost,
+          accepted: frame.accepted,
+          entered: false,
+          identity: null,
+          candidates: null,
+          nextIndex: 0,
+          pathFromParent: candidate.path,
+        });
+        descended = true;
+        break;
+      }
+      if (descended) continue;
+      activePath.delete(frame.identity);
+      stack.pop();
+    }
+    if (cutoff || solution) break;
     transpositionEvictions += transpositions.evictions;
     maxTranspositions = Math.max(maxTranspositions, transpositions.size);
-    if (!Number.isFinite(nextThreshold)) break;
-    if (nextThreshold <= threshold) threshold++;
-    else threshold = nextThreshold;
+    stack = [];
+    if (!Number.isFinite(nextThresholdCandidate)) break;
+    threshold = nextThresholdCandidate <= threshold ? threshold + 1 : nextThresholdCandidate;
   }
+  const paused = cutoff && visited >= pauseAt && visited < maxVisited;
   return {
     path: solution,
     visited,
     cutoff,
-    terminationReason: solution ? "solution" : cutoff ? "budget" : "bound-exhausted",
+    terminationReason: solution ? "solution" : paused ? "checkpoint-yield" :
+      cutoff ? "budget" : "bound-exhausted",
+    exactCheckpoint: paused ? makeCheckpoint() : undefined,
     bestEstimate,
     bestPushes,
     threshold,
@@ -1032,8 +1151,8 @@ function pushIterativeDeepeningAStar(payload) {
     transpositionPrunes,
     shardRejected: shardRejections,
     shardAccepted: shardAcceptances,
-    transpositionEvictions,
-    maxTranspositions,
+    transpositionEvictions: transpositionEvictions + transpositions.evictions,
+    maxTranspositions: Math.max(maxTranspositions, transpositions.size),
     maxDepth,
     nextThreshold: Number.isFinite(nextThresholdCandidate) ? nextThresholdCandidate : undefined,
   };
@@ -1449,6 +1568,76 @@ function searchCore(payload) {
   return {path: null, visited};
 }
 
+const TERMINAL_STATUS = Object.freeze({
+  SOLVED: "solved",
+  PROVEN_UNSOLVABLE: "proven-unsolvable",
+  CUTOFF: "cutoff",
+  CANCELLED: "cancelled",
+  FAILED: "failed",
+});
+
+function validateSearchSolution(payload, candidatePath) {
+  if (!Array.isArray(candidatePath)) {
+    return {valid: false, reason: "missing-solution-path", path: null};
+  }
+  const board = parse(payload.state);
+  let replay = {
+    robot: payload.state.robot,
+    boxes: payload.state.boxes.map(([position, label]) => [
+      ...position.split(",").map(Number), label,
+    ]),
+    cost: 0,
+  };
+  const validated = [];
+  if (goal(replay.boxes, board.goals)) return {valid: true, reason: "solution", path: []};
+  for (const move of candidatePath) {
+    const next = neighbors(replay, board, false).find(candidate => candidate.move === move);
+    if (!next) return {valid: false, reason: "illegal-solution-path", path: null};
+    replay = {robot: next.robot, boxes: next.boxes, cost: replay.cost + 1};
+    validated.push(move);
+    if (goal(replay.boxes, board.goals)) {
+      return {valid: true, reason: "solution", path: validated};
+    }
+  }
+  return {valid: false, reason: "incomplete-solution-path", path: null};
+}
+
+function terminalSearchResult(payload, result) {
+  if (payload.algorithm === "bridge-astar" || payload.algorithm === "analyze-puzzle") {
+    return result;
+  }
+  if (result.path !== null && result.path !== undefined) {
+    const validation = validateSearchSolution(payload, result.path);
+    if (!validation.valid) {
+      return {...result, path: null, status: TERMINAL_STATUS.FAILED,
+        terminationReason: validation.reason};
+    }
+    return {...result, path: validation.path, status: TERMINAL_STATUS.SOLVED,
+      terminationReason: "solution"};
+  }
+  if (result.cancelled || result.terminationReason === "user-stop") {
+    return {...result, status: TERMINAL_STATUS.CANCELLED,
+      terminationReason: result.terminationReason || "user-stop"};
+  }
+  if (result.failed) {
+    return {...result, status: TERMINAL_STATUS.FAILED,
+      terminationReason: result.terminationReason || "search-failed"};
+  }
+  const exactAlgorithms = new Set(["push-ida-star", "push-astar", "astar", "bfs", "dfs"]);
+  const effectiveBound = payload.algorithm === "push-ida-star"
+    ? (payload.upperBound ?? payload.pushBound ?? 300)
+    : (payload.upperBound ?? payload.pushBound);
+  const finiteBound = Number.isFinite(effectiveBound);
+  const proofComplete = exactAlgorithms.has(payload.algorithm) && !result.cutoff &&
+    (!finiteBound || result.terminationReason === "infeasible-root");
+  if (proofComplete) {
+    return {...result, status: TERMINAL_STATUS.PROVEN_UNSOLVABLE,
+      terminationReason: result.terminationReason || "frontier-exhausted"};
+  }
+  return {...result, status: TERMINAL_STATUS.CUTOFF,
+    cutoff: true, terminationReason: result.terminationReason || "search-incomplete"};
+}
+
 function search(payload) {
   const parentPerformance = activePerformance;
   const metrics = parentPerformance || createPerformanceMetrics();
@@ -1462,7 +1651,10 @@ function search(payload) {
       metrics.totalMs = now() - started;
       metrics._startedAt = null;
     }
-    return {...result, performance: performanceSnapshot(metrics)};
+    return terminalSearchResult(
+      payload,
+      {...result, performance: performanceSnapshot(metrics)},
+    );
   } finally {
     activePerformance = parentPerformance;
   }
