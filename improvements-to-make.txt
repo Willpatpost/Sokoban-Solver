@@ -1,8 +1,8 @@
 Sokomind improvements and implementation status
 ===============================================
 
-Status reviewed against the repository after Improvement Sprint 10: bounded dynamic
-worker-capacity refill for opening and exact-phase discovery.
+Status reviewed against the repository after Improvement Sprint 11: productivity-
+aware strategic child ordering in persistent exact search.
 
 Standing maintenance rules
 --------------------------
@@ -260,6 +260,29 @@ STRONG IMPLEMENTATION, WITH BOUNDED LIMITATIONS
       per-worker search budgets.
     - The current browser tests validate policy and wiring but do not yet provide
       the real-browser campaign coverage tracked by item 42.
+
+41. Make expensive strategic ordering analyses productivity-aware.
+    Strong, bounded implementation in solver build 2026-07-22.22:
+    - Persistent exact search now separates parent commitment evidence used for
+      proven box locking from child commitment and doorway signals used only for
+      successor ordering. Every parent still receives the complete locking oracle.
+    - Child strategic analysis is never evaluated for successors already outside
+      the admissible contour, eliminating work that cannot affect that iteration.
+    - A deterministic productivity gate evaluates 64 eligible branching states and
+      compares baseline and enriched successor order. If the richer signals never
+      change the order, it skips 512 eligible states and then samples again.
+    - Telemetry reports strategic ordering evaluations, gated skips, and actual
+      ordering changes in progress and completion logs.
+    - A 10,000-state Huge probe exercised 1,920 evaluated states, 765 gated skips,
+      and 311 genuine ordering changes; exact-path, shard, pruning-differential,
+      saved-solution, smoke, and validation tests remain green.
+    Bounded limitations:
+    - Parent commitment, dependency, local-room, and doorway evidence remains active
+      because it can prove safe box locks or supply multiple existing ordering terms.
+    - The gate measures whether ordering changes, not whether a change ultimately
+      reduces time to a solution; reviewed Huge traces remain necessary.
+    - Guided beam searches retain full strategic scoring because their primary job
+      is first-solution discovery rather than exhaustive contour proof.
 
 
 PARTIALLY DELIVERED
@@ -597,13 +620,6 @@ YET TO BE IMPLEMENTED AS BACKLOG CAPABILITIES
     combine truly independent subproblems. The proof must account for robot
     traversal, box crossings, shared staging/support cells, and ordering; a visual
     partition or a cut made only of goals is not sufficient for completeness.
-
-41. Make expensive strategic ordering analyses productivity-aware. The Huge
-    build-19 trace spent 83.6 seconds in commitment analysis while proving zero box
-    locks, and support/doorway analyses also consumed time without demonstrated
-    pruning. Instrument each analysis separately for ordering changes, proven
-    locks, and prunes; then skip or sample only ordering-only work after sustained
-    non-productivity while retaining every sound pruning and completeness rule.
 
 42. Add an end-to-end Ultimate campaign regression for checkpoint consumption.
     Assert that an evacuation phase publishes a replayable checkpoint, packing or

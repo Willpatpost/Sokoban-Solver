@@ -1,7 +1,7 @@
 const LEVELS = SokomindLevels.LEVELS;
 const DIRS = {Up: [-1, 0], Down: [1, 0], Left: [0, -1], Right: [0, 1]};
 const CODE_MOVE = {U: "Up", D: "Down", L: "Left", R: "Right"};
-const SOLVER_BUILD = "2026-07-22.21";
+const SOLVER_BUILD = "2026-07-22.22";
 const SOLVER_WORKER_URL = `solver-worker.js?build=${SOLVER_BUILD}`;
 const PUSH_BOUNDS_KEY = "sokomind-push-bounds-v1";
 const KEYS = {ArrowUp: "Up", ArrowDown: "Down", ArrowLeft: "Left", ArrowRight: "Right",
@@ -1386,6 +1386,9 @@ function runBidirectionalSolver(purpose, analysis) {
           heuristicCacheHits: data.performance?.heuristicCacheHits,
           commitmentCacheHits: data.performance?.commitmentCacheHits,
           commitmentBoxLocks: data.performance?.commitmentBoxLocks,
+          strategicOrderingEvaluations: data.performance?.strategicOrderingEvaluations,
+          strategicOrderingSkips: data.performance?.strategicOrderingSkips,
+          strategicOrderingChanges: data.performance?.strategicOrderingChanges,
           supportDependencyCacheHits: data.performance?.supportDependencyCacheHits,
           localRoomCacheHits: data.performance?.localRoomCacheHits,
           localCorralCacheHits: data.performance?.localCorralCacheHits,
@@ -1467,6 +1470,9 @@ function runBidirectionalSolver(purpose, analysis) {
           heuristicCacheHits: data.performance?.heuristicCacheHits,
           commitmentCacheHits: data.performance?.commitmentCacheHits,
           commitmentBoxLocks: data.performance?.commitmentBoxLocks,
+          strategicOrderingEvaluations: data.performance?.strategicOrderingEvaluations,
+          strategicOrderingSkips: data.performance?.strategicOrderingSkips,
+          strategicOrderingChanges: data.performance?.strategicOrderingChanges,
           supportDependencyCacheHits: data.performance?.supportDependencyCacheHits,
           localRoomCacheHits: data.performance?.localRoomCacheHits,
           localCorralCacheHits: data.performance?.localCorralCacheHits,

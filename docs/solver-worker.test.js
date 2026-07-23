@@ -1263,6 +1263,21 @@ test("bounded transposition maps evict old entries", () => {
   assert.equal(memo.get("c"), 3);
 });
 
+test("ordering productivity gate periodically resamples an unproductive signal", () => {
+  const worker = loadWorker();
+  const gate = worker.createOrderingProductivityGate(2, 3);
+
+  assert.equal(gate.shouldEvaluate(), true);
+  gate.observe(false);
+  assert.equal(gate.shouldEvaluate(), true);
+  gate.observe(false);
+  assert.deepEqual({...gate.snapshot()}, {evaluated: 0, productive: 0, cooldownRemaining: 3});
+  assert.equal(gate.shouldEvaluate(), false);
+  assert.equal(gate.shouldEvaluate(), false);
+  assert.equal(gate.shouldEvaluate(), false);
+  assert.equal(gate.shouldEvaluate(), true);
+});
+
 test("beam restarts honor incumbent push bounds", () => {
   const worker = loadWorker();
   const state = stateFromRows([
@@ -1510,6 +1525,9 @@ test("persistent exact progress explains contour and shard pruning", () => {
   assert.equal(typeof progress.transpositionPrunes, "number");
   assert.equal(typeof progress.shardRejected, "number");
   assert.equal(typeof progress.maxDepth, "number");
+  assert.equal(typeof progress.performance.strategicOrderingEvaluations, "number");
+  assert.equal(typeof progress.performance.strategicOrderingSkips, "number");
+  assert.equal(typeof progress.performance.strategicOrderingChanges, "number");
   assert.equal(progress.nextThreshold === undefined ||
     progress.nextThreshold >= progress.threshold, true);
   assert.equal(typeof result.transpositionEvictions, "number");

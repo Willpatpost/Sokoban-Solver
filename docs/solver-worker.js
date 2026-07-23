@@ -166,6 +166,9 @@ function createPerformanceMetrics() {
     commitmentCacheHits: 0,
     commitmentBoxLocks: 0,
     commitmentMs: 0,
+    strategicOrderingEvaluations: 0,
+    strategicOrderingSkips: 0,
+    strategicOrderingChanges: 0,
     supportDependencyCalls: 0,
     supportDependencyCacheHits: 0,
     supportDependencyOptions: 0,
@@ -258,6 +261,28 @@ class BoundedDepthMap {
     }
   }
   get size() { return this.values.size; }
+}
+
+function createOrderingProductivityGate(warmup = 64, cooldown = 512) {
+  const sampleSize = Math.max(1, Math.floor(warmup) || 1);
+  const cooldownSize = Math.max(1, Math.floor(cooldown) || 1);
+  let evaluated = 0, productive = 0, cooldownRemaining = 0;
+  return {
+    shouldEvaluate() {
+      if (cooldownRemaining <= 0) return true;
+      cooldownRemaining--;
+      return false;
+    },
+    observe(changedOrdering) {
+      evaluated++;
+      if (changedOrdering) productive++;
+      if (evaluated < sampleSize) return;
+      if (!productive) cooldownRemaining = cooldownSize;
+      evaluated = 0;
+      productive = 0;
+    },
+    snapshot: () => ({evaluated, productive, cooldownRemaining}),
+  };
 }
 
 class Heap {
@@ -3714,21 +3739,24 @@ function pushIterativeDeepeningAStar(payload) {
   let trackedThrough = payload.trackedSignatures ? 0 : undefined;
   const exactShard = payload.exactShard;
   const lockProvenCommitments = payload.lockProvenCommitments !== false;
+  const strategicOrderingGate = createOrderingProductivityGate(
+    payload.strategicOrderingWarmup || 64,
+    payload.strategicOrderingCooldown || 512,
+  );
   if (!Number.isFinite(bestEstimate)) {
     return {path: null, visited, cutoff: false, terminationReason: "infeasible-root",
       bestEstimate, bestPushes};
   }
 
-  const orderingScore = (state, cost, commitmentEvidence = null) => {
+  const orderingScore = (state, cost) => {
     const estimate = heuristic(state.boxes, board);
     const topology = topologyPenalty(state.boxes, board);
-    const packing = goalPackingBonus(state.boxes, board, commitmentEvidence);
     if (profile === "milestone") {
-      return estimate + 2.5 * topology - packing +
+      return estimate + 2.5 * topology +
         0.35 * signatureNoise(roomFlowSignature(state.boxes, board), seed + cost);
     }
-    if (profile === "detour") return estimate + 1.25 * topology - packing;
-    return estimate + 0.6 * topology - 0.8 * packing;
+    if (profile === "detour") return estimate + 1.25 * topology;
+    return estimate + 0.6 * topology;
   };
 
   const searchContour = (state, cost, threshold, transpositions, shardAccepted = false) => {
@@ -3831,28 +3859,48 @@ function pushIterativeDeepeningAStar(payload) {
         bestEstimate = childEstimate;
         bestPushes = childCost;
       }
-      const doorway = typedDoorwayFlow(next.boxes, board);
-      const commitmentEvidence = {
-        doorway,
-        supportDependency: dependencyGraph,
-        localAnalyses: localRooms,
-        transition: next,
-      };
+      const doorwayDelta = doorwayFlowDelta(doorwayBefore, state, next);
+      const baseScore = orderingScore(next, childCost) +
+        (payload.supportDependencyWeight ?? 0.5) *
+          supportDependencyDelta(dependencyGraph, next) +
+        (payload.localRoomWeight ?? 0.4) * localRoomOrderingDelta(localRooms, next) +
+        (payload.doorwayFlowWeight ?? 0.25) * doorwayDelta +
+        (payload.diversity ?? 0.2) *
+          signatureNoise(exactPushIdentity(next, board), seed + childCost);
       candidates.push({
         next,
         cost: childCost,
         total: childCost + childEstimate,
-        score: orderingScore(next, childCost, commitmentEvidence) +
-          (payload.supportDependencyWeight ?? 0.5) *
-            supportDependencyDelta(dependencyGraph, next) +
-          (payload.localRoomWeight ?? 0.4) * localRoomOrderingDelta(localRooms, next) +
-          (payload.doorwayFlowWeight ?? 0.25) * (
-            0.2 * doorway.penalty +
-            doorwayFlowDelta(doorwayBefore, state, next)
-          ) +
-          (payload.diversity ?? 0.2) *
-            signatureNoise(exactPushIdentity(next, board), seed + childCost),
+        baseScore,
+        score: baseScore,
       });
+    }
+    const orderable = candidates.filter(candidate => candidate.total <= threshold);
+    if (orderable.length > 1) {
+      if (strategicOrderingGate.shouldEvaluate()) {
+        board.metrics.strategicOrderingEvaluations++;
+        const baseline = [...orderable].sort((left, right) =>
+          left.total - right.total || left.baseScore - right.baseScore);
+        const packingWeight = ["milestone", "detour"].includes(profile) ? 1 : 0.8;
+        const doorwayWeight = payload.doorwayFlowWeight ?? 0.25;
+        for (const candidate of orderable) {
+          const doorway = typedDoorwayFlow(candidate.next.boxes, board);
+          const packing = goalPackingBonus(candidate.next.boxes, board, {
+            doorway,
+            supportDependency: dependencyGraph,
+            localAnalyses: localRooms,
+            transition: candidate.next,
+          });
+          candidate.score += 0.2 * doorwayWeight * doorway.penalty - packingWeight * packing;
+        }
+        const enriched = [...orderable].sort((left, right) =>
+          left.total - right.total || left.score - right.score);
+        const changed = baseline.some((candidate, index) => candidate !== enriched[index]);
+        if (changed) board.metrics.strategicOrderingChanges++;
+        strategicOrderingGate.observe(changed);
+      } else {
+        board.metrics.strategicOrderingSkips++;
+      }
     }
     candidates.sort((left, right) => left.total - right.total || left.score - right.score);
     for (const candidate of candidates) {

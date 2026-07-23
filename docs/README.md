@@ -259,6 +259,14 @@ liveness reports. Exact transposition capacity is divided from a device-memory-a
 total budget: a lone proof shard can retain more states, while parallel shards remain
 collectively bounded.
 
+Exact search separates commitment checks used for proven box locking from richer
+child-state signals used only to order equal-bound successors. Proven locking remains
+active on every expanded state. Child commitment and doorway scoring is evaluated
+only for successors inside the current contour; a productivity gate samples whether
+those signals actually change successor order, pauses them after an unproductive
+64-state window, and samples again after 512 eligible states. Progress telemetry
+reports strategic ordering evaluations, skips, and ordering changes.
+
 Very large puzzles can still hit browser memory limits before the search space
 is exhausted. Ultimate Bidirectional uses compact parent records, caps each
 bidirectional side on complex boards, bounds worker transposition and memo
