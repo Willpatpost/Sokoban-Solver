@@ -547,6 +547,14 @@ through setup moves without making exact search incomplete.
    - Measure downstream search yield rather than order changes alone.
    - Apply per-signal and per-phase gates, retain always-required proof evidence,
      and validate state/time improvements on generated and Huge probes.
+   Evidence from the 2026-07-23.27 eight-minute Huge run:
+   - The three exact-phase guided workers ended near 23, 24, and 69 states/second.
+     Their projected costs worsened from 214/214/208 to 234/226/216 while
+     signature, commitment, dependency, doorway, and reachability analysis
+     accumulated tens of seconds per worker.
+   - Add per-worker useful-progress telemetry and retire or simplify a profile
+     when expensive signals do not improve its best checkpoint, projected cost,
+     solved-goal count, or a replay-validated incumbent within a reviewed window.
 
 Sprint completion gate:
 All four items are Done; ordering is assignment-aware, measurable, and complete,
@@ -621,6 +629,16 @@ Sprint 16 supplies deterministic resource gates.
      exceed liveness windows.
    - Prove recovery behavior in the browser campaign suite and retain one bounded
      recovery maximum.
+   - Split first-message time into worker-ready, checkpoint-restore,
+     first-expansion, and first-progress timings. In the Huge run, 14 exact slices
+     spent 50.3 of 237.9 aggregate worker-wall seconds before their first message,
+     but the current log cannot distinguish startup cost from the first 25,000
+     expansions.
+   - On terminal results and user stop, record the terminal visited count and a
+     lifecycle release for every worker. The final exact completion reported
+     1,400,062 states while its release entry retained the preceding 1,375,062
+     progress sample, and the four workers terminated by user stop had no
+     individual release records.
 
 40. Reduce exact transposition churn without multiplying memory.
     Current status: Strong, bounded in build 2026-07-22.20.
@@ -631,6 +649,15 @@ Sprint 16 supplies deterministic resource gates.
    - Replace insertion-order eviction with a measured contour-aware policy.
    - Adapt capacity using supported live pressure signals without exceeding the
      deterministic total budget; retain a conservative fallback.
+   Evidence from the 2026-07-23.27 eight-minute Huge run:
+   - One persistent shard advanced from 0 to 1.4 million visited states through
+     fourteen 100,000-state slices at threshold 208 without completing the
+     contour; every slice still reported next threshold 210.
+   - Live transpositions peaked around 25,000-27,000 against a 320,000 allocation
+     with zero evictions. Verify how much useful transposition state survives a
+     checkpoint boundary, distinguish cumulative retained states from live table
+     occupancy, and trade demonstrably unused capacity for safe parallel shards
+     before increasing any memory limit.
 
 43. Keep available Ultimate worker capacity productively occupied.
     Current status: Strong, bounded in build 2026-07-22.21.
@@ -641,6 +668,22 @@ Sprint 16 supplies deterministic resource gates.
    - Use campaign-test and resource telemetry to choose work by expected marginal
      value rather than fixed retry/profile counts.
    - Prove no opportunistic lane can starve a required handoff or exact shard.
+   Evidence from the 2026-07-23.27 eight-minute Huge run:
+   - Once exact search began, the presence of anytime discovery forced exact
+     shard count to one. The director then filled the other three lanes with slow
+     guided workers while the exact shard processed 1.4 million states. Allow
+     marginal-yield policy to replace stagnant guided lanes with additional
+     deterministic exact shards without exceeding the total memory budget.
+   - Checkpoint selection currently ranks primarily by g+h. The run discovered
+     replayable h=7 checkpoints near 305 pushes at 114 seconds but selected the
+     g=53, h=157, f=210 checkpoint for later discovery. Maintain separate lanes
+     for first-solution proximity (low h/remaining structure) and bound quality
+     (low g+h), with replay validation and fixed budgets for both.
+   - Twenty-one bridge workers terminated target-incompatible at zero states; the
+     first campaign opened its breaker after 19 schedules, 16 incompatibilities,
+     and only one productive target. Batch or preflight cheap compatibility,
+     deduplicate equivalent landmark targets, and lower a generation's bridge
+     budget when its measured compatibility rate collapses.
 
 44. Prevent superseded opening work from delaying handoffs and exact search.
     Current status: Strong, bounded in build 2026-07-22.23.
@@ -704,6 +747,14 @@ capabilities and interfaces stabilize, avoiding repeated parity and UI rewrites.
      matrix, and explicit browser/Python capability table.
    - Ensure setup, testing, benchmarking, deployment, and versioning instructions
      match the final repository.
+   - Version and test the exported search-log schema. Preserve identifier fields
+     as strings even when an eight-character state hash contains only digits;
+     build .27 emitted one checkpoint ID as a number while peer IDs were strings.
+   - Emit a compact terminal summary on solved, failed, cutoff, and user-stopped
+     runs containing the best replayable checkpoint/incumbent, exact contour,
+     per-strategy states and wall time, lifecycle totals, and memory support. The
+     eight-minute Huge log ended with only active-worker count and required manual
+     reconstruction of the run outcome.
 
 48. Consolidate public search modes and remove redundant compatibility bloat.
     Current status: Backlog.
