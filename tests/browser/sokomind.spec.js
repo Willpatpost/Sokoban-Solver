@@ -79,6 +79,13 @@ function installScriptedWorker(page, mode) {
           });
           return;
         }
+        if (selectedMode === "priority" && payload.handoffStage === "structural") {
+          emitLater(this, {
+            type: "done", path: null, cutoff: true, visited: 1, checkpoints: [],
+            status: "cutoff", terminationReason: "fixture-structural",
+          }, 120);
+          return;
+        }
         const checkpoint = {
           state: payload.state,
           path: [],
@@ -140,6 +147,9 @@ function installScriptedWorker(page, mode) {
       }
     }
     Object.defineProperty(navigator, "hardwareConcurrency", {value: 4, configurable: true});
+    if (selectedMode === "priority") {
+      Object.defineProperty(navigator, "deviceMemory", {value: 8, configurable: true});
+    }
     window.Worker = ScriptedWorker;
   }, mode);
 }
@@ -235,4 +245,19 @@ test("Ultimate consumes an evacuation checkpoint and exercises compatible and in
   await expect(page.locator("#search-log-text")).toHaveValue(/worker released/);
   await expect(page.locator("#search-log-text")).toHaveValue(/firstMessageMs=/);
   await expect(page.locator("#search-log-text")).toHaveValue(/terminateCallMs=/);
+});
+
+test("Ultimate gives the structural planner exclusive direct capacity during its head start", async ({page}) => {
+  await installScriptedWorker(page, "priority");
+  await enterGame(page);
+  await page.getByRole("button", {name: "Solve"}).click();
+  await expect.poll(() => page.evaluate(() => window.__workerMessages.filter(
+    message => message.side === "direct",
+  ).length)).toBe(1);
+  expect(await page.evaluate(() => window.__workerMessages.filter(
+    message => message.side === "direct",
+  )[0].handoffStage)).toBe("structural");
+  await expect.poll(() => page.evaluate(() => window.__workerMessages.filter(
+    message => message.side === "direct",
+  ).length)).toBeGreaterThan(1);
 });

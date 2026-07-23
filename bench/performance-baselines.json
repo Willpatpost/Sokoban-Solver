@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "reviewedBuild": "2026-07-23.35",
+  "reviewedBuild": "2026-07-23.36",
   "suites": {
     "smoke": {
       "expected": {

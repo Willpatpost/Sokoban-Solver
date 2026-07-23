@@ -19,6 +19,10 @@ function passingResult(index) {
     retained: baseline.maximumPerCase.retained,
     peakFrontier: baseline.maximumPerCase.peakFrontier,
     transpositionEvictions: 0,
+    performance: {
+      ...baseline.maximumPerformancePerCase,
+      memory: {...baseline.maximumMemoryPerCase},
+    },
   };
 }
 
@@ -34,12 +38,18 @@ test("Huge gate rejects missing, unsolved, timed-out, and regressed cases", () =
     solved: false,
     timeout: true,
     visited: baseline.maximumPerCase.visited + 1,
+    performance: {
+      ...passingResult(1).performance,
+      denseLayoutDerivations:
+        baseline.maximumPerformancePerCase.denseLayoutDerivations + 1,
+    },
   }];
   const failures = evaluateHugeResults(results);
   assert.match(failures.join("\n"), /cases:/);
   assert.match(failures.join("\n"), /solved:/);
   assert.match(failures.join("\n"), /timed out/);
   assert.match(failures.join("\n"), /visited maximum/);
+  assert.match(failures.join("\n"), /denseLayoutDerivations maximum/);
 });
 
 test("Huge gate reads UTF-8 and PowerShell UTF-16 redirected artifacts", () => {

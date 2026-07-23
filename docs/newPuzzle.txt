@@ -1,0 +1,22 @@
+new puzzle
+
+OOOOOOOOOOOOOOOOOOOO
+OSX                O
+OS  X              O
+OS                 O
+OS                 O
+OS                 O
+OS                 O
+OS                 O
+OS                 O
+OS                 O
+OX                 O
+O   X              O
+OX                 O
+O   X              O
+OX                 O
+O   X              O
+OX                 O
+O   X              O
+OS                 O
+OOOOOOOOOOOOOOOOOOOO

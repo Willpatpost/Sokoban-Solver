@@ -27,6 +27,30 @@ function evaluateHugeResults(results, baseline = baselines) {
         failures.push(`${label}: ${field} maximum ${maximum}, received ${actual}`);
       }
     }
+    for (const [field, maximum] of Object.entries(
+      baseline.maximumPerformancePerCase || {},
+    )) {
+      const actual = result.performance?.[field];
+      if (!Number.isFinite(actual)) {
+        failures.push(`${label}: performance.${field} telemetry is missing`);
+      } else if (actual > maximum) {
+        failures.push(
+          `${label}: performance.${field} maximum ${maximum}, received ${actual}`,
+        );
+      }
+    }
+    for (const [field, maximum] of Object.entries(
+      baseline.maximumMemoryPerCase || {},
+    )) {
+      const actual = result.performance?.memory?.[field];
+      if (!Number.isFinite(actual)) {
+        failures.push(`${label}: performance.memory.${field} telemetry is missing`);
+      } else if (actual > maximum) {
+        failures.push(
+          `${label}: performance.memory.${field} maximum ${maximum}, received ${actual}`,
+        );
+      }
+    }
   }
   return failures;
 }

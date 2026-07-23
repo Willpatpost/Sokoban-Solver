@@ -87,6 +87,29 @@ function deriveDenseBoxLayout(parentBoxes, boxes, changedIndex, destinationId, b
   board.metrics.denseIdentityUpdates++;
 }
 
+function cachedPushedBoxes(parentBoxes, changedIndex, destinationId, label, board) {
+  const parentLayout = denseBoxLayout(parentBoxes, board);
+  const key = `${parentLayout.tokens.join(".")}|${changedIndex}|${destinationId}`;
+  const cached = board.pushTransitionMemo.get(key);
+  if (cached) {
+    board.metrics.denseTransitionCacheHits++;
+    return cached;
+  }
+  const boxes = parentBoxes.slice();
+  boxes[changedIndex] = [
+    board.dense.y[destinationId],
+    board.dense.x[destinationId],
+    label,
+  ];
+  deriveDenseBoxLayout(parentBoxes, boxes, changedIndex, destinationId, board);
+  if (board.pushTransitionMemo.size >= PUSH_TRANSITION_MEMO_LIMIT) {
+    board.pushTransitionMemo.delete(board.pushTransitionMemo.keys().next().value);
+    board.metrics.denseTransitionCacheEvictions++;
+  }
+  board.pushTransitionMemo.set(key, boxes);
+  return boxes;
+}
+
 function boxSignature(boxes, board = null) {
   const metrics = board?.metrics;
   if (metrics) metrics.signatureCalls++;
@@ -150,6 +173,7 @@ function exactPushKey(state, board = null) {
 }
 const HEURISTIC_MEMO_LIMIT = 20000;
 const DEADLOCK_MEMO_LIMIT = 10000;
+const PUSH_TRANSITION_MEMO_LIMIT = 2000;
 const PATTERN_DEADLOCK_MEMO_LIMIT = 10000;
 const PATTERN_EXACT_STATE_LIMIT = 512;
 const PATTERN_FLOOR_LIMIT = 18;
@@ -244,6 +268,8 @@ function createPerformanceMetrics() {
     denseBuildMs: 0,
     denseLayoutBuilds: 0,
     denseLayoutDerivations: 0,
+    denseTransitionCacheHits: 0,
+    denseTransitionCacheEvictions: 0,
     denseIdentityUpdates: 0,
     occupancyWordsBuilt: 0,
     occupancyWordCopies: 0,
@@ -327,6 +353,10 @@ function createPerformanceMetrics() {
     doorwayFlowCalls: 0,
     doorwayFlowCacheHits: 0,
     doorwayFlowMs: 0,
+    doorwayScheduleCalls: 0,
+    doorwayScheduleMs: 0,
+    roomEvacuationCalls: 0,
+    roomEvacuationMs: 0,
     goalAccessCalls: 0,
     goalAccessCacheHits: 0,
     goalAccessBlockedGoals: 0,
@@ -359,6 +389,10 @@ function createPerformanceMetrics() {
     macroFullExpansions: 0,
     macroWidenings: 0,
     macroEndpointsRetained: 0,
+    macroTargetBoundCutoffs: 0,
+    planAnalysisCacheHits: 0,
+    planAnalysisCacheMisses: 0,
+    planAnalysisCacheEvictions: 0,
     staticDeadPrunes: 0,
     dynamicDeadPrunes: 0,
     patternDeadlockCalls: 0,
@@ -394,7 +428,8 @@ function performanceSnapshot(metrics) {
   for (const key of ["totalMs", "parseMs", "graphCompileMs", "denseBuildMs",
     "preparedBoardHydrateMs", "signatureMs", "heuristicMs", "commitmentMs",
     "supportDependencyMs", "localRoomMs", "localCorralMs", "doorwayFlowMs",
-    "pushDistanceMs", "goalTableMs", "reachabilityMs"]) {
+    "doorwayScheduleMs", "roomEvacuationMs", "pushDistanceMs", "goalTableMs",
+    "reachabilityMs"]) {
     rounded[key] = Math.round((rounded[key] || 0) * 1000) / 1000;
   }
   return rounded;
@@ -783,6 +818,7 @@ function hydratePreparedBoard(data, seed, metrics) {
     localCorralMemo: new Map(),
     doorwayFlowMemo: new Map(),
     denseBoxMemo: new WeakMap(),
+    pushTransitionMemo: new Map(),
     boxSignatureMemo: new WeakMap(),
     boxIdentityMemo: new WeakMap(),
     metrics,
@@ -884,6 +920,7 @@ function parse(data) {
     localCorralMemo: new Map(),
     doorwayFlowMemo: new Map(),
     denseBoxMemo: new WeakMap(),
+    pushTransitionMemo: new Map(),
     boxSignatureMemo: new WeakMap(),
     boxIdentityMemo: new WeakMap(),
     singleBoxGraph, goalPushTables, dense, metrics,
@@ -1409,6 +1446,8 @@ function topologyPenalty(boxes, board) {
 }
 
 function roomEvacuationPenalty(boxes, board) {
+  const started = now();
+  board.metrics.roomEvacuationCalls++;
   const occupied = new Set(boxes.map(([y, x]) => pkey(y, x)));
   let penalty = 0;
   for (const room of board.topology.rooms) {
@@ -1429,6 +1468,7 @@ function roomEvacuationPenalty(boxes, board) {
       if (occupied.has(position)) penalty += 3 * (4 - distance);
     }
   }
+  board.metrics.roomEvacuationMs += now() - started;
   return penalty;
 }
 
@@ -1462,6 +1502,8 @@ function assignmentDoorwayPlan(boxes, board, discovery = false) {
 }
 
 function doorwayScheduleState(boxes, board, tasks) {
+  const started = now();
+  board.metrics.doorwayScheduleCalls++;
   let penalty = 0, pendingExports = 0, remainingImports = 0;
   let prematureImports = 0, gateBlockers = 0, crossingConflicts = 0;
   let crossingDistance = 0, packingDistance = 0, unpackedImports = 0;
@@ -1601,7 +1643,7 @@ function doorwayScheduleState(boxes, board, tasks) {
       20 * packingViolations;
   }
   penalty += crossingDistance + packingDistance;
-  return {
+  const result = {
     penalty,
     pendingExports,
     remainingImports,
@@ -1616,6 +1658,8 @@ function doorwayScheduleState(boxes, board, tasks) {
     crossingDistance,
     packingDistance,
   };
+  board.metrics.doorwayScheduleMs += now() - started;
+  return result;
 }
 
 function typedDoorwayFlow(boxes, board) {
@@ -4126,13 +4170,13 @@ function pushNeighbors(state, board, reachable = reachablePaths(state, board), o
       const destinationY = board.dense.y[destinationId], destinationX = board.dense.x[destinationId];
       const dest = board.dense.keys[destinationId];
       board.metrics.pushCandidates++;
-      const boxes = state.boxes.slice();
-      boxes[index] = [destinationY, destinationX, label];
       if (staticDead(destinationY, destinationX, board, label)) {
         board.metrics.staticDeadPrunes++;
         continue;
       }
-      deriveDenseBoxLayout(state.boxes, boxes, index, destinationId, board);
+      const boxes = cachedPushedBoxes(
+        state.boxes, index, destinationId, label, board,
+      );
       if (createsDynamicDeadlock(boxes, board, [destinationY, destinationX])) {
         board.metrics.dynamicDeadPrunes++;
         continue;
@@ -4180,10 +4224,10 @@ function pushBoxNeighbors(
     if (!reachable.hasId(supportId) || destinationId < 0 || occupied[destinationId] >= 0) continue;
     const destinationY = board.dense.y[destinationId], destinationX = board.dense.x[destinationId];
     const destination = board.dense.keys[destinationId];
-    const boxes = state.boxes.slice();
-    boxes[index] = [destinationY, destinationX, label];
     if (staticDead(destinationY, destinationX, board, label)) continue;
-    deriveDenseBoxLayout(state.boxes, boxes, index, destinationId, board);
+    const boxes = cachedPushedBoxes(
+      state.boxes, index, destinationId, label, board,
+    );
     if (createsDynamicDeadlock(boxes, board, [destinationY, destinationX])) continue;
     board.assignmentParentMemo.set(boxes, {parentBoxes: state.boxes, changedIndex: index});
     result.push({
@@ -4368,17 +4412,39 @@ function expandTargetedPushSequence(
     }
     return Infinity;
   };
-  const initial = {...first, pushes: 1};
+  let macroOrder = 0;
+  const initial = {...first, pushes: 1, macroOrder: macroOrder++};
   initial.targetDistance = distance(initial);
-  const open = [initial], endpoints = [], seen = new Set([exactPushKey(initial, board)]);
+  const open = new Heap(), endpoints = [], completedTargets = new Map();
+  const openPriority = sequence => {
+    const combined = sequence.pushes + sequence.targetDistance;
+    return Number.isFinite(combined)
+      ? (combined * 1000 + sequence.targetDistance) * 1000 + sequence.macroOrder
+      : 1e15 + sequence.macroOrder;
+  };
+  open.push([openPriority(initial), initial]);
+  const seen = new Set([exactPushKey(initial, board)]);
   let explored = 0;
   while (open.length && explored++ < maxExplored) {
-    open.sort((left, right) =>
-      left.pushes + left.targetDistance - right.pushes - right.targetDistance ||
-      left.targetDistance - right.targetDistance);
-    const current = open.shift();
+    if (options.targetBound !== false && completedTargets.size >= maxReturned) {
+      const worstPushes = Math.max(
+        ...[...completedTargets.values()].map(endpoint => endpoint.pushes),
+      );
+      const bestOpen = open.items[0][1];
+      if (bestOpen.pushes + bestOpen.targetDistance > worstPushes) {
+        if (metrics) metrics.macroTargetBoundCutoffs++;
+        break;
+      }
+    }
+    const current = open.pop()[1];
     if (current.targetDistance === 0 || current.pushes >= maxPushes) {
       endpoints.push(current);
+      if (current.targetDistance === 0) {
+        const previous = completedTargets.get(current.pushedTo);
+        if (!previous || current.pushes < previous.pushes) {
+          completedTargets.set(current.pushedTo, current);
+        }
+      }
       continue;
     }
     const state = {robot: current.robot, boxes: current.boxes};
@@ -4404,6 +4470,7 @@ function expandTargetedPushSequence(
         pushClass: `${first.pushClass}:target:${current.pushes + 1}`,
         pushedFrom: next.pushedFrom,
         pushedTo: next.pushedTo,
+        macroOrder: macroOrder++,
       };
       if (metrics) metrics.macroIntermediateStates++;
       sequence.targetDistance = distance(sequence);
@@ -4419,14 +4486,15 @@ function expandTargetedPushSequence(
       const signature = exactPushKey(sequence, board);
       if (seen.has(signature)) continue;
       seen.add(signature);
-      open.push(sequence);
+      open.push([openPriority(sequence), sequence]);
     }
   }
-  endpoints.push(...open);
+  endpoints.push(...open.items.map(item => item[1]));
   endpoints.sort((left, right) =>
     Number(Boolean(left.targetDeadEnd)) - Number(Boolean(right.targetDeadEnd)) ||
     left.targetDistance - right.targetDistance ||
-    left.pushes - right.pushes);
+    left.pushes - right.pushes ||
+    left.macroOrder - right.macroOrder);
   const selected = [], destinations = new Set();
   for (const endpoint of endpoints) {
     if (destinations.has(endpoint.pushedTo)) continue;

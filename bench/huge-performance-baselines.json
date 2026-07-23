@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "reviewedBuild": "2026-07-23.35",
+  "reviewedBuild": "2026-07-23.36",
   "expectedCases": 3,
   "expectedSolved": 3,
   "maximumPerCase": {
@@ -10,5 +10,12 @@
     "retained": 7400,
     "peakFrontier": 380,
     "transpositionEvictions": 0
+  },
+  "maximumPerformancePerCase": {
+    "denseLayoutDerivations": 500000,
+    "macroIntermediateStates": 1150000
+  },
+  "maximumMemoryPerCase": {
+    "peakBytes": 250000000
   }
 }

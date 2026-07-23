@@ -460,18 +460,46 @@ function planMacroBeamSearch(payload) {
   const seenExact = new BoundedDepthMap(payload.transpositionLimit || 60000);
   let beam = [initial], visited = 0, generated = 0, peakFrontier = 1;
   let trackedThrough = payload.trackedSignatures ? 0 : undefined;
-  let bestEstimate = discoveryHeuristic(initial.boxes, board), bestPushes = 0;
+  const rootDoorwayTasks = payload.planDoorwaySchedule === false
+    ? [] : assignmentDoorwayPlan(initial.boxes, board, true).tasks;
+  const hasEvacuationPlan = rootDoorwayTasks.some(task => task.direction === "export");
+  const analysisCache = new WeakMap();
+  const structuralAnalysis = (boxes, includeGoalAccess = false) => {
+    if (payload.planAnalysisCache === false) {
+      return {
+        estimate: discoveryHeuristic(boxes, board),
+        evacuation: roomEvacuationPenalty(boxes, board),
+        doorwaySchedule: doorwayScheduleState(boxes, board, rootDoorwayTasks),
+        goalAccess: includeGoalAccess ? goalAccessAnalysis(boxes, board) : null,
+      };
+    }
+    let analysis = analysisCache.get(boxes);
+    if (analysis) {
+      if (activePerformance) activePerformance.planAnalysisCacheHits++;
+    } else {
+      if (activePerformance) activePerformance.planAnalysisCacheMisses++;
+      analysis = {
+        estimate: discoveryHeuristic(boxes, board),
+        evacuation: roomEvacuationPenalty(boxes, board),
+        doorwaySchedule: doorwayScheduleState(boxes, board, rootDoorwayTasks),
+        goalAccess: null,
+      };
+      analysisCache.set(boxes, analysis);
+    }
+    if (includeGoalAccess && !analysis.goalAccess) {
+      analysis.goalAccess = goalAccessAnalysis(boxes, board);
+    }
+    return analysis;
+  };
+  const evaluateDoorwaySchedule = boxes =>
+    structuralAnalysis(boxes).doorwaySchedule;
+  let bestEstimate = structuralAnalysis(initial.boxes).estimate, bestPushes = 0;
   const planBound = Math.min(
     Number.isFinite(payload.upperBound) ? payload.upperBound : Infinity,
     bestEstimate + (payload.planSlack ?? 192),
   );
   let bestCheckpoint = null, bestCheckpointRank = Infinity;
   let bestHeuristicCheckpoint = null;
-  const rootDoorwayTasks = payload.planDoorwaySchedule === false
-    ? [] : assignmentDoorwayPlan(initial.boxes, board, true).tasks;
-  const hasEvacuationPlan = rootDoorwayTasks.some(task => task.direction === "export");
-  const evaluateDoorwaySchedule = boxes =>
-    doorwayScheduleState(boxes, board, rootDoorwayTasks);
   const importAccessBlockers = (state, reachable) => {
     const blockers = new Map();
     if (!state.doorwaySchedule.blockedImportAccess) return blockers;
@@ -516,12 +544,12 @@ function planMacroBeamSearch(payload) {
     return blockers;
   };
   const scoreCandidate = child => {
-    child.estimate = discoveryHeuristic(child.boxes, board);
-    child.goalAccess = child.macroContext?.goalAccess ||
-      goalAccessAnalysis(child.boxes, board);
-    child.evacuation = roomEvacuationPenalty(child.boxes, board);
+    const analysis = structuralAnalysis(child.boxes, true);
+    child.estimate = analysis.estimate;
+    child.goalAccess = child.macroContext?.goalAccess || analysis.goalAccess;
+    child.evacuation = analysis.evacuation;
     child.doorwaySchedule = child.macroContext?.doorwaySchedule ||
-      evaluateDoorwaySchedule(child.boxes);
+      analysis.doorwaySchedule;
     const evacuationActive = child.doorwaySchedule.pendingExports > 0 ||
       child.doorwaySchedule.stagingBlockers > 0 ||
       child.doorwaySchedule.blockedImportAccess > 0;
@@ -547,7 +575,7 @@ function planMacroBeamSearch(payload) {
       2 * child.cost + child.estimate + 4 * child.goalAccess.penalty;
   };
   initial.exactIdentity = exactPushIdentity(initial, board);
-  initial.goalAccess = goalAccessAnalysis(initial.boxes, board);
+  initial.goalAccess = structuralAnalysis(initial.boxes, true).goalAccess;
   initial.doorwaySchedule = evaluateDoorwaySchedule(initial.boxes);
   seenExact.set(initial.exactIdentity, 0);
 
@@ -562,10 +590,11 @@ function planMacroBeamSearch(payload) {
       const accessBlockers = importAccessBlockers(current, reachable);
       const firstPushes = pushNeighbors(current, board, reachable);
       const rankedFirst = firstPushes.map(next => {
-        const estimate = discoveryHeuristic(next.boxes, board);
+        const analysis = structuralAnalysis(next.boxes);
+        const estimate = analysis.estimate;
         const accessDelta = goalAccessDelta(current.goalAccess, current, next, board);
-        const evacuation = roomEvacuationPenalty(next.boxes, board);
-        const schedule = evaluateDoorwaySchedule(next.boxes);
+        const evacuation = analysis.evacuation;
+        const schedule = analysis.doorwaySchedule;
         const blockerProgress = accessBlockers.get(next.pushedFrom) || 0;
         const estimateWeight = current.doorwaySchedule.pendingExports ||
           current.doorwaySchedule.stagingBlockers ||
@@ -649,20 +678,28 @@ function planMacroBeamSearch(payload) {
             (clearingStaging && !doorwayRoom.exteriorStaging.has(position) &&
               position !== doorwayRoom.gate);
           if (!objectiveComplete) return false;
-          const doorwaySchedule = evaluateDoorwaySchedule(sequence.boxes);
-          const goalAccess = goalAccessAnalysis(sequence.boxes, board);
-          sequence.macroContext = {doorwaySchedule, goalAccess};
+          let analysis = structuralAnalysis(sequence.boxes);
+          const doorwaySchedule = analysis.doorwaySchedule;
           if (payload.planEgressGuard !== false &&
               doorwayTask?.direction === "import" &&
               doorwaySchedule.strandedExports >
-                current.doorwaySchedule.strandedExports) return "stranded-export";
+                current.doorwaySchedule.strandedExports) {
+            sequence.macroContext = {doorwaySchedule};
+            return "stranded-export";
+          }
+          analysis = structuralAnalysis(sequence.boxes, true);
+          sequence.macroContext = {
+            doorwaySchedule,
+            goalAccess: analysis.goalAccess,
+          };
           return false;
         };
         const expand = (explored, results) => objective
           ? expandTargetedPushSequence(
             first, board, objective, macroLimit, explored, results,
             {lockProven: false, intermediateGuard:
-              payload.incrementalMacroGuard === false ? undefined : intermediateGuard},
+              payload.incrementalMacroGuard === false ? undefined : intermediateGuard,
+            targetBound: payload.targetedMacroBound !== false},
           )
           : expandPushSequences(
             first, board, macroLimit, explored, results,
@@ -694,6 +731,7 @@ function planMacroBeamSearch(payload) {
           ? (firstIndex < 2 ? [expanded[0], ...endpoints] : endpoints)
           : expanded;
         for (const next of successors) {
+          if (next.macroRejectedReason) continue;
           const cost = current.cost + next.pushes;
           if (cost > maxPushes) continue;
           const child = scoreCandidate({

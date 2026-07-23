@@ -1663,6 +1663,42 @@ test("adaptive macro effort avoids full expansion for a forced corridor", () => 
     fixedBudget.performance.macroIntermediateStates);
 });
 
+test("adaptive macro effort preserves a fixed 96-state forced-run suite", () => {
+  const worker = loadWorker();
+  let adaptiveIntermediates = 0, fixedIntermediates = 0;
+  for (let index = 0; index < 96; index++) {
+    const robotX = 1 + Math.floor(index / 32);
+    const boxX = 4 + (index % 8);
+    const goalX = boxX + 1 + (Math.floor(index / 8) % 4);
+    const middle = Array(18).fill(" ");
+    middle[0] = "O";
+    middle[17] = "O";
+    middle[robotX] = "R";
+    middle[boxX] = "A";
+    middle[goalX] = "a";
+    const state = stateFromRows([
+      "O".repeat(18),
+      middle.join(""),
+      "O".repeat(18),
+    ]);
+    const request = {
+      algorithm: "plan-macro-beam",
+      state,
+      maxVisited: 100,
+      planBeamWidth: 10,
+      maxPlanSegments: 10,
+    };
+    const adaptive = worker.search(request);
+    const fixed = worker.search({...request, adaptiveMacroEffort: false});
+    assert.equal(adaptive.status, "solved", `adaptive case ${index}`);
+    assert.equal(fixed.status, "solved", `fixed case ${index}`);
+    assert.equal(adaptive.path.length, fixed.path.length, `case ${index}`);
+    adaptiveIntermediates += adaptive.performance.macroIntermediateStates;
+    fixedIntermediates += fixed.performance.macroIntermediateStates;
+  }
+  assert.ok(adaptiveIntermediates <= fixedIntermediates);
+});
+
 test("plan canonicalization removes reflection and rotation ordering bias", () => {
   const worker = loadWorker();
   const variants = [
