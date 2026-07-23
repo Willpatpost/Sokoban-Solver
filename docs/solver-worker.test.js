@@ -4,6 +4,7 @@ const path = require("node:path");
 const test = require("node:test");
 const vm = require("node:vm");
 const assignmentProfile = require("../bench/assignment-crossover.json");
+const localReasoningBaseline = require("../bench/local-reasoning-baseline.json");
 const {mirrorRows, rotateRows} = require("../bench/generated-cases.js");
 
 function loadWorker(postMessage = () => {}) {
@@ -30,6 +31,15 @@ function stateFromRows(rows) {
   }));
   return {rows, robot, boxes};
 }
+
+test("local proof limits match reviewed deterministic cost gates", () => {
+  const worker = loadWorker();
+  const {schemaVersion, reviewed, build, ...limits} = localReasoningBaseline;
+  assert.equal(schemaVersion, 1);
+  assert.ok(reviewed);
+  assert.ok(build);
+  assert.deepEqual({...worker.localReasoningLimits()}, limits);
+});
 
 const HUGE_ROWS = [
   "OOOOOOOOOOOOOOO", "OaSS   S   SSbO", "OSCS  OOO  SDSO", "OX X  OOO  X XO",
@@ -124,6 +134,37 @@ test("closed diagonals require wall ends, multiple boxes, and no goal escape", (
   escapedRows[5] = "O R S  O";
   const escaped = worker.parse({rows: escapedRows});
   assert.equal(worker.createsClosedDiagonalDeadlock(boxes, escaped, [2, 2]), false);
+
+  const typedGoalSequence = worker.parse({rows: [
+    "OOOOOOOO", "O O    O", "O a O  O", "O  O B O",
+    "O    O O", "O R b  O", "OOOOOOOO",
+  ]});
+  const typedBoxes = [[2, 2, "A"], [3, 5, "B"]];
+  assert.equal(
+    worker.createsClosedDiagonalDeadlock(typedBoxes, typedGoalSequence, [2, 2]),
+    true,
+  );
+  const fullyPacked = worker.parse({rows: [
+    "OOOOOOOO", "O O    O", "O a O  O", "O  O b O",
+    "O    O O", "O R    O", "OOOOOOOO",
+  ]});
+  assert.equal(
+    worker.createsClosedDiagonalDeadlock(typedBoxes, fullyPacked, [2, 2]),
+    false,
+  );
+
+  const boxEnded = worker.parse({rows: [
+    "OOOOOOOO", "OOX    O", "O X O  O", "O  O X O",
+    "O    O O", "O RSSS O", "OOOOOOOO",
+  ]});
+  assert.equal(
+    worker.createsClosedDiagonalDeadlock(
+      [[1, 2, "X"], [2, 2, "X"], [3, 5, "X"]],
+      boxEnded,
+      [2, 2],
+    ),
+    true,
+  );
 });
 
 test("local pattern tables detect typed corridor order conflicts but preserve bypasses", () => {
@@ -152,6 +193,21 @@ test("local pattern tables detect typed corridor order conflicts but preserve by
   assert.equal(worker.createsPatternDatabaseDeadlock(
     bypassBoxes, bypassBoard, [2, 5], 256,
   ), false);
+
+  const generic = stateFromRows(["OOOOOOOOO", "OR SS XXO", "OOOOOOOOO"]);
+  const genericBoard = worker.parse(generic);
+  const genericBoxes = generic.boxes.map(([position, label]) => [
+    ...position.split(",").map(Number), label,
+  ]);
+  assert.equal(worker.createsPatternDatabaseDeadlock(
+    genericBoxes, genericBoard, [1, 6],
+  ), true);
+  const cacheHits = genericBoard.metrics.patternDeadlockCacheHits;
+  assert.equal(worker.createsPatternDatabaseDeadlock(
+    genericBoxes, genericBoard, [1, 6],
+  ), true);
+  assert.equal(genericBoard.metrics.patternDeadlockCacheHits, cacheHits + 1);
+  assert.ok(genericBoard.metrics.patternCanonicalizations > 0);
 });
 
 test("bidirectional sides emit compatible compact records", () => {
@@ -339,6 +395,23 @@ test("goal commitment integrates support, doorway, and exact room evidence conse
   );
   assert.equal(
     worker.goalCommitments(placed, conditionalBoard, {
+      supportDependency: {
+        supportDemand: new Map(),
+        prerequisiteDemand: new Map(),
+        prerequisiteClosure: new Map(),
+        cycles: new Set(),
+        assignmentComplete: true,
+      },
+      localAnalyses: [{
+        kind: "corral",
+        proofComplete: true,
+        provenCommitments: new Set(["3,2"]),
+      }],
+    }).get("3,2"),
+    "proven",
+  );
+  assert.equal(
+    worker.goalCommitments(placed, conditionalBoard, {
       doorway: {rooms: [{
         index: 0,
         importTotal: 1,
@@ -372,6 +445,21 @@ test("goal commitment integrates support, doorway, and exact room evidence conse
       transition: {pushedFrom: "4,3", pushedTo: "3,3", pushes: 1},
     }).get("3,3"),
     "proven",
+  );
+  assert.equal(
+    worker.goalCommitments(packed, board, {
+      doorway: worker.typedDoorwayFlow(packed, board),
+      supportDependency: {
+        supportDemand: new Map(),
+        prerequisiteDemand: new Map(),
+        prerequisiteClosure: new Map(),
+        cycles: new Set(),
+        assignmentComplete: false,
+      },
+      localAnalyses: [analysis],
+      transition: {pushedFrom: "4,3", pushedTo: "3,3", pushes: 1},
+    }).get("3,3"),
+    "conditional",
   );
 });
 
@@ -572,6 +660,11 @@ test("dynamic support dependencies identify blocker routes and enabling pushes",
   assert.equal(upperBox.options[0].support, "3,3");
   assert.deepEqual(Array.from(upperBox.options[0].blockers), ["3,3"]);
   assert.ok(graph.prerequisiteDemand.get("3,3") > 0);
+  assert.equal(graph.assignmentComplete, true);
+  assert.ok(graph.prerequisiteEdges.get("2,3").has("3,3"));
+  assert.ok(graph.prerequisiteClosure.get("2,3").has("3,3"));
+  assert.ok(graph.cycles.has("2,3"));
+  assert.ok(graph.cycles.has("3,3"));
   assert.ok(worker.supportDependencyDelta(
     graph, {pushedFrom: "3,3", pushedTo: "3,4"},
   ) < 0);
@@ -603,6 +696,10 @@ test("exact local room search packs small rooms and exposes optimal first pushes
 
   assert.equal(result.status, "solvable");
   assert.equal(result.pushes, 1);
+  assert.equal(result.proofComplete, true);
+  assert.equal(result.storage, "dense-bitset");
+  assert.ok(result.stateUpperBound > 0);
+  assert.ok(result.decompositionComponents >= 1);
   assert.equal(result.importsRequired, 0);
   assert.equal(result.exportsRequired, 0);
   assert.ok(result.viableBoundaries > 0);
@@ -781,6 +878,7 @@ test("exact local room search reports exhausted and import-dependent abstraction
   const blockedRoom = blockedBoard.topology.rooms.find(room => room.goals.includes("3,3"));
   const exhausted = worker.exactLocalRoomSearch(blockedState, blockedBoard, blockedRoom);
   assert.equal(exhausted.status, "exhausted");
+  assert.equal(exhausted.proofComplete, true);
 
   const missingState = {robot: blockedParsed.robot, boxes: []};
   const needsImport = worker.exactLocalRoomSearch(missingState, blockedBoard, blockedRoom);
@@ -789,6 +887,22 @@ test("exact local room search reports exhausted and import-dependent abstraction
   assert.equal(worker.localRoomOrderingDelta(
     [needsImport], {pushedFrom: "1,1", pushedTo: "1,2"},
   ), 0);
+
+  const closedParsed = stateFromRows(["OOOOOOO", "OR SX O", "OOOOOOO"]);
+  const closedBoard = worker.parse(closedParsed);
+  const closedState = {robot: closedParsed.robot, boxes: [[1, 4, "X"]]};
+  const closedRoom = {
+    cells: new Set(closedBoard.floor),
+    gate: "1,1",
+    approach: [],
+    goals: ["1,3"],
+    dependencies: [],
+  };
+  closedBoard.topology.rooms = [closedRoom];
+  const closed = worker.exactLocalRoomSearch(closedState, closedBoard, closedRoom);
+  assert.equal(closed.status, "exhausted");
+  assert.equal(closed.proofComplete, true);
+  assert.equal(closed.globalDeadlockProven, true);
 });
 
 test("exact local corral search finds the push that reopens a small inaccessible region", () => {
@@ -809,6 +923,19 @@ test("exact local corral search finds the push that reopens a small inaccessible
 
   assert.equal(worker.exactLocalCorralAnalyses(state, board, reachable)[0], analyses[0]);
   assert.equal(board.metrics.localCorralCacheHits, 1);
+
+  const closedParsed = stateFromRows(["OOOOOOOOO", "OR  S S O", "OOOOOOOOO"]);
+  const closedBoard = worker.parse(closedParsed);
+  const closedState = {robot: closedParsed.robot, boxes: [[1, 2, "X"], [1, 6, "X"]]};
+  const closedReachable = worker.reachablePaths(closedState, closedBoard);
+  const closedAnalysis = worker.exactLocalCorralAnalyses(
+    closedState, closedBoard, closedReachable,
+  )[0];
+  assert.ok(closedAnalysis.provenCommitments.has("1,6"));
+  assert.equal(
+    worker.stateGoalCommitments(closedState, closedBoard, closedReachable).get("1,6"),
+    "temporary",
+  );
 });
 
 test("compact box signatures are permutation-invariant and collision-free on a small board", () => {
@@ -1166,6 +1293,16 @@ test("frozen components are pruned without rejecting movable box groups", () => 
     worker.createsFrozenComponentDeadlock(frozenBoxes.map(([y, x, label]) => [y + 1, x, label]), openBoard, [2, 3]),
     false,
   );
+
+  const recursiveBoard = worker.parse(stateFromRows([
+    "OOOOOOOO", "OOX    O", "O X    O", "O R SS O", "OOOOOOOO",
+  ]));
+  const recursiveBoxes = [[1, 2, "X"], [2, 2, "X"]];
+  assert.equal(
+    worker.createsFrozenComponentDeadlock(recursiveBoxes, recursiveBoard, [2, 2]),
+    true,
+  );
+  assert.ok(recursiveBoard.metrics.recursiveFreezeBoxes > 0);
 });
 
 test("push beam returns a replayable solution", () => {

@@ -151,6 +151,9 @@ function exactPushKey(state, board = null) {
 const HEURISTIC_MEMO_LIMIT = 20000;
 const DEADLOCK_MEMO_LIMIT = 10000;
 const PATTERN_DEADLOCK_MEMO_LIMIT = 10000;
+const PATTERN_EXACT_STATE_LIMIT = 512;
+const PATTERN_FLOOR_LIMIT = 18;
+const PATTERN_BOX_LIMIT = 4;
 const ROOM_PATTERN_MAX_STATES = 12000;
 const PAIR_CONFLICT_MAX_STATES = 4000;
 const PAIR_CONFLICT_DISTANCE_LIMIT = 18;
@@ -162,6 +165,21 @@ const COMMITMENT_MEMO_LIMIT = 10000;
 const SUPPORT_DEPENDENCY_MEMO_LIMIT = 10000;
 const LOCAL_ROOM_MEMO_LIMIT = 5000;
 const LOCAL_CORRAL_MEMO_LIMIT = 5000;
+const LOCAL_EXACT_STATE_LIMIT = 250000;
+const LOCAL_ROOM_CELL_LIMIT = 16;
+const LOCAL_DOMAIN_CELL_LIMIT = 24;
+const LOCAL_BOX_LIMIT = 5;
+function localReasoningLimits() {
+  return {
+    patternMaxStates: PATTERN_EXACT_STATE_LIMIT,
+    patternMaxFloor: PATTERN_FLOOR_LIMIT,
+    patternMaxBoxes: PATTERN_BOX_LIMIT,
+    localExactMaxStates: LOCAL_EXACT_STATE_LIMIT,
+    roomMaxCells: LOCAL_ROOM_CELL_LIMIT,
+    domainMaxCells: LOCAL_DOMAIN_CELL_LIMIT,
+    localMaxBoxes: LOCAL_BOX_LIMIT,
+  };
+}
 const DOORWAY_FLOW_MEMO_LIMIT = 10000;
 const GOAL_COMMITMENT = Object.freeze({
   TEMPORARY: "temporary",
@@ -206,7 +224,7 @@ function createPerformanceMetrics() {
     _startedAt: now(),
     _heapStartBytes: null,
     _heapSource: null,
-    schemaVersion: 2,
+    schemaVersion: 3,
     totalMs: 0,
     heapSupported: false,
     heapUsedBytes: null,
@@ -274,6 +292,12 @@ function createPerformanceMetrics() {
     localCorralCacheHits: 0,
     localCorralStates: 0,
     localCorralMs: 0,
+    localExactProofs: 0,
+    localExactCutoffs: 0,
+    localExactOversized: 0,
+    localExactDeadlockProofs: 0,
+    localExactStateBoundPeak: 0,
+    localExactDecompositions: 0,
     doorwayFlowCalls: 0,
     doorwayFlowCacheHits: 0,
     doorwayFlowMs: 0,
@@ -300,6 +324,9 @@ function createPerformanceMetrics() {
     patternDeadlockCacheHits: 0,
     patternDeadlockStates: 0,
     patternDeadlockPrunes: 0,
+    patternCanonicalizations: 0,
+    recursiveFreezeChecks: 0,
+    recursiveFreezeBoxes: 0,
   };
   samplePerformanceMemory(metrics);
   return metrics;
@@ -814,7 +841,8 @@ function compileDenseBoard(floor, goals, metrics) {
 function reversePushDistances(floor, goalKey) {
   const [gy, gx] = goalKey.split(",").map(Number);
   const distances = new Map([[goalKey, 0]]), queue = [[gy, gx]];
-  for (let head = 0; head < queue.length; head++) {
+  let head = 0;
+  for (; head < queue.length; head++) {
     const [y, x] = queue[head], distance = distances.get(pkey(y, x));
     for (const [dy, dx] of Object.values(DIRS)) {
       const previous = pkey(y - dy, x - dx);
@@ -1659,8 +1687,18 @@ function commitmentPositionConflict(position, evidence) {
   return false;
 }
 
+function commitmentPrerequisitesProven(position, evidence) {
+  const graph = evidence?.supportDependency;
+  if (!graph) return true;
+  if (graph.assignmentComplete === false || graph.cycles?.size) return false;
+  return !(graph.prerequisiteClosure?.get(position)?.size) &&
+    !(graph.supportDemand?.get(position) > 0) &&
+    !(graph.prerequisiteDemand?.get(position) > 0);
+}
+
 function exactRoomCompletionProven(analysis, evidence) {
-  if (analysis.kind === "corral" || analysis.roomIndex === undefined) return false;
+  if (analysis.kind === "corral" || analysis.roomIndex === undefined ||
+      analysis.proofComplete === false) return false;
   const transition = evidence?.transition;
   if (analysis.status === "packed") {
     return !transition ||
@@ -1680,6 +1718,15 @@ function refineGoalCommitments(base, boxes, board, evidence) {
     }
   }
   for (const analysis of evidence?.localAnalyses || []) {
+    if (analysis.kind === "corral" && analysis.proofComplete) {
+      for (const position of analysis.provenCommitments || []) {
+        if (commitments.get(position) === GOAL_COMMITMENT.TEMPORARY ||
+            commitmentPositionConflict(position, evidence) ||
+            !commitmentPrerequisitesProven(position, evidence)) continue;
+        commitments.set(position, GOAL_COMMITMENT.PROVEN);
+      }
+      continue;
+    }
     if (!exactRoomCompletionProven(analysis, evidence)) continue;
     const room = board.topology.rooms[analysis.roomIndex];
     const flow = evidence?.doorway?.rooms?.find(candidate => candidate.index === analysis.roomIndex);
@@ -1688,7 +1735,8 @@ function refineGoalCommitments(base, boxes, board, evidence) {
     for (const position of room.cells) {
       const label = occupied.get(position);
       if (label === undefined || board.goals.get(position) !== label ||
-          commitmentPositionConflict(position, evidence)) continue;
+          commitmentPositionConflict(position, evidence) ||
+          !commitmentPrerequisitesProven(position, evidence)) continue;
       if (commitments.get(position) !== GOAL_COMMITMENT.TEMPORARY) {
         commitments.set(position, GOAL_COMMITMENT.PROVEN);
       }
@@ -1812,6 +1860,27 @@ function createsFrozenComponentDeadlock(boxes, board, movedBox) {
       queue.push([y + dy, x + dx]);
     }
   }
+  board.metrics.recursiveFreezeChecks++;
+  const recursivelyFrozen = new Set();
+  const isBlocker = position =>
+    !board.floor.has(position) ||
+    (occupied.has(position) && recursivelyFrozen.has(position));
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const position of component) {
+      if (recursivelyFrozen.has(position)) continue;
+      const [y, x] = position.split(",").map(Number);
+      const horizontal = isBlocker(pkey(y, x - 1)) || isBlocker(pkey(y, x + 1));
+      const vertical = isBlocker(pkey(y - 1, x)) || isBlocker(pkey(y + 1, x));
+      if (!horizontal || !vertical) continue;
+      recursivelyFrozen.add(position);
+      changed = true;
+    }
+  }
+  board.metrics.recursiveFreezeBoxes += recursivelyFrozen.size;
+  if ([...recursivelyFrozen]
+    .some(position => board.goals.get(position) !== occupied.get(position))) return true;
   const movable = queue.some(([y, x]) => Object.values(DIRS).some(([dy, dx]) => {
     const destination = pkey(y + dy, x + dx);
     const support = pkey(y - dy, x - dx);
@@ -1838,13 +1907,17 @@ function createsClosedDiagonalDeadlock(boxes, board, movedBox) {
       if (board.walls.has(center)) {
         return {closed: true, boxes: boxesOnBorder, boxSides, rows: distance};
       }
+      if (occupied.has(center) && staticallyImmovable(center, board)) {
+        boxesOnBorder.add(center);
+        return {closed: true, boxes: boxesOnBorder, boxSides, rows: distance};
+      }
       if (!board.floor.has(center) || occupied.has(center) || board.goals.has(center)) {
         return {closed: false, boxes: boxesOnBorder, boxSides, rows: distance};
       }
       let rowBoxSide = null;
       for (const [sideOffset, sideX] of [[-1, x - 1], [1, x + 1]]) {
         const side = pkey(y, sideX);
-        if (!blocked(y, sideX) || board.goals.has(side)) {
+        if (!blocked(y, sideX) || (board.goals.has(side) && !occupied.has(side))) {
           return {closed: false, boxes: boxesOnBorder, boxSides, rows: distance};
         }
         if (occupied.has(side)) {
@@ -1872,13 +1945,48 @@ function createsClosedDiagonalDeadlock(boxes, board, movedBox) {
       const boxSides = [...up.boxSides].reverse().concat(down.boxSides);
       const outwardFacing = boxSides.length === 2 &&
         boxSides[0] === -slope && boxSides[1] === slope;
-      if (outwardFacing && participants.has(movedKey) && participants.size >= 2) return true;
+      const unfinished = [...participants]
+        .some(position => board.goals.get(position) !== occupied.get(position));
+      if (!unfinished || !participants.has(movedKey) || participants.size < 2) continue;
+      if (outwardFacing || createsPatternDatabaseDeadlock(boxes, board, movedBox)) return true;
     }
   }
   return false;
 }
 
-function createsPatternDatabaseDeadlock(boxes, board, movedBox, maxStates = 64) {
+function canonicalLocalPattern(floor, boxes, goals) {
+  const points = [...floor].map(position => position.split(",").map(Number));
+  const transforms = [
+    ([y, x]) => [y, x], ([y, x]) => [y, -x],
+    ([y, x]) => [-y, x], ([y, x]) => [-y, -x],
+    ([y, x]) => [x, y], ([y, x]) => [x, -y],
+    ([y, x]) => [-x, y], ([y, x]) => [-x, -y],
+  ];
+  const variants = transforms.map(transform => {
+    const transformed = points.map(transform);
+    const minY = Math.min(...transformed.map(([y]) => y));
+    const minX = Math.min(...transformed.map(([, x]) => x));
+    const keyFor = position => {
+      const [y, x] = transform(position.split(",").map(Number));
+      return `${y - minY},${x - minX}`;
+    };
+    const floorKey = [...floor].map(keyFor).sort().join(".");
+    const goalKey = [...goals]
+      .filter(([position]) => floor.has(position))
+      .map(([position, label]) => `${keyFor(position)},${label}`).sort().join(".");
+    const boxKey = boxes
+      .map(([position, label]) => `${keyFor(position)},${label}`).sort().join(".");
+    return `${floorKey}|${goalKey}|${boxKey}`;
+  });
+  return variants.sort()[0];
+}
+
+function createsPatternDatabaseDeadlock(
+  boxes,
+  board,
+  movedBox,
+  maxStates = PATTERN_EXACT_STATE_LIMIT,
+) {
   const metrics = board.metrics;
   metrics.patternDeadlockCalls++;
   const [centerY, centerX] = movedBox;
@@ -1890,7 +1998,7 @@ function createsPatternDatabaseDeadlock(boxes, board, movedBox, maxStates = 64) 
   let window = board.patternWindowMemo.get(windowKey);
   if (!window) {
     const floor = new Set([...board.floor].filter(inside));
-    const eligible = floor.size <= 24 &&
+    const eligible = floor.size <= PATTERN_FLOOR_LIMIT &&
       ![...floor].some(position => floorNeighbors(position, board.floor).length > 2);
     window = {floor, eligible};
     board.patternWindowMemo.set(windowKey, window);
@@ -1900,11 +2008,11 @@ function createsPatternDatabaseDeadlock(boxes, board, movedBox, maxStates = 64) 
   const localBoxes = boxes
     .map(([y, x, label]) => [pkey(y, x), label])
     .filter(([position]) => localFloor.has(position));
-  if (localBoxes.length < 2 || localBoxes.length > 5) return false;
-  if (new Set(localBoxes.map(([, label]) => label)).size < 2) return false;
-  const localSignature = localBoxes
-    .map(([position, label]) => `${position},${label}`).sort().join(";");
-  const cacheKey = `${centerY},${centerX}|${localSignature}`;
+  if (localBoxes.length < 2 || localBoxes.length > PATTERN_BOX_LIMIT) return false;
+  const stateUpperBound = localExactStateUpperBound(localFloor.size, localBoxes);
+  if (stateUpperBound > PATTERN_EXACT_STATE_LIMIT) return false;
+  const cacheKey = canonicalLocalPattern(localFloor, localBoxes, board.goals);
+  metrics.patternCanonicalizations++;
   if (board.patternDeadlockMemo.has(cacheKey)) {
     metrics.patternDeadlockCacheHits++;
     return board.patternDeadlockMemo.get(cacheKey);
@@ -1914,7 +2022,8 @@ function createsPatternDatabaseDeadlock(boxes, board, movedBox, maxStates = 64) 
     .map(([position, label]) => `${position},${label}`).sort().join(";");
   const queue = [localBoxes], seen = new Set([signature(localBoxes)]);
   let head = 0, salvaged = false;
-  for (; head < queue.length && seen.size <= maxStates; head++) {
+  const stateLimit = Math.min(maxStates, PATTERN_EXACT_STATE_LIMIT, stateUpperBound + 1);
+  for (; head < queue.length && seen.size <= stateLimit; head++) {
     const current = queue[head];
     if (current.every(([position, label]) => board.goals.get(position) === label)) {
       salvaged = true;
@@ -1942,12 +2051,8 @@ function createsPatternDatabaseDeadlock(boxes, board, movedBox, maxStates = 64) 
   const cutoff = !salvaged && head < queue.length;
   const deadlocked = !salvaged && !cutoff;
   if (deadlocked) metrics.patternDeadlockPrunes++;
-  return memoizeBounded(
-    board.patternDeadlockMemo,
-    cacheKey,
-    deadlocked,
-    PATTERN_DEADLOCK_MEMO_LIMIT,
-  );
+  return cutoff ? false : memoizeBounded(
+    board.patternDeadlockMemo, cacheKey, deadlocked, PATTERN_DEADLOCK_MEMO_LIMIT);
 }
 
 function createsDynamicDeadlock(boxes, board, movedBox) {
@@ -2119,12 +2224,36 @@ function supportDependencyGraph(state, board, reachable = reachablePaths(state, 
     return board.supportDependencyMemo.get(key);
   }
   const started = now(), routes = minimumBlockerRoutes(reachable, board);
+  const assignedTargets = new Map();
+  let assignmentComplete = true;
+  for (const [, entries] of boxesByLabelWithIndices(state.boxes)) {
+    const label = state.boxes[entries[0].index][2];
+    const targets = board.goalsByLabel.get(label) || [];
+    const costs = entries.map(({y, x}) =>
+      targets.map(target => compiledGoalPushDistance(board, pkey(y, x), target)));
+    const assignment = minimumAssignment(costs);
+    if (!Number.isFinite(assignment.cost)) {
+      assignmentComplete = false;
+      continue;
+    }
+    for (let column = 1; column < assignment.matching.length; column++) {
+      const row = assignment.matching[column] - 1;
+      if (row >= 0) assignedTargets.set(entries[row].index, targets[column - 1]);
+    }
+  }
   const nodes = [], supportDemand = new Map(), prerequisiteDemand = new Map();
+  const prerequisiteEdges = new Map();
   let penalty = 0, optionCount = 0;
-  for (const [y, x, label] of state.boxes) {
+  for (let boxIndex = 0; boxIndex < state.boxes.length; boxIndex++) {
+    const [y, x, label] = state.boxes[boxIndex];
     const box = pkey(y, x);
     if (board.goals.get(box) === label) continue;
-    const targets = board.goalsByLabel.get(label) || [];
+    const assigned = assignedTargets.get(boxIndex);
+    const targets = assigned ? [assigned] : [];
+    if (!targets.length) {
+      assignmentComplete = false;
+      continue;
+    }
     let bestDistance = Infinity;
     for (const target of targets) {
       bestDistance = Math.min(
@@ -2167,12 +2296,48 @@ function supportDependencyGraph(state, board, reachable = reachablePaths(state, 
       supportDemand.set(option.support, (supportDemand.get(option.support) || 0) + share);
       for (const blocker of option.blockers || []) {
         prerequisiteDemand.set(blocker, (prerequisiteDemand.get(blocker) || 0) + share);
+        if (blocker !== box) {
+          if (!prerequisiteEdges.has(box)) prerequisiteEdges.set(box, new Set());
+          prerequisiteEdges.get(box).add(blocker);
+        }
       }
     }
     penalty += available ? 0 : 1 + (Number.isFinite(minimumBlockers) ? minimumBlockers : 4);
     nodes.push({box, label, distance: bestDistance, available, options: preferred});
   }
-  const graph = {nodes, supportDemand, prerequisiteDemand, penalty};
+  const prerequisiteClosure = new Map(), cycles = new Set();
+  for (const origin of prerequisiteEdges.keys()) {
+    const closure = new Set(), queue = [...(prerequisiteEdges.get(origin) || [])];
+    for (let head = 0; head < queue.length; head++) {
+      const prerequisite = queue[head];
+      if (prerequisite === origin) {
+        cycles.add(origin);
+        continue;
+      }
+      if (closure.has(prerequisite)) continue;
+      closure.add(prerequisite);
+      queue.push(...(prerequisiteEdges.get(prerequisite) || []));
+    }
+    if (closure.size) prerequisiteClosure.set(origin, closure);
+  }
+  for (const prerequisites of prerequisiteClosure.values()) {
+    for (const prerequisite of prerequisites) {
+      prerequisiteDemand.set(
+        prerequisite,
+        (prerequisiteDemand.get(prerequisite) || 0) + 1,
+      );
+    }
+  }
+  const graph = {
+    nodes,
+    supportDemand,
+    prerequisiteDemand,
+    prerequisiteEdges,
+    prerequisiteClosure,
+    cycles,
+    assignmentComplete,
+    penalty,
+  };
   metrics.supportDependencyOptions += optionCount;
   metrics.supportDependencyBlockers += prerequisiteDemand.size;
   metrics.supportDependencyMs += now() - started;
@@ -2493,42 +2658,170 @@ function reverseGoalRoomPackingTable(board, room, maxStates = 20000) {
   return result;
 }
 
+function localExactStateUpperBound(domainSize, boxes) {
+  if (boxes.length > domainSize) return Infinity;
+  let layouts = 1n;
+  for (let index = 0; index < boxes.length; index++) layouts *= BigInt(domainSize - index);
+  const counts = new Map();
+  for (const [, label] of boxes) counts.set(label, (counts.get(label) || 0) + 1);
+  for (const count of counts.values()) {
+    for (let divisor = 2; divisor <= count; divisor++) layouts /= BigInt(divisor);
+  }
+  const bound = layouts * BigInt(Math.max(1, domainSize - boxes.length));
+  return bound > BigInt(Number.MAX_SAFE_INTEGER) ? Infinity : Number(bound);
+}
+
+function localDomainComponents(domain) {
+  const remaining = new Set(domain), components = [];
+  while (remaining.size) {
+    const start = remaining.values().next().value;
+    const component = new Set([start]), queue = [start];
+    remaining.delete(start);
+    for (let head = 0; head < queue.length; head++) {
+      for (const neighbor of floorNeighbors(queue[head], domain)) {
+        if (!remaining.has(neighbor)) continue;
+        remaining.delete(neighbor);
+        component.add(neighbor);
+        queue.push(neighbor);
+      }
+    }
+    components.push(component);
+  }
+  return components;
+}
+
+function localExactStatePlan(domain, boxes, robot) {
+  const components = localDomainComponents(domain);
+  const active = components.find(component => component.has(robot));
+  if (!active) return {components: components.length, stateUpperBound: 0};
+  const activeBoxes = boxes.filter(([position]) => active.has(position));
+  return {
+    components: components.length,
+    stateUpperBound: localExactStateUpperBound(active.size, activeBoxes),
+  };
+}
+
+function compileLocalExactDomain(domain, boxes) {
+  const keys = [...domain].sort();
+  const idByKey = new Map(keys.map((key, index) => [key, index]));
+  const coordinates = keys.map(key => key.split(",").map(Number));
+  const neighbors = coordinates.map(([y, x]) =>
+    DIRECTION_ENTRIES.map(([, [dy, dx]]) => idByKey.get(pkey(y + dy, x + dx)) ?? -1));
+  const labels = [...new Set(boxes.map(([, label]) => label))].sort();
+  const labelIds = new Map(labels.map((label, index) => [label, index]));
+  return {keys, idByKey, neighbors, labelIds};
+}
+
 function exactLocalPushSearch({domain, boxes, robot, isGoal, gate, maxStates = 10000}) {
-  const initialBoxes = boxes.map(box => [...box]);
-  const queue = [{robot, boxes: initialBoxes, pushes: 0, firstPush: null}];
+  const dense = compileLocalExactDomain(domain, boxes);
+  const initialBoxes = boxes.map(([position, label]) => ({
+    cell: dense.idByKey.get(position),
+    label,
+    labelId: dense.labelIds.get(label),
+  }));
+  if (initialBoxes.some(box => box.cell === undefined) || !dense.idByKey.has(robot)) {
+    return {
+      status: "inaccessible",
+      pushes: null,
+      firstPushes: new Set(),
+      visited: 0,
+      viableBoundaries: 0,
+      complete: true,
+      proofComplete: true,
+      stateUpperBound: 0,
+      decompositionComponents: localDomainComponents(domain).length,
+      storage: "dense-bitset",
+    };
+  }
+  const plan = localExactStatePlan(domain, boxes, robot);
+  const stateUpperBound = plan.stateUpperBound;
+  const queue = [{
+    robot: dense.idByKey.get(robot),
+    boxes: initialBoxes,
+    pushes: 0,
+    firstPush: null,
+  }];
   const seen = new Set(), firstPushes = new Set();
+  const gateId = dense.idByKey.get(gate);
   let visited = 0, viableBoundaries = 0, solutionPushes = Infinity;
-  for (let head = 0; head < queue.length; head++) {
+
+  const canonical = current => {
+    let occupiedBits = 0n;
+    const occupied = new Int16Array(dense.keys.length);
+    occupied.fill(-1);
+    current.boxes.forEach((box, index) => {
+      occupied[box.cell] = index;
+      occupiedBits |= 1n << BigInt(box.cell);
+    });
+    if (current.robot < 0 || occupied[current.robot] >= 0) return null;
+    const reached = new Uint8Array(dense.keys.length);
+    const reachedIds = new Int16Array(dense.keys.length);
+    reached[current.robot] = 1;
+    reachedIds[0] = current.robot;
+    let tail = 1, region = current.robot;
+    for (let head = 0; head < tail; head++) {
+      const cell = reachedIds[head];
+      for (const next of dense.neighbors[cell]) {
+        if (next < 0 || reached[next] || occupied[next] >= 0) continue;
+        reached[next] = 1;
+        reachedIds[tail++] = next;
+        region = Math.min(region, next);
+      }
+    }
+    const tokens = current.boxes
+      .map(box => box.labelId * dense.keys.length + box.cell)
+      .sort((left, right) => left - right);
+    return {
+      signature: `${region.toString(36)}|${tokens.map(token => token.toString(36)).join(".")}`,
+      occupied,
+      occupiedBits,
+      reached,
+      region,
+    };
+  };
+
+  let head = 0;
+  for (; head < queue.length; head++) {
     if (visited >= maxStates) break;
     const current = queue[head];
     if (current.pushes > solutionPushes) break;
-    const reached = localReachable(domain, current.boxes, current.robot);
-    if (!reached.size) continue;
-    const region = [...reached].sort()[0];
-    const signature = `${region}|${localBoxSignature(current.boxes)}`;
-    if (seen.has(signature)) continue;
-    seen.add(signature);
+    const state = canonical(current);
+    if (!state || seen.has(state.signature)) continue;
+    seen.add(state.signature);
     visited++;
-    const occupied = new Map(current.boxes.map(([position, label], index) =>
-      [position, {label, index}]));
-    if (!occupied.has(gate) && reached.has(gate)) viableBoundaries++;
-    if (isGoal(occupied, reached)) {
+    if (gateId !== undefined && state.occupied[gateId] < 0 && state.reached[gateId]) {
+      viableBoundaries++;
+    }
+    const readableOccupied = new Map(current.boxes.map((box, index) =>
+      [dense.keys[box.cell], {label: box.label, index}]));
+    const readableReached = {
+      has: position => {
+        const id = dense.idByKey.get(position);
+        return id !== undefined && Boolean(state.reached[id]);
+      },
+      *[Symbol.iterator]() {
+        for (let id = 0; id < dense.keys.length; id++) {
+          if (state.reached[id]) yield dense.keys[id];
+        }
+      },
+    };
+    if (isGoal(readableOccupied, readableReached)) {
       solutionPushes = current.pushes;
       if (current.firstPush) firstPushes.add(current.firstPush);
       continue;
     }
     if (current.pushes >= solutionPushes) continue;
-    current.boxes.forEach(([position, label], index) => {
-      const [y, x] = position.split(",").map(Number);
-      for (const [, [dy, dx]] of DIRECTION_ENTRIES) {
-        const support = pkey(y - dy, x - dx);
-        const destination = pkey(y + dy, x + dx);
-        if (!reached.has(support) || !domain.has(destination) || occupied.has(destination)) continue;
-        const nextBoxes = current.boxes.map((box, boxIndex) =>
-          boxIndex === index ? [destination, label] : box);
-        const push = `${position}>${destination}`;
+    current.boxes.forEach((box, index) => {
+      for (let direction = 0; direction < DIRECTION_ENTRIES.length; direction++) {
+        const support = dense.neighbors[box.cell][OPPOSITE_DIRECTION_INDEX[direction]];
+        const destination = dense.neighbors[box.cell][direction];
+        if (support < 0 || destination < 0 || !state.reached[support] ||
+            state.occupied[destination] >= 0) continue;
+        const nextBoxes = current.boxes.slice();
+        nextBoxes[index] = {...box, cell: destination};
+        const push = `${dense.keys[box.cell]}>${dense.keys[destination]}`;
         queue.push({
-          robot: position,
+          robot: box.cell,
           boxes: nextBoxes,
           pushes: current.pushes + 1,
           firstPush: current.firstPush || push,
@@ -2536,7 +2829,8 @@ function exactLocalPushSearch({domain, boxes, robot, isGoal, gate, maxStates = 1
       }
     });
   }
-  const cutoff = visited >= maxStates && !Number.isFinite(solutionPushes);
+  const complete = head >= queue.length;
+  const cutoff = !complete && !Number.isFinite(solutionPushes);
   return {
     status: Number.isFinite(solutionPushes) ? (solutionPushes === 0 ? "packed" : "solvable")
       : cutoff ? "cutoff" : "exhausted",
@@ -2544,7 +2838,41 @@ function exactLocalPushSearch({domain, boxes, robot, isGoal, gate, maxStates = 1
     firstPushes,
     visited,
     viableBoundaries,
+    complete: Number.isFinite(solutionPushes) || complete,
+    proofComplete: Number.isFinite(solutionPushes) || complete,
+    stateUpperBound,
+    decompositionComponents: plan.components,
+    storage: "dense-bitset",
   };
+}
+
+function localDomainGloballyClosed(domain, board) {
+  return [...domain].every(position =>
+    floorNeighbors(position, board.floor).every(neighbor => domain.has(neighbor)));
+}
+
+function cacheCompleteLocalAnalysis(memo, key, result, limit) {
+  return result.proofComplete
+    ? memoizeBounded(memo, key, result, limit)
+    : result;
+}
+
+function recordLocalAnalysis(metrics, result) {
+  if (result.proofComplete) metrics.localExactProofs++;
+  if (result.status === "cutoff") metrics.localExactCutoffs++;
+  if (result.status === "oversized") metrics.localExactOversized++;
+  if (result.globalDeadlockProven) metrics.localExactDeadlockProofs++;
+  if (Number.isFinite(result.stateUpperBound)) {
+    metrics.localExactStateBoundPeak = Math.max(
+      metrics.localExactStateBoundPeak,
+      result.stateUpperBound,
+    );
+  }
+  metrics.localExactDecompositions += Math.max(
+    0,
+    (result.decompositionComponents || 1) - 1,
+  );
+  return result;
 }
 
 function exactLocalRoomSearch(state, board, room, reachable = reachablePaths(state, board)) {
@@ -2558,6 +2886,8 @@ function exactLocalRoomSearch(state, board, room, reachable = reachablePaths(sta
     .filter(([position]) => domain.has(position));
   const entries = [...domain].filter(position => reachable.has(position)).sort();
   const entrySide = entries[0] || "sealed";
+  const localPlan = localExactStatePlan(domain, localBoxes, entrySide);
+  const stateUpperBound = localPlan.stateUpperBound;
   const cacheKey = `${roomIndex}|${entrySide}|${localBoxSignature(localBoxes)}`;
   if (board.localRoomMemo.has(cacheKey)) {
     metrics.localRoomCacheHits++;
@@ -2583,30 +2913,40 @@ function exactLocalRoomSearch(state, board, room, reachable = reachablePaths(sta
         status: "needs-import", importsRequired, exportsRequired,
         doorwayOccupied: localBoxes.some(([position]) => position === room.gate),
         entrySide, domain, roomIndex, firstPushes: new Set(), visited: 0, viableBoundaries: 0,
+        proofComplete: false, stateUpperBound,
+        decompositionComponents: localPlan.components, storage: "dense-bitset",
       };
       metrics.localRoomMs += now() - started;
-    return memoizeBounded(board.localRoomMemo, cacheKey, result, LOCAL_ROOM_MEMO_LIMIT);
+    return recordLocalAnalysis(metrics, result);
   }
   for (const [label, count] of internalCounts) {
     exportsRequired += Math.max(0, count - (targetCounts.get(label) || 0));
   }
-  if (room.cells.size > 16 || domain.size > 24 || localBoxes.length > 5) {
+  if (room.cells.size > LOCAL_ROOM_CELL_LIMIT ||
+      domain.size > LOCAL_DOMAIN_CELL_LIMIT || localBoxes.length > LOCAL_BOX_LIMIT ||
+      stateUpperBound > LOCAL_EXACT_STATE_LIMIT) {
     const result = {
       status: "oversized", importsRequired, exportsRequired,
       doorwayOccupied: localBoxes.some(([position]) => position === room.gate),
       entrySide, domain, roomIndex, firstPushes: new Set(), visited: 0, viableBoundaries: 0,
+      proofComplete: false, stateUpperBound,
+      decompositionComponents: localPlan.components, storage: "dense-bitset",
     };
     metrics.localRoomMs += now() - started;
-    return memoizeBounded(board.localRoomMemo, cacheKey, result, LOCAL_ROOM_MEMO_LIMIT);
+    return recordLocalAnalysis(metrics, result);
   }
   if (!entries.length) {
     const result = {
       status: "inaccessible", importsRequired, exportsRequired,
       doorwayOccupied: localBoxes.some(([position]) => position === room.gate),
       entrySide, domain, roomIndex, firstPushes: new Set(), visited: 0, viableBoundaries: 0,
+      proofComplete: true, stateUpperBound,
+      decompositionComponents: localPlan.components, storage: "dense-bitset",
     };
     metrics.localRoomMs += now() - started;
-      return memoizeBounded(board.localRoomMemo, cacheKey, result, LOCAL_ROOM_MEMO_LIMIT);
+      recordLocalAnalysis(metrics, result);
+      return cacheCompleteLocalAnalysis(
+        board.localRoomMemo, cacheKey, result, LOCAL_ROOM_MEMO_LIMIT);
   }
   const packingTable = reverseGoalRoomPackingTable(board, room);
   const localCanonical = canonicalLocalState(domain, localBoxes, entries[0]);
@@ -2630,15 +2970,23 @@ function exactLocalRoomSearch(state, board, room, reachable = reachablePaths(sta
       roomIndex,
       source: "reverse-packing-table",
       reverseTableComplete: packingTable.complete,
+      proofComplete: packingTable.complete,
+      stateUpperBound,
+      decompositionComponents: localPlan.components,
+      storage: "dense-bitset",
+      globalDeadlockProven: false,
     };
     metrics.localRoomMs += now() - started;
-    return memoizeBounded(board.localRoomMemo, cacheKey, result, LOCAL_ROOM_MEMO_LIMIT);
+    recordLocalAnalysis(metrics, result);
+    return cacheCompleteLocalAnalysis(
+      board.localRoomMemo, cacheKey, result, LOCAL_ROOM_MEMO_LIMIT);
   }
   const search = exactLocalPushSearch({
     domain,
     boxes: localBoxes,
     robot: entries[0],
     gate: room.gate,
+    maxStates: Math.min(LOCAL_EXACT_STATE_LIMIT, stateUpperBound) + 1,
     isGoal: occupied => !occupied.has(room.gate) && room.goals.every(goal =>
       occupied.get(goal)?.label === board.goals.get(goal)) &&
       [...occupied].every(([position, {label}]) =>
@@ -2652,10 +3000,16 @@ function exactLocalRoomSearch(state, board, room, reachable = reachablePaths(sta
     entrySide,
     domain,
     roomIndex,
+    globalDeadlockProven: search.status === "exhausted" && search.proofComplete &&
+      importsRequired === 0 && exportsRequired === 0 &&
+      localBoxes.length === state.boxes.length &&
+      localDomainGloballyClosed(domain, board),
   };
   metrics.localRoomStates += search.visited;
   metrics.localRoomMs += now() - started;
-  return memoizeBounded(board.localRoomMemo, cacheKey, result, LOCAL_ROOM_MEMO_LIMIT);
+  recordLocalAnalysis(metrics, result);
+  return cacheCompleteLocalAnalysis(
+    board.localRoomMemo, cacheKey, result, LOCAL_ROOM_MEMO_LIMIT);
 }
 
 function exactLocalRoomAnalyses(state, board, reachable = reachablePaths(state, board)) {
@@ -2716,6 +3070,8 @@ function exactLocalCorralSearch(state, board, component, reachable) {
     .map(([y, x, label]) => [pkey(y, x), label])
     .filter(([position]) => domain.has(position));
   const entrySide = [...boundary].sort()[0] || "sealed";
+  const localPlan = localExactStatePlan(domain, localBoxes, entrySide);
+  const stateUpperBound = localPlan.stateUpperBound;
   const componentKey = [...component].sort().join(".");
   const cacheKey = `${componentKey}|${entrySide}|${localBoxSignature(localBoxes)}`;
   if (board.localCorralMemo.has(cacheKey)) {
@@ -2723,7 +3079,9 @@ function exactLocalCorralSearch(state, board, component, reachable) {
     return board.localCorralMemo.get(cacheKey);
   }
   const started = now();
-  if (!boundary.size || component.size > 16 || domain.size > 24 || localBoxes.length > 5) {
+  if (!boundary.size || component.size > LOCAL_ROOM_CELL_LIMIT ||
+      domain.size > LOCAL_DOMAIN_CELL_LIMIT || localBoxes.length > LOCAL_BOX_LIMIT ||
+      stateUpperBound > LOCAL_EXACT_STATE_LIMIT) {
     const result = {
       kind: "corral",
       status: !boundary.size ? "sealed" : "oversized",
@@ -2731,9 +3089,16 @@ function exactLocalCorralSearch(state, board, component, reachable) {
       firstPushes: new Set(),
       visited: 0,
       viableBoundaries: 0,
+      proofComplete: false,
+      stateUpperBound,
+      decompositionComponents: localPlan.components,
+      storage: "dense-bitset",
+      globalDeadlockProven: false,
     };
     metrics.localCorralMs += now() - started;
-    return memoizeBounded(board.localCorralMemo, cacheKey, result, LOCAL_CORRAL_MEMO_LIMIT);
+    recordLocalAnalysis(metrics, result);
+    return cacheCompleteLocalAnalysis(
+      board.localCorralMemo, cacheKey, result, LOCAL_CORRAL_MEMO_LIMIT);
   }
   const componentGoals = [...component].filter(position => board.goals.has(position));
   const search = exactLocalPushSearch({
@@ -2741,6 +3106,7 @@ function exactLocalCorralSearch(state, board, component, reachable) {
     boxes: localBoxes,
     robot: entrySide,
     gate: entrySide,
+    maxStates: Math.min(LOCAL_EXACT_STATE_LIMIT, stateUpperBound) + 1,
     isGoal: (localOccupied, reached) =>
       [...reached].some(position => component.has(position)) ||
       (componentGoals.every(goal =>
@@ -2748,10 +3114,48 @@ function exactLocalCorralSearch(state, board, component, reachable) {
         [...localOccupied].every(([position, {label}]) =>
           !component.has(position) || board.goals.get(position) === label)),
   });
-  const result = {...search, kind: "corral", domain};
+  const globallyClosed = localBoxes.length === state.boxes.length &&
+    localDomainGloballyClosed(domain, board);
+  const provenCommitments = new Set();
+  if (globallyClosed) {
+    for (let fixedIndex = 0; fixedIndex < localBoxes.length; fixedIndex++) {
+      const [fixedPosition, fixedLabel] = localBoxes[fixedIndex];
+      if (board.goals.get(fixedPosition) !== fixedLabel) continue;
+      const fixedDomain = new Set(domain);
+      fixedDomain.delete(fixedPosition);
+      const remainingBoxes = localBoxes.filter((_, index) => index !== fixedIndex);
+      const fixedPlan = localExactStatePlan(fixedDomain, remainingBoxes, entrySide);
+      if (fixedPlan.stateUpperBound > LOCAL_EXACT_STATE_LIMIT) continue;
+      const fixedSearch = exactLocalPushSearch({
+        domain: fixedDomain,
+        boxes: remainingBoxes,
+        robot: entrySide,
+        gate: entrySide,
+        maxStates: fixedPlan.stateUpperBound + 1,
+        isGoal: localOccupied =>
+          [...board.goals].every(([goal, label]) =>
+            goal === fixedPosition
+              ? label === fixedLabel
+              : localOccupied.get(goal)?.label === label),
+      });
+      if (fixedSearch.status === "packed" || fixedSearch.status === "solvable") {
+        provenCommitments.add(fixedPosition);
+      }
+    }
+  }
+  const result = {
+    ...search,
+    kind: "corral",
+    domain,
+    provenCommitments,
+    globalDeadlockProven: search.status === "exhausted" && search.proofComplete &&
+      globallyClosed,
+  };
   metrics.localCorralStates += search.visited;
   metrics.localCorralMs += now() - started;
-  return memoizeBounded(board.localCorralMemo, cacheKey, result, LOCAL_CORRAL_MEMO_LIMIT);
+  recordLocalAnalysis(metrics, result);
+  return cacheCompleteLocalAnalysis(
+    board.localCorralMemo, cacheKey, result, LOCAL_CORRAL_MEMO_LIMIT);
 }
 
 function exactLocalCorralAnalyses(state, board, reachable = reachablePaths(state, board)) {
@@ -2773,6 +3177,25 @@ function createsSealedCorralDeadlock(state, board, reachable) {
       });
     });
     if (!canOpen) return true;
+    const boundary = new Set();
+    for (const position of component) {
+      for (const neighbor of floorNeighbors(position, board.floor)) {
+        if (reachable.has(neighbor)) boundary.add(neighbor);
+      }
+    }
+    const domain = new Set([...component, ...boundary]);
+    if (localDomainGloballyClosed(domain, board)) {
+      const analysis = exactLocalCorralSearch(state, board, component, reachable);
+      if (analysis?.globalDeadlockProven) return true;
+    }
+  }
+  board.closedLocalRooms ??= board.topology.rooms.filter(room => {
+    const domain = new Set([...room.cells, room.gate]);
+    for (const [position, distance] of room.approach) if (distance <= 2) domain.add(position);
+    return localDomainGloballyClosed(domain, board);
+  });
+  for (const room of board.closedLocalRooms) {
+    if (exactLocalRoomSearch(state, board, room, reachable).globalDeadlockProven) return true;
   }
   return false;
 }

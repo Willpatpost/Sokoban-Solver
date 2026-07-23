@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "reviewed": "2026-07-23",
+  "build": "2026-07-23.29",
+  "patternMaxStates": 512,
+  "patternMaxFloor": 18,
+  "patternMaxBoxes": 4,
+  "localExactMaxStates": 250000,
+  "roomMaxCells": 16,
+  "domainMaxCells": 24,
+  "localMaxBoxes": 5
+}

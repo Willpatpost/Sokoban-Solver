@@ -56,6 +56,11 @@ node bench/profile-prepared-board.js
 diagnostic rather than a timing gate because worker startup and structured-clone
 latency vary by browser and machine.
 
+`local-reasoning-baseline.json` records the deterministic proof ceilings for
+local room/corral and deadlock-pattern enumeration. Unit tests require production
+constants to match it; exceeding a ceiling returns `oversized` or retains the
+state rather than turning an incomplete search into a rejection.
+
 `performance-baselines.json` records visited/generated/retained states, frontier
 peaks, transposition evictions, and isolated-process heap peaks. Deterministic
 counters use narrow reviewed tolerances. Heap has a separate wider tolerance,

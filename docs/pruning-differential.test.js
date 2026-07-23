@@ -3,6 +3,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
 const vm = require("node:vm");
+const {mirrorRows, rotateRows} = require("../bench/generated-cases.js");
 
 const DIRS = {Up: [-1, 0], Down: [1, 0], Left: [0, -1], Right: [0, 1]};
 
@@ -379,7 +380,7 @@ test("generated wall-ended closed diagonals are exhaustively unsolvable", () => 
     grid[5][3] = "S";
     grid[5][4] = "S";
     const base = grid.map(row => row.join(""));
-    const variants = [base, base.map(row => [...row].reverse().join(""))];
+    const variants = [base, mirrorRows(base), rotateRows(base)];
     for (const rows of variants) {
       const {worker, board, states, solvable} = enumerateReachable(rows);
       const initial = stateFromRows(rows);
@@ -390,7 +391,7 @@ test("generated wall-ended closed diagonals are exhaustively unsolvable", () => 
       if (detected) checked++;
     }
   }
-  assert.equal(checked, 2);
+  assert.ok(checked >= 3);
 });
 
 test("typed corridor-order pattern is exhaustively dead while a bypass remains solvable", () => {
@@ -424,6 +425,27 @@ test("typed corridor-order pattern is exhaustively dead while a bypass remains s
     ),
     false,
   );
+});
+
+test("transformed typed and generic corridor patterns are independently dead", () => {
+  const sources = [
+    ["OOOOOOOOO", "OR A BbaO", "OOOOOOOOO"],
+    ["OOOOOOOOO", "OR SS XXO", "OOOOOOOOO"],
+  ];
+  let checked = 0;
+  for (const source of sources) {
+    for (const rows of [source, mirrorRows(source), rotateRows(source)]) {
+      const result = enumerateReachable(rows);
+      const initial = stateFromRows(rows);
+      assert.equal(result.solvable.size, 0, `expected dead family:\n${rows.join("\n")}`);
+      assert.ok(initial.boxes.some(([y, x]) =>
+        result.worker.createsPatternDatabaseDeadlock(
+          initial.boxes, result.board, [y, x],
+        )));
+      checked++;
+    }
+  }
+  assert.equal(checked, 6);
 });
 
 test("hard pruning never rejects an exhaustively proven solvable small state", () => {

@@ -6,10 +6,11 @@ includes classic DFS/BFS/Greedy/A* solvers plus **Ultimate Search**, a
 Sokoban-specific portfolio using push-level search, dead-square pruning, robot
 reachability canonicalization, exact distinct goal assignment, and push-distance
 heuristics. Its web search distinguishes temporary, conditional, and provably
-packed goal placements using state-complete room, doorway, matching, and support
-evidence. Guided searches keep proven boxes fixed while ordering strategic pushes
-with dynamic support dependencies and cached exact searches of small rooms and
-corrals. Typed doorway-flow analysis also tracks required room imports, exports,
+packed goal placements using state-complete room/corral, doorway, exact matching,
+and recursively proven support evidence. Guided searches keep proven boxes fixed
+while ordering strategic pushes with dynamic support dependencies and dense,
+proof-complete exact searches of small rooms and corrals. Typed doorway-flow
+analysis also tracks required room imports, exports,
 lane direction, and staging capacity. Bounded relaxed multi-box room and
 chokepoint-pair tables strengthen the admissible assignment heuristic when they
 prove unavoidable box interaction cost. Guided beams reserve bounded feature-space

@@ -425,7 +425,7 @@ Safe pruning and proven box locking can shrink the search space dramatically, bu
 must precede more aggressive decomposition and ordering.
 
 13. Add a goal-commitment safety oracle.
-    Current status: Strong, bounded.
+    Current status: Done in build 2026-07-23.29.
     Existing foundation:
     - Temporary, conditional, and proven placements use matching, dependencies,
       doorway flow, immovability, support demand, and bounded room evidence.
@@ -433,9 +433,18 @@ must precede more aggressive decomposition and ordering.
    - Extend movable proof to every local room/corral class completed in item 15.
    - Make support prerequisites assignment-aware and recursively proven.
    - Differentially validate every new lock and preserve the full Huge replay.
+   Completion notes:
+   - Support prerequisites now follow the exact box-to-goal matching and compute
+     transitive blocker closure; incomplete assignments and cycles cannot justify
+     a proven lock.
+   - Proof-complete rooms retain movable commitment evidence. A corral can prove a
+     movable placement only in a globally closed domain after solving every
+     remaining goal with the committed cell treated as a wall.
+   - Exhaustive small-board differential tests and the full 250-push Huge replay
+     preserve every solvable transition under proven locking.
 
 15. Add cached exact local searches for rooms and corrals.
-    Current status: Strong, bounded.
+    Current status: Done with explicit limits in build 2026-07-23.29.
     Existing foundation:
     - Bounded exact abstractions reason about packing, transfers, doorway
       restoration, boundary viability, and reopening access.
@@ -444,9 +453,17 @@ must precede more aggressive decomposition and ordering.
      documented practical limits receives a conclusive result.
    - Define and prove when local unsolvability safely implies global rejection.
    - Expose cutoff versus proof explicitly and cache only state-complete evidence.
+   Completion notes:
+   - Dense typed tokens, occupancy bitsets, canonical robot regions, and static
+     component decomposition provide compact collision-free local states.
+   - A combinatorial upper bound makes every eligible search conclusive: at most
+     16 room cells, 24 domain cells, five boxes, and 250,000 canonical states.
+     Larger cases are explicitly oversized; only proof-complete results are cached.
+   - Local exhaustion implies global rejection only when the domain contains every
+     box and every floor edge and requires no import or export.
 
 18. Add closed-diagonal deadlock detection and complete freeze detection.
-    Current status: Partial.
+    Current status: Done in build 2026-07-23.29.
     Existing foundation:
     - Conservative wall-ended diagonals and frozen components are independently
       enumerated, transformed, and replay-tested in browser and Python.
@@ -455,9 +472,16 @@ must precede more aggressive decomposition and ordering.
      multi-box variants.
    - Generate all transformed families and promote only independently proven
      patterns to pruning.
+   Completion notes:
+   - Recursive per-box axis blocking now finds frozen members even when another
+     box in the connected group can move.
+   - Wall-ended, immovable-box-ended, typed goal-sequence, generic, and multi-box
+     cases use exact matching-goal checks or complete relaxed pattern evidence.
+   - Mirrored and rotated generated families are independently enumerated in
+     JavaScript; the proven recursive and diagonal subset is also tested in Python.
 
 19. Add small deadlock pattern databases.
-    Current status: Partial.
+    Current status: Done with explicit limits in build 2026-07-23.29.
     Existing foundation:
     - A cached relaxed local search proves typed corridor-order conflicts under
       rules more permissive than the real puzzle.
@@ -466,6 +490,14 @@ must precede more aggressive decomposition and ordering.
      include useful generic-box cases, and port the proven subset to Python.
    - Establish deterministic cost gates so local enumeration cannot regress open
      warehouse searches.
+   Completion notes:
+   - Wall, box, goal, and label layouts use eight-way dihedral canonicalization;
+     both typed and useful generic-box corridor families are supported.
+   - The relaxed proof lets the robot use every support and lets boxes escape the
+     window, so only complete unsalvageability can prune. Python carries the same
+     proven corridor subset.
+   - Reviewed gates cap production enumeration at 512 states, 18 floor cells, and
+     four boxes. Branching, oversized, and cutoff windows retain the state.
 
 Sprint completion gate:
 All four items are Done or carry only a mathematically explicit size boundary;

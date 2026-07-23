@@ -454,6 +454,7 @@ def _minimum_assignment_cost(costs: Sequence[Sequence[float]]) -> float:
 
 HEURISTIC_CACHE_SIZE = 20_000
 PYTHON_INCREMENTAL_ASSIGNMENT_CROSSOVER = 5
+PATTERN_EXACT_STATE_LIMIT = 512
 
 
 @dataclass(frozen=True)
@@ -684,6 +685,26 @@ def creates_frozen_component_deadlock(
             component.add(adjacent)
             queue.append(adjacent)
 
+    recursively_frozen: set[Position] = set()
+
+    def is_blocker(position: Position) -> bool:
+        return position not in board.floor or (
+            position in occupied and position in recursively_frozen
+        )
+
+    changed = True
+    while changed:
+        changed = False
+        for y, x in component - recursively_frozen:
+            horizontal = is_blocker((y, x - 1)) or is_blocker((y, x + 1))
+            vertical = is_blocker((y - 1, x)) or is_blocker((y + 1, x))
+            if not horizontal or not vertical:
+                continue
+            recursively_frozen.add((y, x))
+            changed = True
+    if any(position not in board.goals_for(occupied[position]) for position in recursively_frozen):
+        return True
+
     for y, x in component:
         for dy, dx in DIRECTIONS.values():
             destination = (y + dy, x + dx)
@@ -713,6 +734,16 @@ def creates_closed_diagonal_deadlock(
     if moved_box not in occupied:
         return False
     limit = len(board.rows) + max(map(len, board.rows)) + 2
+    all_goals = board.generic_goals | frozenset(
+        position for _label, goals in board.dedicated_goals for position in goals
+    )
+
+    def statically_immovable(position: Position) -> bool:
+        y, x = position
+        return not any(
+            (y + dy, x + dx) in board.floor and (y - dy, x - dx) in board.floor
+            for dy, dx in DIRECTIONS.values()
+        )
 
     def scan_half(
         start: Position,
@@ -726,17 +757,16 @@ def creates_closed_diagonal_deadlock(
             center = (y, x)
             if center in board.walls:
                 return True, border_boxes, box_sides, distance
-            if center not in board.floor or center in occupied or center in board.generic_goals:
-                return False, border_boxes, box_sides, distance
-            if any(center in goals for _label, goals in board.dedicated_goals):
+            if center in occupied and statically_immovable(center):
+                border_boxes.add(center)
+                return True, border_boxes, box_sides, distance
+            if center not in board.floor or center in occupied or center in all_goals:
                 return False, border_boxes, box_sides, distance
             row_box_side: int | None = None
             for side_offset, side in ((-1, (y, x - 1)), (1, (y, x + 1))):
                 if side not in board.walls and side not in occupied:
                     return False, border_boxes, box_sides, distance
-                if side in board.generic_goals or any(
-                    side in goals for _label, goals in board.dedicated_goals
-                ):
+                if side in all_goals and side not in occupied:
                     return False, border_boxes, box_sides, distance
                 if side in occupied:
                     if row_box_side is not None:
@@ -766,16 +796,93 @@ def creates_closed_diagonal_deadlock(
             outward_facing = (
                 len(box_sides) == 2 and box_sides[0] == -slope and box_sides[1] == slope
             )
+            unfinished = any(
+                position not in board.goals_for(occupied[position]) for position in participants
+            )
             if (
                 up_closed
                 and down_closed
                 and up_rows + down_rows >= 2
-                and outward_facing
+                and unfinished
                 and moved_box in participants
                 and len(participants) >= 2
+                and (outward_facing or creates_pattern_database_deadlock(boxes, board, moved_box))
             ):
                 return True
     return False
+
+
+def creates_pattern_database_deadlock(
+    boxes: Iterable[Box],
+    board: Board,
+    moved_box: Position,
+    max_states: int = PATTERN_EXACT_STATE_LIMIT,
+) -> bool:
+    """Exhaust a relaxed small corridor pattern, including generic boxes.
+
+    Robot reachability is removed and a box may leave the local window, making
+    the abstraction strictly more permissive than the real puzzle. A dead result
+    is therefore safe; incomplete enumerations never prune.
+    """
+    center_y, center_x = moved_box
+    local_floor = frozenset(
+        position
+        for position in board.floor
+        if abs(position[0] - center_y) <= 4 and abs(position[1] - center_x) <= 4
+    )
+    if len(local_floor) > 18 or any(
+        sum((position[0] + dy, position[1] + dx) in board.floor for dy, dx in DIRECTIONS.values())
+        > 2
+        for position in local_floor
+    ):
+        return False
+    local_boxes = tuple(
+        sorted((label, position) for label, position in boxes if position in local_floor)
+    )
+    if not 2 <= len(local_boxes) <= 4:
+        return False
+    layouts = 1
+    for index in range(len(local_boxes)):
+        layouts *= len(local_floor) - index
+    label_counts: dict[str, int] = {}
+    for label, _position in local_boxes:
+        label_counts[label] = label_counts.get(label, 0) + 1
+    for count in label_counts.values():
+        layouts //= math.factorial(count)
+    state_upper_bound = layouts * max(1, len(local_floor) - len(local_boxes))
+    if state_upper_bound > PATTERN_EXACT_STATE_LIMIT:
+        return False
+
+    queue = deque([local_boxes])
+    seen = {local_boxes}
+    state_limit = min(max_states, PATTERN_EXACT_STATE_LIMIT, state_upper_bound + 1)
+    while queue and len(seen) <= state_limit:
+        current = queue.popleft()
+        if all(position in board.goals_for(label) for label, position in current):
+            return False
+        occupied = {position for _label, position in current}
+        for box_index, (label, (y, x)) in enumerate(current):
+            for dy, dx in DIRECTIONS.values():
+                support = (y - dy, x - dx)
+                destination = (y + dy, x + dx)
+                if (
+                    support not in board.floor
+                    or support in occupied
+                    or destination not in board.floor
+                    or destination in occupied
+                ):
+                    continue
+                successor = list(current)
+                if destination in local_floor:
+                    successor[box_index] = (label, destination)
+                else:
+                    successor.pop(box_index)
+                signature = tuple(sorted(successor))
+                if signature in seen:
+                    continue
+                seen.add(signature)
+                queue.append(signature)
+    return not queue
 
 
 def creates_dynamic_deadlock(
@@ -789,6 +896,7 @@ def creates_dynamic_deadlock(
         creates_2x2_deadlock(frozen_boxes, board, moved_box)
         or creates_closed_diagonal_deadlock(frozen_boxes, board, moved_box)
         or creates_frozen_component_deadlock(frozen_boxes, board, moved_box)
+        or creates_pattern_database_deadlock(frozen_boxes, board, moved_box)
     )
 
 

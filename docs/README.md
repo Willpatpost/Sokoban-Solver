@@ -185,14 +185,17 @@ checkpoint.
 The board analysis is puzzle-independent. It detects articulation gates and
 one-entrance rooms, derives farthest-first packing pressure and goal dependencies,
 and marks high-traffic packing cells. Hard pruning includes static and player-side
-dead squares, label-aware Hall deadlocks, 2x2 blocks, conservative wall-ended
-closed diagonals, frozen box groups, and sealed corrals. Globally forced pushes in
-straight tunnels are collapsed into macros.
-Small non-branching typed-box neighborhoods additionally use a cached relaxed
-pattern search. The robot may stand on every legal support square and boxes may
-escape through the pattern boundary, so only a pattern unsalvageable under those
-more generous rules is rejected. Static windows are compiled once per center;
-cutoffs and larger or branching neighborhoods retain the state.
+dead squares, label-aware Hall deadlocks, 2x2 blocks, wall- or immovable-box-ended
+closed diagonals, recursive per-box freezes, and sealed corrals. Typed goal
+sequences are accepted only when at least one frozen participant remains
+unfinished. Globally forced pushes in straight tunnels are collapsed into macros.
+Small non-branching typed or generic-box neighborhoods additionally use a cached
+relaxed pattern search. The robot may stand on every legal support square and
+boxes may escape through the pattern boundary, so only a completely enumerated
+pattern unsalvageable under those more generous rules is rejected. Dihedral
+canonicalization shares mirror and rotation results. The reviewed deterministic
+limit is 512 states, 18 floor cells, and four boxes; cutoffs and larger or
+branching neighborhoods retain the state. The same proven subset runs in Python.
 Heuristic room ordering affects priority only; it never rejects a state.
 Boxes occupying the exterior approach to an unresolved one-entrance room add
 congestion pressure, encouraging the solver to clear staging gates before packing.
@@ -200,7 +203,9 @@ congestion pressure, encouraging the solver to clear staging gates before packin
 Goal packing uses a conservative commitment oracle instead of rewarding every
 currently matched box equally. A placement is temporary when fixing it would
 block pending room dependencies, occupy a required gate, or destroy the remaining
-typed perfect matching and its static or dynamic support routes. Movable placements
+typed perfect matching and its static or dynamic support routes. Support routes
+are selected from the exact box-to-goal assignment, expanded through transitive
+box prerequisites, and reject cyclic or incomplete proof chains. Movable placements
 that pass those checks are conditional and receive a reduced ordering reward. A
 matched box is proven when it is statically immovable or belongs to an exactly
 completed one-entry room whose imports, exports, gate, staging, matching, and support
@@ -216,15 +221,24 @@ move first; candidate pushes that clear those prerequisites are ordered earlier,
 while pushes that occupy demanded staging sides are ordered later. The graph is
 cached and instrumented, and remains an ordering signal rather than a pruning rule.
 
-Small gated goal rooms and genuine inaccessible corrals use a shared cached exact
-push-state search. Room entries include nearby staging cells and track typed imports,
-exports, doorway occupancy, restored doorway states, packed goals, and viable boundary
-configurations. Corral entries search for the shortest way to reopen robot access or
-resolve the enclosed goals. Completed local searches expose their optimal first pushes
-to beam, discrepancy, and IDA* ordering. Exhausted, oversized, inaccessible, and
-budget-cutoff abstractions are reported but never used as global hard-pruning proofs.
-Only an exactly completed room can support proven-box locking; corral-opening hints
-receive lower confidence and remain ordering-only.
+Small gated goal rooms and genuine inaccessible corrals use a shared dense exact
+push-state search. Typed box tokens, occupancy bitsets, canonical robot regions,
+and disconnected static-domain components give a collision-free compact state.
+Room entries include nearby staging cells and track typed imports, exports, doorway
+occupancy, restored doorway states, packed goals, and viable boundaries. Corral
+entries search for the shortest way to reopen access or resolve enclosed goals.
+The combinatorial state upper bound guarantees a conclusive result for rooms up
+to 16 cells, domains up to 24 cells, five boxes, and at most 250,000 canonical
+states. Larger cases report `oversized`; unexpected cutoffs remain explicit.
+Only proof-complete results are cached.
+
+Local exhaustion becomes a global rejection only when the abstraction contains
+every box and every floor edge—so no box can leave and later re-enter through an
+omitted square—and imports and exports are both zero. The same closed-domain
+condition lets a corral prove a movable goal box safe by solving the remaining
+goals with that cell treated as a wall. Open corrals remain lower-confidence
+ordering evidence. Differential tests compare every hard rejection and proven
+lock with unpruned reachability, including the complete Huge replay.
 
 Bounded one-entrance goal rooms also compile a reusable reverse packing table from
 the fully packed typed-goal arrangement. Reverse-legal pushes retain the robot's

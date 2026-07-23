@@ -30,6 +30,7 @@ from Searches.Sokomind import (
     collapse_forced_pushes,
     creates_closed_diagonal_deadlock,
     creates_frozen_component_deadlock,
+    creates_pattern_database_deadlock,
     get_push_neighbors,
     get_neighbors,
     main,
@@ -365,6 +366,59 @@ class SokomindTests(unittest.TestCase):
             )
         )
 
+        recursive = parse_puzzle(
+            [
+                "OOOOOOOO",
+                "OOX    O",
+                "O X    O",
+                "O R SS O",
+                "OOOOOOOO",
+            ]
+        )
+        self.assertTrue(
+            creates_frozen_component_deadlock(
+                recursive.boxes,
+                recursive.board,
+                (2, 2),
+            )
+        )
+
+    def test_small_pattern_database_supports_generic_boxes_and_cutoffs(self):
+        trapped = parse_puzzle(["OOOOOOOOO", "OR SS XXO", "OOOOOOOOO"])
+        self.assertTrue(
+            creates_pattern_database_deadlock(
+                trapped.boxes,
+                trapped.board,
+                (1, 6),
+            )
+        )
+        self.assertFalse(
+            creates_pattern_database_deadlock(
+                trapped.boxes,
+                trapped.board,
+                (1, 6),
+                max_states=0,
+            )
+        )
+
+        bypass = parse_puzzle(
+            [
+                "OOOOOOOOO",
+                "O       O",
+                "OR A BbaO",
+                "O       O",
+                "O       O",
+                "OOOOOOOOO",
+            ]
+        )
+        self.assertFalse(
+            creates_pattern_database_deadlock(
+                bypass.boxes,
+                bypass.board,
+                (2, 5),
+            )
+        )
+
     def test_closed_diagonal_requires_wall_ends_multiple_boxes_and_no_goal_escape(self):
         state = parse_puzzle(
             [
@@ -400,6 +454,25 @@ class SokomindTests(unittest.TestCase):
             creates_closed_diagonal_deadlock(
                 escaped.boxes,
                 escaped.board,
+                (2, 2),
+            )
+        )
+
+        box_ended = parse_puzzle(
+            [
+                "OOOOOOOO",
+                "OOX    O",
+                "O X O  O",
+                "O  O X O",
+                "O    O O",
+                "O RSSS O",
+                "OOOOOOOO",
+            ]
+        )
+        self.assertTrue(
+            creates_closed_diagonal_deadlock(
+                box_ended.boxes,
+                box_ended.board,
                 (2, 2),
             )
         )
