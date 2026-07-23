@@ -1,8 +1,8 @@
 Sokomind improvements and implementation status
 ===============================================
 
-Status reviewed against the repository after Improvement Sprint 9: search-worker
-liveness recovery and memory-aware exact transposition capacity.
+Status reviewed against the repository after Improvement Sprint 10: bounded dynamic
+worker-capacity refill for opening and exact-phase discovery.
 
 Standing maintenance rules
 --------------------------
@@ -234,6 +234,32 @@ STRONG IMPLEMENTATION, WITH BOUNDED LIMITATIONS
       default is conservative rather than based on live heap pressure.
     - The table still uses bounded insertion-order replacement and does not resize
       during a contour.
+
+43. Keep available Ultimate worker capacity productively occupied.
+    Strong, bounded implementation in solver build 2026-07-22.21:
+    - Queued direct searches can use hardware slots released by bounded forward and
+      reverse workers while the evacuation search remains active; evacuation no
+      longer freezes the entire direct queue.
+    - Direct capacity follows remaining reported hardware capacity instead of a
+      fixed two-worker ceiling, while the existing one-active-bridge restriction
+      prevents landmark probes from monopolizing every lane.
+    - Once persistent exact search begins, completion of a bridge or anytime worker
+      triggers checkpoint-guided refill without interrupting or repartitioning the
+      exact contour.
+    - Checkpoints receive at most two anytime attempts. Four rotating strategic
+      profiles and attempt-specific seeds provide bounded diversity, and newly
+      published replayable checkpoints can feed later refill rounds.
+    - Refill logs its active/capacity counts, and scheduler regression checks cover
+      evacuation concurrency, retry bounds, exact-phase refill, and synchronized
+      browser build identifiers.
+    Bounded limitations:
+    - Refill depends on eligible replayable checkpoints. The scheduler intentionally
+      leaves a slot idle when only exhausted or over-attempted work remains.
+    - Concurrent direct workers can increase CPU contention and memory pressure;
+      the Huge browser trace should be compared with build 20 before increasing
+      per-worker search budgets.
+    - The current browser tests validate policy and wiring but do not yet provide
+      the real-browser campaign coverage tracked by item 42.
 
 
 PARTIALLY DELIVERED

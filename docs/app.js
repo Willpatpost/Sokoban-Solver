@@ -1,7 +1,7 @@
 const LEVELS = SokomindLevels.LEVELS;
 const DIRS = {Up: [-1, 0], Down: [1, 0], Left: [0, -1], Right: [0, 1]};
 const CODE_MOVE = {U: "Up", D: "Down", L: "Left", R: "Right"};
-const SOLVER_BUILD = "2026-07-22.20";
+const SOLVER_BUILD = "2026-07-22.21";
 const SOLVER_WORKER_URL = `solver-worker.js?build=${SOLVER_BUILD}`;
 const PUSH_BOUNDS_KEY = "sokomind-push-bounds-v1";
 const KEYS = {ArrowUp: "Up", ArrowDown: "Down", ArrowLeft: "Left", ArrowRight: "Right",
@@ -968,19 +968,25 @@ function runBidirectionalSolver(purpose, analysis) {
     }
   };
 
-  let exactRound = 0, exactRoundShardCount = 0;
+  let exactRound = 0, exactRoundShardCount = 0, anytimeSerial = 0;
+  const anytimeAttempts = new Map();
   const launchAnytimeDiscovery = (limit) => {
     if (limit <= 0) return 0;
     const candidates = [...directCheckpoints]
       .map(([id, record]) => ({id, ...record}))
       .filter(candidate => !Number.isFinite(candidate.totalBound) ||
-        candidate.pushCost + candidate.checkpoint.estimate <= candidate.totalBound);
+        candidate.pushCost + candidate.checkpoint.estimate <= candidate.totalBound)
+      .filter(candidate => (anytimeAttempts.get(candidate.id) || 0) < 2);
     const selected = SokomindDirectorPolicy.selectAnytimeCheckpoints(candidates, limit);
     const profiles = [
       {beamProfile: "milestone", weight: 2.1, topologyWeight: 1.8,
         goalPackingWeight: 1.5, diversity: 2.2, seed: 15485863},
       {beamProfile: "detour", weight: 1.8, topologyWeight: 0.7,
         goalPackingWeight: 1.8, diversity: 2.8, seed: 32452843},
+      {beamProfile: "balanced", weight: 2.8, topologyWeight: 1.1,
+        goalPackingWeight: 1.7, diversity: 1.6, seed: 49979687},
+      {beamProfile: "room-flow", weight: 2.4, topologyWeight: 1.5,
+        goalPackingWeight: 2.1, diversity: 2.1, seed: 67867967},
     ];
     if (!selected.length) return 0;
     expectedWorkers += selected.length;
@@ -990,13 +996,17 @@ function runBidirectionalSolver(purpose, analysis) {
         `${shortStateId(candidate.id)}:g${candidate.pushCost}:h${candidate.checkpoint.estimate}:f${candidate.projectedCost}`
       ).join(","),
     });
-    selected.forEach((candidate, index) => {
+    selected.forEach(candidate => {
+      const attempt = (anytimeAttempts.get(candidate.id) || 0) + 1;
+      anytimeAttempts.set(candidate.id, attempt);
+      const serial = ++anytimeSerial;
+      const profile = profiles[(serial - 1) % profiles.length];
       const remaining = Number.isFinite(candidate.totalBound)
         ? candidate.totalBound - candidate.pushCost : 320;
       launch({
         algorithm: "push-beam",
         side: "direct",
-        label: `Anytime Guided ${index + 1}/${selected.length}`,
+        label: `Anytime Guided ${serial}`,
         anytimeGuided: true,
         handoffStage: "anytime",
         state: candidate.checkpoint.state,
@@ -1023,7 +1033,8 @@ function runBidirectionalSolver(purpose, analysis) {
         endgameProfiles: ["room-flow", "balanced", "setup"],
         progressInterval: 25000,
         progressIntervalMs: 5000,
-        ...profiles[index % profiles.length],
+        ...profile,
+        seed: profile.seed + attempt * 104729,
       });
     });
     return selected.length;
@@ -1071,10 +1082,23 @@ function runBidirectionalSolver(purpose, analysis) {
     }
   };
 
+  const refillExactDiscovery = () => {
+    if (!exactShardsStarted || settled) return 0;
+    const availableSlots = Math.max(0,
+      maxWorkerConcurrency - activeSideWorkers - activeDirectWorkers);
+    if (!availableSlots) return 0;
+    const launched = launchAnytimeDiscovery(availableSlots);
+    if (launched) appendSearchLog("director", "Refilled exact-phase discovery capacity", {
+      workers: launched,
+      active: activeSideWorkers + activeDirectWorkers,
+      capacity: maxWorkerConcurrency,
+    });
+    return launched;
+  };
+
   function pumpDirectPlans() {
-    if (settled || activeEvacuationWorkers > 0) return;
-    const directCapacity = Math.max(1,
-      Math.min(2, maxWorkerConcurrency - activeSideWorkers));
+    if (settled) return;
+    const directCapacity = Math.max(0, maxWorkerConcurrency - activeSideWorkers);
     while (directQueue.length && activeDirectWorkers < directCapacity) {
       const bestPriority = directQueue[0].queuePriority;
       const eligible = directQueue
@@ -1157,6 +1181,10 @@ function runBidirectionalSolver(purpose, analysis) {
     };
     const continuePortfolio = () => {
       if (settled) return;
+      if (exactShardsStarted) {
+        refillExactDiscovery();
+        return;
+      }
       pumpDirectPlans();
       if (requiredWork.isComplete() && !exactShardsStarted) {
         const requiredSnapshot = requiredWork.snapshot();

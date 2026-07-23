@@ -78,6 +78,11 @@ test("Ultimate scheduling retires stale phases and reclaims silent workers", () 
   assert.match(app, /Bridge campaign circuit breaker opened/);
   assert.match(app, /Started anytime checkpoint discovery/);
   assert.match(app, /anytimeGuided/);
+  assert.match(app, /Refilled exact-phase discovery capacity/);
+  assert.match(app, /const anytimeAttempts = new Map\(\)/);
+  assert.match(app, /\(anytimeAttempts\.get\(candidate\.id\) \|\| 0\) < 2/);
+  assert.match(app, /directCapacity = Math\.max\(0, maxWorkerConcurrency - activeSideWorkers\)/);
+  assert.doesNotMatch(app, /if \(settled \|\| activeEvacuationWorkers > 0\) return/);
   assert.match(app, /exactRoundShardCount = anytimeWorkers[\s\S]*?\? 1/);
   assert.match(app, /provedUnsolvable = exactRoundComplete && !Number\.isFinite/);
   assert.match(app, /discardedExactIncumbent \? Infinity/);

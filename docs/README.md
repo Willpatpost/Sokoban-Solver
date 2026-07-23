@@ -237,7 +237,7 @@ first-solution portfolio.
 The first-solution portfolio now separates discovery from proof. Checkpoints are
 ranked by accumulated pushes plus their admissible remaining estimate, while phase
 diversity prevents every worker from starting at a nearly identical packing layout.
-On capable browsers, two cost-aware guided beams search from the best distinct
+On capable browsers, cost-aware guided beams search from the best distinct
 checkpoints while one persistent exact worker continues the admissible contour.
 Packing checkpoints retire active bridge work and extreme puzzles run only the two
 best local exact handoffs, allowing the anytime workers to begin earlier. No stored
@@ -263,11 +263,13 @@ Very large puzzles can still hit browser memory limits before the search space
 is exhausted. Ultimate Bidirectional uses compact parent records, caps each
 bidirectional side on complex boards, bounds worker transposition and memo
 tables, and automatically reduces its reverse-worker count. A priority work queue
-keeps up to two direct-search lanes occupied when the browser reports enough hardware,
-while alternating bridge and exact-handoff work so one strategy cannot monopolize
-both lanes. Direct capacity expands when the opening forward and reverse workers
-finish, allowing later phases to reuse those processor slots. Finished workers
-release their frontiers while queued work continues.
+uses the capacity released by completed forward and reverse workers, including while
+evacuation continues, while still allowing only one active landmark bridge. During
+the exact phase, finished bridge and anytime workers are replaced with distinct
+checkpoint-guided profiles whenever eligible checkpoints remain. Each checkpoint is
+attempted at most twice with rotating profiles and seeds; the persistent exact shard
+is never displaced, and a slot remains idle rather than running an unbounded duplicate.
+Finished workers release their frontiers before replacement work begins.
 Bidirectional heaps compact to their best 40,000 states when they grow past twice
 that size. A worker that produces no message for two minutes is terminated, logged,
 and replaced by the next portfolio assignment so a wedged worker cannot stall the
