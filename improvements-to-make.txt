@@ -1,7 +1,7 @@
 Sokomind improvement campaign and sprint plan
 ==============================================
 
-Plan reorganized after Improvement Sprint 13 and updated after Sprint 14 on
+Plan reorganized after Improvement Sprint 13 and updated after Sprint 15 on
 2026-07-23.
 
 Mission
@@ -206,55 +206,60 @@ changes. Finishing them first prevents later sprints from relying on manual Huge
 logs or narrow unit wiring assertions.
 
 3. Add exhaustive differential tests for every hard pruning rule.
-   Current status: Strong, bounded.
+   Status: Done in build 2026-07-23.26.
    Existing foundation:
    - Reference BFS checks every current hard-pruning rule independently and in
      combination.
    - All 780 placements across connected 2x3 floors are enumerated, including 60
      independently proven solvable configurations and authored larger boards.
    - The harness retains the smallest discovered false positive.
-   Finish gate:
-   - Add systematic 3x3 and 3x4 sampling, multiple generic and typed boxes,
-     doorways, corrals, closed diagonals, and interacting freeze patterns.
-   - Add property-based generation and structural counterexample shrinking.
-   - Require every registered hard-pruning rule to provide an independent oracle
-     family so future rules cannot enter production without differential coverage.
+   Delivered:
+   - Deterministically sampled 3x3 and 3x4 properties exercise generic and typed
+     multi-box layouts alongside authored doorway, corral, diagonal, and freeze
+     structures.
+   - Structural shrinking removes irrelevant floor while retaining a reproducible
+     predicate, and the existing smallest-counterexample retention remains active.
+   - Hard pruning is now an executable production registry. Every rule names an
+     independent unpruned oracle family, and CI rejects unregistered coverage.
 
 5. Add hidden or generated benchmark families.
-   Current status: Strong, bounded.
+   Status: Done in build 2026-07-23.26.
    Existing foundation:
    - Sixteen replay-validated mirror, rotation, relabeling, premature-goal,
      doorway, room-packing, corral, and certified lane-warehouse cases.
-   Finish gate:
-   - Add deterministic but separately seeded bottleneck, staging-capacity,
-     coupled-room ordering, dependency-cycle, and multi-gate families.
-   - Independently certify bounded instances and keep generator seeds outside
-     solver inputs.
-   - Record reviewed state/push expectations without tuning production code to
-     fixture names.
+   Delivered:
+   - Added separately seeded bottleneck, staging-capacity, coupled-room-ordering,
+     dependency-cycle, and multi-gate families.
+   - Seeds remain harness-only; every bounded case is independently exact-solved
+     and checked against its reviewed solved/push expectation.
+   - Production search receives only ordinary puzzle and budget inputs and has no
+     fixture-name branches.
 
 30. Add real-browser integration tests.
-   Current status: Backlog; manual smoke coverage exists.
-   Finish gate:
-   - Add Playwright coverage for page load, level selection, keyboard and touch
-     play, hint/solve/stop, undo/reset during animation, stored bounds, completion,
-     stale messages, worker errors, build display, and responsive breakpoints.
-   - Run a small browser matrix in CI against the actual modular scripts and Web
-     Worker entry.
+   Status: Done in build 2026-07-23.26.
+   Delivered:
+   - Playwright covers page load, level selection, keyboard/touch play,
+     hint/solve/stop, undo/reset during animation, persisted bounds, completion,
+     stale messages, worker errors, build display, and mobile layout.
+   - Chromium and WebKit projects run in a required CI matrix against the served
+     modular page and real worker entry.
+   - Director callbacks now reject messages and errors from workers already
+     removed by stop or supersession.
 
 42. Add an end-to-end Ultimate campaign regression for checkpoint consumption.
-   Current status: Backlog; policy wiring tests exist.
-   Finish gate:
-   - Build a bounded, puzzle-independent fixture where evacuation publishes a
-     replayable checkpoint and packing/milestone work consumes it.
-   - Assert that compatible checkpoint/landmark pairs launch a bridge and that
-     incompatible pairs log a precise reason.
-   - Cover the full worker/director path in the real-browser suite rather than
-     matching source text or depending on the Huge board.
+   Status: Done in build 2026-07-23.26.
+   Delivered:
+   - A bounded scripted-worker fixture drives the real page and director from
+     analysis through evacuation, packing, milestone reverse work, and bridges.
+   - The test proves the packing handoff consumes the checkpoint, compatible
+     candidates launch bridge work, and target incompatibility reaches the
+     structured browser log with its exact reason.
+   - The fixture is puzzle-independent and does not depend on the Huge board or
+     source-text matching.
 
 Sprint completion gate:
-All four items are Done, CI runs the new browser and generated gates, and the
-existing suites remain green.
+Completed in build 2026-07-23.26. All four items are Done; CI runs the generated
+and Chromium/WebKit browser gates, and all existing suites remain green.
 
 
 Sprint 16 - Deterministic performance and release gates

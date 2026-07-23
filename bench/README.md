@@ -17,16 +17,17 @@ node bench/benchmark.js --suite alpha --jsonl
 ```
 
 Run the deterministic validation suite of mirrored, rotated, relabeled,
-premature-goal, typed-doorway, exact-room, corral-family, and procedurally
-generated three- and four-box cases:
+premature-goal, typed-doorway, exact-room, corral-family, and separately seeded
+bottleneck, staging-capacity, coupled-room-ordering, dependency-cycle, multi-gate,
+and three- and four-box cases:
 
 ```powershell
 node bench/benchmark.js --suite validation --jsonl
 ```
 
-The procedural multi-box family is separate from the built-in levels and authored
-strategic seeds. Its solvability is checked by an independent exact push-state
-search in `generated-cases.test.js`, including a typed-box case.
+The procedural families are separate from the built-in levels. Their private
+seeds never enter solver payloads, and an independent exact push-state search in
+`generated-cases.test.js` checks every reviewed solved/push expectation.
 
 Run the expensive Huge-focused suite when the cluster allocation is intended for
 that purpose:

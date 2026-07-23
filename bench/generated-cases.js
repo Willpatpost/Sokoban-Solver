@@ -114,6 +114,60 @@ const CERTIFIED_MULTIBOX_CASES = [
   certifiedMultiboxCase("four lane long push", 4, {pushDistance: 3}),
 ];
 
+function seededFamilyCase(family, seed, profile) {
+  const random = (() => {
+    let value = seed >>> 0;
+    return () => {
+      value ^= value << 13; value ^= value >>> 17; value ^= value << 5;
+      return (value >>> 0) / 0x100000000;
+    };
+  })();
+  const transforms = [profile.rows, mirrorRows(profile.rows), rotateRows(profile.rows)];
+  let rows = transforms[Math.floor(random() * transforms.length)];
+  if (profile.labels && random() >= .5) rows = permuteLabels(rows, profile.labels);
+  const boxCount = rows.join("").match(/X|[A-NP-QT-Z]/g)?.length || 0;
+  return {
+    name: `generated ${family} family`,
+    rows,
+    algorithm: "push-astar",
+    timeoutMs: 15000,
+    weight: boxCount,
+    payload: {maxVisited: 200000},
+    family,
+    certification: "independent-exact-push",
+    reviewedExpectation: {solved: true, pushes: profile.pushes},
+  };
+}
+
+// Seeds stay in the harness and are never passed in the solver payload.
+const CERTIFIED_STRATEGIC_FAMILIES = Object.freeze([
+  seededFamilyCase("bottleneck", 0xb0771e, {
+    rows: ["OOOOOOO", "O  S  O", "OOO OOO", "O  X  O", "O  R  O", "O     O", "OOOOOOO"],
+    pushes: 2,
+  }),
+  seededFamilyCase("staging-capacity", 0x57a613, {
+    rows: ["OOOOOOOO", "O SS   O", "OO  OOOO", "O XX   O", "O  R   O", "O      O",
+      "OOOOOOOO"],
+    pushes: 4,
+  }),
+  seededFamilyCase("coupled-room-ordering", 0xc0a913, {
+    rows: ["OOOOOOOOO", "O a   b O", "O       O", "OOOO OOOO", "O  A B  O",
+      "O   R   O", "O       O", "OOOOOOOOO"],
+    pushes: 12,
+    labels: {A: "E", B: "F"},
+  }),
+  seededFamilyCase("dependency-cycle", 0xde9e0d, {
+    rows: ["OOOOOOOOO", "O S S S O", "O       O", "O X O X O", "O   X   O",
+      "O   R   O", "O       O", "OOOOOOOOO"],
+    pushes: 9,
+  }),
+  seededFamilyCase("multi-gate", 0x6a7e55, {
+    rows: ["OOOOOOOOOOO", "O S S S   O", "OO O O OOOO", "O X X X   O",
+      "O    R    O", "O         O", "OOOOOOOOOOO"],
+    pushes: 6,
+  }),
+]);
+
 const GENERATED_CASES = [
   {
     name: "generated mirrored tiny",
@@ -156,10 +210,12 @@ const GENERATED_CASES = [
   },
   ...STRATEGIC_CASES,
   ...CERTIFIED_MULTIBOX_CASES,
+  ...CERTIFIED_STRATEGIC_FAMILIES,
 ];
 
 module.exports = {
   CERTIFIED_MULTIBOX_CASES,
+  CERTIFIED_STRATEGIC_FAMILIES,
   GENERATED_CASES,
   STRATEGIC_CASES,
   laneWarehouseRows,

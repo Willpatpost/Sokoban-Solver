@@ -341,6 +341,9 @@ node --test docs/pruning-differential.test.js bench/evaluator.test.js bench/gene
 node bench/verify-solution.js huge docs/optimalForHuge.txt
 node bench/benchmark.js --suite smoke
 node bench/benchmark.js --suite validation
+npm ci
+npx playwright install chromium webkit
+npm run test:browser
 ```
 
 The shared conformance fixtures verify that Python, the browser worker, and the
@@ -364,7 +367,10 @@ and cutoff reasons. Invalid returned paths fail the benchmark instead of earning
 partial credit. Unsolved partial credit is based on replay-valid checkpoints and
 a fixed harness-owned typed push-distance evaluator, not the solver's reported
 estimate. The `validation` suite adds deterministic mirrored, rotated, relabeled,
-and premature-goal cases to reduce tuning against only the built-in layouts.
+premature-goal, bottleneck, staging-capacity, coupled-room, dependency-cycle, and
+multi-gate cases to reduce tuning against only the built-in layouts. Bounded
+generated cases carry reviewed push expectations certified by an independent
+exact push search; their private seeds never enter solver payloads.
 
 ## GitHub Pages deployment
 

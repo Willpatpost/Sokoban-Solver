@@ -1759,10 +1759,9 @@ function createsPatternDatabaseDeadlock(boxes, board, movedBox, maxStates = 64) 
 function createsDynamicDeadlock(boxes, board, movedBox) {
   const signature = `${boxSignature(boxes, board)}|${movedBox.join(",")}`;
   if (board.deadlockMemo.has(signature)) return board.deadlockMemo.get(signature);
-  const deadlocked = creates2x2Deadlock(boxes, board, movedBox) ||
-    createsClosedDiagonalDeadlock(boxes, board, movedBox) ||
-    createsFrozenComponentDeadlock(boxes, board, movedBox) ||
-    createsPatternDatabaseDeadlock(boxes, board, movedBox);
+  const deadlocked = DYNAMIC_HARD_PRUNING_RULES.some(
+    rule => rule.detect(boxes, board, movedBox),
+  );
   return memoizeBounded(board.deadlockMemo, signature, deadlocked, DEADLOCK_MEMO_LIMIT);
 }
 function neighbors(state, board, pruneDeadlocks = true) {
@@ -2587,6 +2586,31 @@ function createsSealedCorralDeadlock(state, board, reachable) {
   }
   return false;
 }
+
+// This registry is deliberately executable production data. Differential tests
+// enumerate it, so a new hard prune cannot be added without naming an independent
+// oracle family that certifies it against unpruned reachability.
+const HARD_PRUNING_RULES = Object.freeze([
+  Object.freeze({name: "static-dead", oracleFamily: "push-reachability",
+    scope: "push", detect: (boxes, board, movedBox, label) =>
+      staticDead(movedBox[0], movedBox[1], board, label)}),
+  Object.freeze({name: "2x2", oracleFamily: "multi-box-local",
+    scope: "dynamic", detect: creates2x2Deadlock}),
+  Object.freeze({name: "closed-diagonal", oracleFamily: "closed-diagonal",
+    scope: "dynamic", detect: createsClosedDiagonalDeadlock}),
+  Object.freeze({name: "freeze", oracleFamily: "interacting-freeze",
+    scope: "dynamic", detect: createsFrozenComponentDeadlock}),
+  Object.freeze({name: "pattern-database", oracleFamily: "typed-corridor",
+    scope: "dynamic", detect: createsPatternDatabaseDeadlock}),
+  Object.freeze({name: "sealed-corral", oracleFamily: "corral",
+    scope: "state", detect: createsSealedCorralDeadlock}),
+  Object.freeze({name: "proven-commitment", oracleFamily: "goal-commitment",
+    scope: "push-neighbor", detect: null}),
+]);
+const DYNAMIC_HARD_PRUNING_RULES = HARD_PRUNING_RULES.filter(
+  rule => rule.scope === "dynamic",
+);
+globalThis.SokomindHardPruningRules = HARD_PRUNING_RULES;
 
 function pushNeighbors(state, board, reachable = reachablePaths(state, board), options = {}) {
   board.metrics.pushNeighborCalls++;

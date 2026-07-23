@@ -4,6 +4,7 @@ const test = require("node:test");
 const {LEVELS} = require("../docs/levels.js");
 const {
   CERTIFIED_MULTIBOX_CASES,
+  CERTIFIED_STRATEGIC_FAMILIES,
   GENERATED_CASES,
   STRATEGIC_CASES,
   laneWarehouseRows,
@@ -143,4 +144,27 @@ test("larger generated multibox cases are independently certified by exact push 
     const result = exactPushSolve(caseSpec.rows);
     assert.equal(result.solved, true, `${caseSpec.name} exhausted ${result.states} states`);
   }
+});
+
+test("separately seeded strategic families retain reviewed exact expectations", () => {
+  assert.deepEqual(
+    CERTIFIED_STRATEGIC_FAMILIES.map(caseSpec => caseSpec.family).sort(),
+    ["bottleneck", "coupled-room-ordering", "dependency-cycle", "multi-gate",
+      "staging-capacity"],
+  );
+  for (const caseSpec of CERTIFIED_STRATEGIC_FAMILIES) {
+    assert.equal(caseSpec.certification, "independent-exact-push");
+    assert.equal(Object.hasOwn(caseSpec.payload, "seed"), false);
+    const result = exactPushSolve(caseSpec.rows);
+    assert.equal(result.solved, caseSpec.reviewedExpectation.solved, caseSpec.name);
+    assert.equal(result.pushes, caseSpec.reviewedExpectation.pushes, caseSpec.name);
+  }
+  const byFamily = Object.fromEntries(
+    CERTIFIED_STRATEGIC_FAMILIES.map(caseSpec => [caseSpec.family, caseSpec.rows.join("\n")]),
+  );
+  assert.match(byFamily.bottleneck, /OOO OOO/);
+  assert.match(byFamily["staging-capacity"], /OO  OOOO|OOOO  OO/);
+  assert.match(byFamily["coupled-room-ordering"], /[A-F]/);
+  assert.match(byFamily["dependency-cycle"], /O X O X O/);
+  assert.match(byFamily["multi-gate"], /OO O O OOOO|OOOO O O OO/);
 });

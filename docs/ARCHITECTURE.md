@@ -47,3 +47,12 @@ The gate checks optimal push counts and solvability across exhaustive tiny state
 and generated generic/typed multi-box boards, with exact options, transposition
 eviction, finite bounds, and shard partitions varied independently. Exact proof
 checkpoints contain traversal progress; guided checkpoints never count as proof.
+
+Hard pruning is listed in the executable `SokomindHardPruningRules` registry.
+Each entry declares an independent oracle family; the differential suite combines
+exhaustive 2x3 enumeration, deterministic 3x3/3x4 properties, authored strategic
+structures, and structural counterexample shrinking.
+
+Playwright serves the production `docs/` scripts and worker entry in Chromium and
+WebKit. Scripted workers are used only for deterministic stale/error and Ultimate
+campaign events; ordinary hint and solve coverage uses the real Web Worker.

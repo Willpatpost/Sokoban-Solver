@@ -190,6 +190,105 @@ function exhaustiveTinyBoards() {
   return boards;
 }
 
+const INDEPENDENT_ORACLE_FAMILIES = Object.freeze({
+  "push-reachability": "unpruned step-state reverse reachability",
+  "multi-box-local": "unpruned multi-box step-state reachability",
+  "closed-diagonal": "wall-ended diagonal layout enumeration",
+  "interacting-freeze": "unpruned multi-box component reachability",
+  "typed-corridor": "unpruned typed-box step-state reachability",
+  corral: "unpruned robot-region and step-state reachability",
+  "goal-commitment": "unpruned successor reachability from committed goals",
+});
+
+function seededRandom(seed) {
+  let state = seed >>> 0;
+  return () => {
+    state ^= state << 13;
+    state ^= state >>> 17;
+    state ^= state << 5;
+    return (state >>> 0) / 0x100000000;
+  };
+}
+
+function sampledBoards(height, width, seed, count) {
+  const random = seededRandom(seed);
+  const results = [], seen = new Set();
+  for (let attempt = 0; attempt < count * 40 && results.length < count; attempt++) {
+    const floor = [];
+    for (let y = 1; y <= height; y++) {
+      for (let x = 1; x <= width; x++) {
+        if (random() > .18) floor.push([y, x]);
+      }
+    }
+    const boxCount = random() < .72 ? 2 : 1;
+    if (floor.length < boxCount * 2 + 1 || !connectedFloor(floor)) continue;
+    const shuffled = [...floor];
+    for (let index = shuffled.length - 1; index > 0; index--) {
+      const swapIndex = Math.floor(random() * (index + 1));
+      [shuffled[index], shuffled[swapIndex]] = [shuffled[swapIndex], shuffled[index]];
+    }
+    const robot = shuffled[0], boxes = shuffled.slice(1, boxCount + 1);
+    const goals = shuffled.slice(boxCount + 1, boxCount * 2 + 1);
+    const typed = boxCount > 1 && random() < .55;
+    const rows = Array.from({length: height + 2}, () => Array(width + 2).fill("O"));
+    floor.forEach(([y, x]) => { rows[y][x] = " "; });
+    rows[robot[0]][robot[1]] = "R";
+    boxes.forEach(([y, x], index) => { rows[y][x] = typed ? String.fromCharCode(65 + index) : "X"; });
+    goals.forEach(([y, x], index) => { rows[y][x] = typed ? String.fromCharCode(97 + index) : "S"; });
+    const candidate = rows.map(row => row.join(""));
+    const key = candidate.join("\n");
+    if (seen.has(key)) continue;
+    seen.add(key);
+    results.push(candidate);
+  }
+  assert.equal(results.length, count, `could not generate ${height}x${width} sample`);
+  return results;
+}
+
+function shrinkRows(rows, stillFails) {
+  let current = rows.map(row => [...row]);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (let y = 1; y < current.length - 1 && !changed; y++) {
+      for (let x = 1; x < current[y].length - 1; x++) {
+        if (current[y][x] !== " ") continue;
+        const candidate = current.map(row => [...row]);
+        candidate[y][x] = "O";
+        const serialized = candidate.map(row => row.join(""));
+        if (!stillFails(serialized)) continue;
+        current = candidate;
+        changed = true;
+        break;
+      }
+    }
+  }
+  return current.map(row => row.join(""));
+}
+
+function auditSolvableTransitions(rows, worker) {
+  const {board, states, edges, solvable} = enumerateReachable(rows, worker, 80000);
+  let statesChecked = 0, pushesChecked = 0;
+  for (const stateSignature of solvable) {
+    const state = states.get(stateSignature);
+    statesChecked++;
+    const reachable = worker.reachablePaths(state, board);
+    assert.equal(
+      worker.createsSealedCorralDeadlock(state, board, reachable),
+      false,
+      `sealed-corral false positive:\n${rows.join("\n")}`,
+    );
+    const retained = new Set(worker.neighbors(state, board).map(next => next.move));
+    for (const edge of edges.get(stateSignature) || []) {
+      if (!edge.pushed || !solvable.has(edge.signature)) continue;
+      pushesChecked++;
+      assert.ok(retained.has(edge.move),
+        `combined hard prune rejected ${edge.move}:\n${rows.join("\n")}`);
+    }
+  }
+  return {solvable: solvable.size > 0, statesChecked, pushesChecked};
+}
+
 function retainSmallestCounterexample(current, candidate) {
   if (!current) return candidate;
   const rank = value => [
@@ -219,6 +318,51 @@ test("counterexample retention prefers the smallest reproducible board and state
   };
   assert.equal(retainSmallestCounterexample(larger, smaller), smaller);
   assert.equal(retainSmallestCounterexample(smaller, larger), smaller);
+});
+
+test("every production hard-pruning rule declares an independent oracle family", () => {
+  const worker = loadWorker();
+  const rules = worker.SokomindHardPruningRules;
+  assert.ok(Array.isArray(rules));
+  assert.deepEqual(
+    [...rules].map(rule => rule.name).sort(),
+    ["2x2", "closed-diagonal", "freeze", "pattern-database",
+      "proven-commitment", "sealed-corral", "static-dead"].sort(),
+  );
+  for (const rule of rules) {
+    assert.ok(INDEPENDENT_ORACLE_FAMILIES[rule.oracleFamily],
+      `${rule.name} lacks an independent oracle family`);
+  }
+});
+
+test("structural counterexample shrinking removes irrelevant floor", () => {
+  const rows = ["OOOOOOO", "ORX S O", "O     O", "OOOOOOO"];
+  const shrunk = shrinkRows(rows, candidate => candidate[1].includes("RX S"));
+  const before = rows.join("").split(" ").length - 1;
+  const after = shrunk.join("").split(" ").length - 1;
+  assert.ok(after < before);
+  assert.ok(shrunk[1].includes("RX S"));
+});
+
+test("seeded 3x3 and 3x4 properties preserve every solvable push", () => {
+  const worker = loadWorker();
+  const cases = [
+    ...sampledBoards(3, 3, 0x31515, 36),
+    ...sampledBoards(3, 4, 0x31534, 48),
+    ["OOOOOOO", "OR XX O", "O OO  O", "O SS  O", "OOOOOOO"],
+    ["OOOOOOO", "OR AB O", "O OOO O", "O ab  O", "OOOOOOO"],
+    ["OOOOOOOO", "OR X   O", "OOO X OO", "O  SS  O", "OOOOOOOO"],
+  ];
+  let solvableCases = 0, statesChecked = 0, pushesChecked = 0;
+  for (const rows of cases) {
+    const result = auditSolvableTransitions(rows, worker);
+    if (result.solvable) solvableCases++;
+    statesChecked += result.statesChecked;
+    pushesChecked += result.pushesChecked;
+  }
+  assert.ok(solvableCases >= 5, `only ${solvableCases} generated cases were solvable`);
+  assert.ok(statesChecked >= 100);
+  assert.ok(pushesChecked >= 5, `only ${pushesChecked} solvable generated pushes were checked`);
 });
 
 test("generated wall-ended closed diagonals are exhaustively unsolvable", () => {

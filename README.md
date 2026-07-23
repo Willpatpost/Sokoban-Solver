@@ -28,9 +28,13 @@ node --test docs/pruning-differential.test.js bench/evaluator.test.js bench/gene
 node bench/verify-solution.js huge docs/optimalForHuge.txt
 node bench/benchmark.js --suite smoke
 node bench/benchmark.js --suite validation
+npm ci
+npx playwright install chromium webkit
+npm run test:browser
 ```
 
 On Windows, use `py -m unittest discover -v` if `python` is not on PATH.
+The Playwright suite serves `docs/` itself and exercises Chromium and WebKit.
 
 The canonical level catalog and cross-runtime parsing/rule cases live in
 `shared/sokomind-conformance.json`. Python loads its built-in levels from this

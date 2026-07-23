@@ -81,6 +81,7 @@ function startBidirectionalSolver(purpose) {
   const planner = new Worker(SOLVER_WORKER_URL);
   workers.push(planner);
   planner.onmessage = ({data}) => {
+    if (!workers.includes(planner)) return;
     if (data.type !== "done") return;
     planner.terminate();
     workers = workers.filter(worker => worker !== planner);
@@ -92,6 +93,7 @@ function startBidirectionalSolver(purpose) {
     runBidirectionalSolver(purpose, data.analysis);
   };
   planner.onerror = () => {
+    if (!workers.includes(planner)) return;
     planner.terminate(); workers = workers.filter(worker => worker !== planner);
     setControlsBusy(false); setStatus("Puzzle analysis worker failed.");
     appendSearchLog("error", "Puzzle analysis worker failed");
@@ -1033,6 +1035,7 @@ function runBidirectionalSolver(purpose, analysis) {
       workerRecords.set(worker, records);
     }
     worker.onmessage = ({data}) => {
+      if (!workers.includes(worker)) return;
       workerLastMessage.set(worker, performance.now());
       if (data.type === "records") {
         inspectRecords(data.records, worker);
@@ -1342,7 +1345,10 @@ function runBidirectionalSolver(purpose, analysis) {
         continuePortfolio();
       }
     };
-    worker.onerror = error => abandonWorker("worker-error", error);
+    worker.onerror = error => {
+      if (!workers.includes(worker)) return;
+      abandonWorker("worker-error", error);
+    };
     const planState = plan.state || serializeState(state);
     worker.postMessage({
       ...plan,
@@ -1397,6 +1403,7 @@ function startSolver(purpose) {
       width: plan.beamWidth,
     });
     worker.onmessage = ({data}) => {
+      if (!workers.includes(worker)) return;
       if (settled) return;
       if (firstMessageMs === null) firstMessageMs = performance.now() - launchedAt;
       if (data.type === "progress") {
@@ -1515,6 +1522,7 @@ function startSolver(purpose) {
       launchNext();
     };
     worker.onerror = () => {
+      if (!workers.includes(worker)) return;
       if (settled) return;
       const failedAt = performance.now(), terminateStarted = performance.now();
       worker.terminate();

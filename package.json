@@ -1,0 +1,9 @@
+{
+  "scripts": {
+    "test:browser": "playwright test",
+    "test:browser:chromium": "playwright test --project=chromium"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.61.1"
+  }
+}
