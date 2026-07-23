@@ -134,6 +134,14 @@ const DIFFERENTIAL_BOARDS = [
     "O R S  O",
     "OOOOOOOO",
   ],
+  [
+    "OOOOOOOOO",
+    "O       O",
+    "OR A BbaO",
+    "O       O",
+    "O       O",
+    "OOOOOOOOO",
+  ],
 ];
 
 function connectedFloor(cells) {
@@ -239,6 +247,39 @@ test("generated wall-ended closed diagonals are exhaustively unsolvable", () => 
   assert.equal(checked, 2);
 });
 
+test("typed corridor-order pattern is exhaustively dead while a bypass remains solvable", () => {
+  const trappedRows = ["OOOOOOOOO", "OR A BbaO", "OOOOOOOOO"];
+  const trapped = enumerateReachable(trappedRows);
+  const trappedState = stateFromRows(trappedRows);
+  assert.equal(trapped.solvable.size, 0);
+  assert.equal(
+    trapped.worker.createsPatternDatabaseDeadlock(
+      trappedState.boxes, trapped.board, [1, 5],
+    ),
+    true,
+  );
+  assert.equal(
+    trapped.worker.createsFrozenComponentDeadlock(
+      trappedState.boxes, trapped.board, [1, 5],
+    ),
+    false,
+  );
+
+  const bypassRows = [
+    "OOOOOOOOO", "O       O", "OR A BbaO", "O       O", "O       O",
+    "OOOOOOOOO",
+  ];
+  const bypass = enumerateReachable(bypassRows);
+  const bypassState = stateFromRows(bypassRows);
+  assert.ok(bypass.solvable.size > 0);
+  assert.equal(
+    bypass.worker.createsPatternDatabaseDeadlock(
+      bypassState.boxes, bypass.board, [2, 5], 256,
+    ),
+    false,
+  );
+});
+
 test("hard pruning never rejects an exhaustively proven solvable small state", () => {
   let checkedStates = 0, checkedPushes = 0, solvableTinyLayouts = 0;
   let smallestCounterexample = null;
@@ -303,6 +344,9 @@ test("hard pruning never rejects an exhaustively proven solvable small state", (
         }
         if (worker.createsClosedDiagonalDeadlock(edge.state.boxes, board, [y, x])) {
           record("closed-diagonal", state, edge);
+        }
+        if (worker.createsPatternDatabaseDeadlock(edge.state.boxes, board, [y, x])) {
+          record("pattern-database", state, edge);
         }
         if (worker.createsDynamicDeadlock(edge.state.boxes, board, [y, x])) {
           record("dynamic", state, edge);

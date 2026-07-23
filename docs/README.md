@@ -136,6 +136,11 @@ and marks high-traffic packing cells. Hard pruning includes static and player-si
 dead squares, label-aware Hall deadlocks, 2x2 blocks, conservative wall-ended
 closed diagonals, frozen box groups, and sealed corrals. Globally forced pushes in
 straight tunnels are collapsed into macros.
+Small non-branching typed-box neighborhoods additionally use a cached relaxed
+pattern search. The robot may stand on every legal support square and boxes may
+escape through the pattern boundary, so only a pattern unsalvageable under those
+more generous rules is rejected. Static windows are compiled once per center;
+cutoffs and larger or branching neighborhoods retain the state.
 Heuristic room ordering affects priority only; it never rejects a state.
 Boxes occupying the exterior approach to an unresolved one-entrance room add
 congestion pressure, encouraging the solver to clear staging gates before packing.

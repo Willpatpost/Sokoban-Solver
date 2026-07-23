@@ -1,8 +1,8 @@
 Sokomind improvements and implementation status
 ===============================================
 
-Status reviewed against the repository after Improvement Sprint 4: exact
-incremental Hungarian repair and external solver-proposal review.
+Status reviewed against the repository after Improvement Sprint 5: bounded
+relaxed local deadlock pattern tables for typed corridor conflicts.
 
 Standing maintenance rules
 --------------------------
@@ -298,6 +298,34 @@ PARTIALLY DELIVERED
     - Extend recursive freeze detection beyond the current conservative local
       component rule, promoting new cases only after differential validation.
 
+19. Add small deadlock pattern databases and use exhaustive local enumeration to
+    recognize additional unsalvageable box patterns safely.
+    Delivered so far:
+    - The browser solver performs a cached relaxed local push search around the
+      moved box for small non-branching neighborhoods with two to five boxes and
+      at least two distinct labels.
+    - The abstraction grants an omnipresent robot and lets boxes escape through
+      any real floor boundary. A hard rejection therefore requires exhaustion
+      even under rules more permissive than the real puzzle.
+    - Static 9x9 windows are compiled once by center and limited to 24 floor cells;
+      each dynamic pattern proof is limited to 64 states. Cutoffs retain the move.
+    - A novel typed corridor-order conflict is detected where individual static
+      distances remain finite and the 2x2/freeze rules do not fire. Independent
+      unpruned enumeration proves it unsolvable, while a larger bypass form is
+      exhaustively solvable and retained.
+    - Build 2026-07-22.16 exposes pattern calls, cache hits, explored states, and
+      prune counts. The known Huge replay remains valid after static-window caching
+      removed the initial prototype's runtime regression.
+    Remaining:
+    - Generate broader wall-pattern families and transformed typed cases rather
+      than relying on one authored corridor-order seed.
+    - Port the proven pattern subset to Python after its browser bounds and
+      generated validation families stabilize.
+    - Add generic-box patterns that improve on existing 2x2/freeze rules without
+      making open warehouse searches pay the local-enumeration cost.
+    - Consider offline canonical pattern generation and symmetry reduction for
+      larger tables after deterministic performance gates exist.
+
 32. Complete project and release hygiene.
     Delivered so far:
     - Added concise architecture documentation defining the general-purpose search
@@ -312,7 +340,7 @@ PARTIALLY DELIVERED
     Delivered so far:
     - The homepage now displays a compact solver-build badge populated directly
       from the same SOLVER_BUILD constant used to version the worker URL and
-      search-log events. Build 2026-07-22.15 is visible without opening developer
+      search-log events. Build 2026-07-22.16 is visible without opening developer
       tools, making a stale cached application immediately recognizable.
     - A policy test requires the badge, binding, and app.js cache-busting query to
       agree with the loaded solver build.
@@ -346,9 +374,6 @@ PARTIALLY DELIVERED
 
 YET TO BE IMPLEMENTED AS BACKLOG CAPABILITIES
 ----------------------------------------------
-
-19. Add small deadlock pattern databases and use exhaustive local enumeration to
-    recognize additional unsalvageable box patterns safely.
 
 20. Build pattern databases for the lower chamber and other small, strategically
     important rooms. Use exact local costs or dependency-aware conflict bounds to

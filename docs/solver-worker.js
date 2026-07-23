@@ -93,6 +93,7 @@ function exactPushKey(state, board = null) {
 }
 const HEURISTIC_MEMO_LIMIT = 20000;
 const DEADLOCK_MEMO_LIMIT = 10000;
+const PATTERN_DEADLOCK_MEMO_LIMIT = 10000;
 const COMMITMENT_MEMO_LIMIT = 10000;
 const SUPPORT_DEPENDENCY_MEMO_LIMIT = 10000;
 const LOCAL_ROOM_MEMO_LIMIT = 5000;
@@ -196,6 +197,10 @@ function createPerformanceMetrics() {
     pushesRetained: 0,
     staticDeadPrunes: 0,
     dynamicDeadPrunes: 0,
+    patternDeadlockCalls: 0,
+    patternDeadlockCacheHits: 0,
+    patternDeadlockStates: 0,
+    patternDeadlockPrunes: 0,
   };
   samplePerformanceMemory(metrics);
   return metrics;
@@ -490,6 +495,8 @@ function hydratePreparedBoard(data, seed, metrics) {
     assignmentParentMemo: new WeakMap(),
     playerPushDistances: new Map(),
     deadlockMemo: new Map(),
+    patternDeadlockMemo: new Map(),
+    patternWindowMemo: new Map(),
     commitmentMemo: new Map(),
     stateCommitmentMemo: new Map(),
     commitmentPushDistances: new Map(),
@@ -581,6 +588,8 @@ function parse(data) {
     topology, heuristicMemo: new Map(), assignmentMemo: new WeakMap(),
     assignmentParentMemo: new WeakMap(), playerPushDistances: new Map(),
     deadlockMemo: new Map(), commitmentMemo: new Map(), stateCommitmentMemo: new Map(),
+    patternDeadlockMemo: new Map(),
+    patternWindowMemo: new Map(),
     commitmentPushDistances: new Map(),
     supportDependencyMemo: new Map(),
     localRoomMemo: new Map(),
@@ -1619,12 +1628,85 @@ function createsClosedDiagonalDeadlock(boxes, board, movedBox) {
   return false;
 }
 
+function createsPatternDatabaseDeadlock(boxes, board, movedBox, maxStates = 64) {
+  const metrics = board.metrics;
+  metrics.patternDeadlockCalls++;
+  const [centerY, centerX] = movedBox;
+  const inside = position => {
+    const [y, x] = position.split(",").map(Number);
+    return Math.abs(y - centerY) <= 4 && Math.abs(x - centerX) <= 4;
+  };
+  const windowKey = `${centerY},${centerX}`;
+  let window = board.patternWindowMemo.get(windowKey);
+  if (!window) {
+    const floor = new Set([...board.floor].filter(inside));
+    const eligible = floor.size <= 24 &&
+      ![...floor].some(position => floorNeighbors(position, board.floor).length > 2);
+    window = {floor, eligible};
+    board.patternWindowMemo.set(windowKey, window);
+  }
+  if (!window.eligible) return false;
+  const localFloor = window.floor;
+  const localBoxes = boxes
+    .map(([y, x, label]) => [pkey(y, x), label])
+    .filter(([position]) => localFloor.has(position));
+  if (localBoxes.length < 2 || localBoxes.length > 5) return false;
+  if (new Set(localBoxes.map(([, label]) => label)).size < 2) return false;
+  const localSignature = localBoxes
+    .map(([position, label]) => `${position},${label}`).sort().join(";");
+  const cacheKey = `${centerY},${centerX}|${localSignature}`;
+  if (board.patternDeadlockMemo.has(cacheKey)) {
+    metrics.patternDeadlockCacheHits++;
+    return board.patternDeadlockMemo.get(cacheKey);
+  }
+
+  const signature = local => local
+    .map(([position, label]) => `${position},${label}`).sort().join(";");
+  const queue = [localBoxes], seen = new Set([signature(localBoxes)]);
+  let head = 0, salvaged = false;
+  for (; head < queue.length && seen.size <= maxStates; head++) {
+    const current = queue[head];
+    if (current.every(([position, label]) => board.goals.get(position) === label)) {
+      salvaged = true;
+      break;
+    }
+    const occupied = new Set(current.map(([position]) => position));
+    current.forEach(([position, label], boxIndex) => {
+      const [y, x] = position.split(",").map(Number);
+      for (const [dy, dx] of Object.values(DIRS)) {
+        const support = pkey(y - dy, x - dx);
+        const destination = pkey(y + dy, x + dx);
+        if (!board.floor.has(support) || occupied.has(support) ||
+            !board.floor.has(destination) || occupied.has(destination)) continue;
+        const next = inside(destination)
+          ? current.map((box, index) => index === boxIndex ? [destination, label] : box)
+          : current.filter((_, index) => index !== boxIndex);
+        const nextSignature = signature(next);
+        if (seen.has(nextSignature)) continue;
+        seen.add(nextSignature);
+        queue.push(next);
+      }
+    });
+  }
+  metrics.patternDeadlockStates += Math.min(head, queue.length);
+  const cutoff = !salvaged && head < queue.length;
+  const deadlocked = !salvaged && !cutoff;
+  if (deadlocked) metrics.patternDeadlockPrunes++;
+  return memoizeBounded(
+    board.patternDeadlockMemo,
+    cacheKey,
+    deadlocked,
+    PATTERN_DEADLOCK_MEMO_LIMIT,
+  );
+}
+
 function createsDynamicDeadlock(boxes, board, movedBox) {
   const signature = `${boxSignature(boxes, board)}|${movedBox.join(",")}`;
   if (board.deadlockMemo.has(signature)) return board.deadlockMemo.get(signature);
   const deadlocked = creates2x2Deadlock(boxes, board, movedBox) ||
     createsClosedDiagonalDeadlock(boxes, board, movedBox) ||
-    createsFrozenComponentDeadlock(boxes, board, movedBox);
+    createsFrozenComponentDeadlock(boxes, board, movedBox) ||
+    createsPatternDatabaseDeadlock(boxes, board, movedBox);
   return memoizeBounded(board.deadlockMemo, signature, deadlocked, DEADLOCK_MEMO_LIMIT);
 }
 function neighbors(state, board, pruneDeadlocks = true) {

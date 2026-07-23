@@ -122,6 +122,34 @@ test("closed diagonals require wall ends, multiple boxes, and no goal escape", (
   assert.equal(worker.createsClosedDiagonalDeadlock(boxes, escaped, [2, 2]), false);
 });
 
+test("local pattern tables detect typed corridor order conflicts but preserve bypasses", () => {
+  const worker = loadWorker();
+  const trapped = stateFromRows([
+    "OOOOOOOOO", "OR A BbaO", "OOOOOOOOO",
+  ]);
+  const trappedBoard = worker.parse(trapped);
+  const trappedBoxes = trapped.boxes.map(([position, label]) => [
+    ...position.split(",").map(Number), label,
+  ]);
+  assert.equal(worker.creates2x2Deadlock(trappedBoxes, trappedBoard, [1, 5]), false);
+  assert.equal(worker.createsFrozenComponentDeadlock(trappedBoxes, trappedBoard, [1, 5]), false);
+  assert.equal(worker.createsPatternDatabaseDeadlock(
+    trappedBoxes, trappedBoard, [1, 5],
+  ), true);
+
+  const bypass = stateFromRows([
+    "OOOOOOOOO", "O       O", "OR A BbaO", "O       O", "O       O",
+    "OOOOOOOOO",
+  ]);
+  const bypassBoard = worker.parse(bypass);
+  const bypassBoxes = bypass.boxes.map(([position, label]) => [
+    ...position.split(",").map(Number), label,
+  ]);
+  assert.equal(worker.createsPatternDatabaseDeadlock(
+    bypassBoxes, bypassBoard, [2, 5], 256,
+  ), false);
+});
+
 test("bidirectional sides emit compatible compact records", () => {
   const rows = ["OOOOO", "O R O", "O A O", "O a O", "OOOOO"];
   const state = stateFromRows(rows);
