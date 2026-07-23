@@ -32,6 +32,13 @@ route and must remain correct when it is absent.
   cross-runtime rule fixture.
 - `bench/` runs isolated, replay-validated search and solution checks.
 
+Ultimate's first discovery lane is a structural plan-macro beam. It derives global
+box assignments, typed doorway exports and imports, staging capacity, crossing
+conflicts, packing dependencies, and access that unsolved goals still require.
+Bounded single-box macros pursue those objectives while preserving separate
+heuristic and structural elites. These constraints guide an incomplete discovery
+lane; they do not prune the complete exact fallback.
+
 Browser files remain classic scripts so the dependency-free GitHub Pages build and
 Web Workers need no bundler. The HTML load order supplies pure modules and policies
 before the director and UI. Worker imports load the engine before search algorithms.

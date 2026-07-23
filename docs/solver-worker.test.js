@@ -1337,6 +1337,48 @@ test("typed doorway flow tracks label direction, lane geometry, and staging capa
   assert.equal(board.metrics.doorwayFlowCacheHits, 1);
 });
 
+test("global goal access preserves packing lanes outside articulation rooms", () => {
+  const worker = loadWorker();
+  const parsed = stateFromRows([
+    "OOOOOOO",
+    "OaSS  O",
+    "O     O",
+    "O AXXRO",
+    "OOOOOOO",
+  ]);
+  const board = worker.parse(parsed);
+  const partlyBlocked = {
+    robot: parsed.robot,
+    boxes: [[3, 2, "A"], [2, 1, "X"], [3, 4, "X"]],
+  };
+  const analysis = worker.goalAccessAnalysis(partlyBlocked.boxes, board);
+  const target = analysis.goals.find(goal => goal.goal === "1,1");
+  assert.equal(board.topology.rooms.length, 0);
+  assert.equal(target.lanes.length, 2);
+  assert.equal(target.openLanes, 1);
+  assert.ok(analysis.packingRisk.get("1,2") > 0);
+  assert.ok(!analysis.safeGoals.has("1,2"));
+  assert.ok(worker.goalAccessDelta(analysis, partlyBlocked, {
+    pushedFrom: "3,4",
+    pushedTo: "1,2",
+  }, board) > 0);
+  assert.ok(worker.goalAccessDelta(analysis, partlyBlocked, {
+    pushedFrom: "2,1",
+    pushedTo: "2,2",
+  }, board) < 0);
+  const blocked = worker.goalAccessAnalysis(
+    [[3, 2, "A"], [2, 1, "X"], [1, 2, "X"]],
+    board,
+  );
+  assert.equal(blocked.blockedGoals.length, 1);
+  assert.equal(blocked.blockedGoals[0].goal, "1,1");
+  const relevance = worker.relevanceOrderingScore(partlyBlocked, board, {
+    pushedFrom: "3,4",
+    pushedTo: "1,2",
+  }, {goalAccess: analysis});
+  assert.ok(relevance.signals.goalAccess > 0);
+});
+
 test("doorway schedules order particular boxes across shared multi-room corridors", () => {
   const worker = loadWorker();
   const parsed = stateFromRows([
@@ -1360,6 +1402,77 @@ test("doorway schedules order particular boxes across shared multi-room corridor
   }));
   assert.ok(analysis.waves[0].every(task => task.direction === "export"));
   assert.ok(analysis.waves[1].every(task => task.direction === "import"));
+});
+
+test("doorway flow uses global assignments when same-label room inventory must exchange", () => {
+  const worker = loadWorker();
+  for (const rows of [HUGE_ROWS, mirrorRows(HUGE_ROWS)]) {
+    const parsed = stateFromRows(rows);
+    const board = worker.parse(parsed);
+    const boxes = parsed.boxes.map(([position, label]) => [
+      ...position.split(",").map(Number), label,
+    ]);
+    const flow = worker.typedDoorwayFlow(boxes, board).rooms[0];
+    assert.equal(flow.exportTotal, 6);
+    assert.equal(flow.importTotal, 4);
+    assert.equal(flow.crossingTasks.filter(task => task.direction === "export").length, 6);
+    assert.equal(flow.crossingTasks.filter(task => task.direction === "import").length, 4);
+    assert.ok(flow.crossingTasks.every(task => task.target));
+
+    const plan = worker.assignmentDoorwayPlan(boxes, board);
+    const initialSchedule = worker.doorwayScheduleState(boxes, board, plan.tasks);
+    assert.equal(initialSchedule.pendingExports, 6);
+    assert.equal(initialSchedule.remainingImports, 4);
+    assert.ok(initialSchedule.crossingDistance > 0);
+
+    const exports = plan.tasks.filter(task => task.direction === "export");
+    const imports = plan.tasks.filter(task => task.direction === "import");
+    const conflicted = boxes.map(box => [...box]);
+    conflicted[exports[0].boxIndex] = [9, 7, conflicted[exports[0].boxIndex][2]];
+    conflicted[exports[1].boxIndex] = [10, 7, conflicted[exports[1].boxIndex][2]];
+    assert.ok(worker.doorwayScheduleState(
+      conflicted, board, plan.tasks,
+    ).crossingConflicts > 0);
+
+    const tooEarly = boxes.map(box => [...box]);
+    tooEarly[imports[0].boxIndex] = [11, 7, tooEarly[imports[0].boxIndex][2]];
+    assert.equal(worker.doorwayScheduleState(
+      tooEarly, board, plan.tasks,
+    ).prematureImports, 1);
+
+    const balanced = tooEarly.map(box => [...box]);
+    [[9, 3], [9, 4], [9, 5]].forEach(([y, x], index) => {
+      const boxIndex = exports[index].boxIndex;
+      balanced[boxIndex] = [y, x, balanced[boxIndex][2]];
+    });
+    assert.equal(worker.doorwayScheduleState(
+      balanced, board, plan.tasks,
+    ).prematureImports, 0);
+
+    if (rows === HUGE_ROWS) {
+      const stranded = boxes.map(box => [...box]);
+      const aExport = exports.find(task => task.label === "A");
+      const otherExports = exports.filter(task => task !== aExport);
+      [[9, 10], [9, 4], [9, 3], [9, 5], [9, 9]]
+        .forEach(([y, x], index) => {
+          const boxIndex = otherExports[index].boxIndex;
+          stranded[boxIndex] = [y, x, stranded[boxIndex][2]];
+        });
+      const dImport = imports.find(task => task.label === "D");
+      const xImport = imports.find(task => task.label === "X");
+      stranded[dImport.boxIndex] = [13, 11, "D"];
+      stranded[xImport.boxIndex] = [13, 12, "X"];
+      assert.equal(worker.doorwayScheduleState(
+        stranded, board, plan.tasks,
+      ).strandedExports, 1);
+
+      const wrongPackingOrder = stranded.map(box => [...box]);
+      wrongPackingOrder[xImport.boxIndex] = [...boxes[xImport.boxIndex]];
+      assert.ok(worker.doorwayScheduleState(
+        wrongPackingOrder, board, plan.tasks,
+      ).packingOrderViolations > 0);
+    }
+  }
 });
 
 test("puzzle analysis builds a board-derived worker plan", () => {
@@ -1486,6 +1599,29 @@ test("push beam returns a replayable solution", () => {
     state: stateFromRows(["OOOOO", "O R O", "O A O", "O a O", "OOOOO"]),
   });
   assert.deepEqual(Array.from(result.path), ["Down"]);
+});
+
+test("plan macro beam solves by chaining bounded single-box objectives", () => {
+  const worker = loadWorker();
+  const result = worker.search({
+    algorithm: "plan-macro-beam",
+    state: stateFromRows([
+      "OOOOOOOO",
+      "O R    O",
+      "O XX   O",
+      "O   SS O",
+      "OOOOOOOO",
+    ]),
+    maxVisited: 1000,
+    planBeamWidth: 40,
+    maxPlanSegments: 40,
+  });
+  assert.equal(result.status, "solved");
+  assert.ok(result.path.length > 0);
+  assert.ok(result.visited < 1000);
+  assert.equal(result.strategy, "Plan Macro Beam");
+  assert.equal(result.performance.supportDependencyCalls, 0);
+  assert.equal(result.performance.commitmentCalls, 0);
 });
 
 test("bounded beams return replayable checkpoints for worker handoff", () => {

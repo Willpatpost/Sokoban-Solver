@@ -652,8 +652,21 @@ through setup moves without making exact search incomplete.
    - Those two workers accumulated 73.1/71.6 and 66.4/67.6 seconds in support
      dependency/commitment analysis, yet both reported zero strategic-ordering
      evaluations or changes. Attribute expensive signals to their actual beam
-     scoring, proof, or ordering consumer, then gate each consumer by measured
-     useful progress rather than treating aggregate profile time as sufficient.
+      scoring, proof, or ordering consumer, then gate each consumer by measured
+      useful progress rather than treating aggregate profile time as sufficient.
+   Follow-up evidence from the 2026-07-23.31 thirty-minute Huge run:
+   - All three anytime guided lanes still reported zero useful strategic-ordering
+     samples. Guided 1 and 2 examined only 14,254 and 13,241 states in roughly
+     22 minutes while accumulating 361/337 seconds of heuristic work, 96/89
+     seconds of support analysis, and 42/47 seconds of commitment analysis.
+     Their lower h values were bought with projected costs of 244 and 256, not a
+     solution or a stronger bound. A zero-useful window must disable the costly
+     consumer or retire the lane; telemetry alone is not a productivity gate.
+   - Guided 3 reproduced the prior plateau: h moved only from 138 to 137 and
+     projected cost worsened from 208 to 210 over 34,100 states, while heuristic,
+     support, and commitment work consumed about 238, 74, and 77 seconds.
+     Identical structural/checkpoint progress must be the retirement key even
+     when raw states continue to increase.
 
 Sprint completion gate:
 All four items are Done; ordering is assignment-aware, measurable, and complete,
@@ -673,10 +686,21 @@ Once dependencies and relevance are explicit, safely remove equivalent work and
 preserve strategically different work.
 
 22. Introduce true feature-space search queues.
-    Current status: Partial.
+    Current status: Strong browser foundation in build 2026-07-23.32.
     Existing foundation:
     - Bounded browser beams reserve joint feature cells for room, gate, evacuation,
       commitment, doorway, dependency, local guidance, and mobility diversity.
+    - The structural plan-macro beam retains separate heuristic and structural
+      elites while pursuing board-derived assignments, doorway export/import
+      waves, blocker clearing, staging restoration, and packing dependencies.
+    - Its global access guard rejects discovery branches that newly strand an
+      exporter, violate packing order, immobilize an assigned box away from its
+      goal, or block access needed by an unsolved goal. These are bounded
+      discovery-lane decisions, not hard pruning in the complete exact kernel.
+    - With the shipped Ultimate limits, a clean Huge run solved and replay
+      validated in 138.2 seconds after 3,752 structural states and 19,689
+      generated candidates (1,306 player moves). No saved route, level name, or
+      board coordinate was available to the search.
    Finish gate:
    - Preserve productive elites across depths/restarts, adapt cell boundaries and
      quotas from measured yield, and track individual strategic identities.
@@ -780,6 +804,18 @@ Sprint 16 supplies deterministic resource gates.
      zero evictions under the 320,000-entry allocation. Treat cumulative retained
      states and live transposition occupancy as separate resource signals when
      deciding whether another exact shard is affordable.
+   Follow-up evidence from the 2026-07-23.31 thirty-minute Huge run:
+   - Persistent exact search reached 2,175,135 states and 5,083,228 generated
+     successors but remained at h=159, g=49, threshold 208, and next threshold
+     210. The known replay's lower bound rises from f=208 to f=250, so completing
+     successive blind contours is not a feasible first-solution strategy.
+     Reserve exact contours for proof/bound work and use structural milestones to
+     obtain an incumbent; do not present uninterrupted state growth as solution
+     progress.
+   - Twenty-one continuation launches remained on round 1. Add contour-completion
+     and threshold-advance rate to the director, and treat a checkpoint slice as
+     resumable progress only when its frontier/transposition state demonstrably
+     avoids re-expanding prior contour work.
 
 43. Keep available Ultimate worker capacity productively occupied.
     Current status: Strong, bounded in build 2026-07-22.21.
@@ -825,6 +861,32 @@ Sprint 16 supplies deterministic resource gates.
      queued work drained to 21 incompatible launches. It successfully bounded the
      campaign, yet cheap compatibility preflight and cancellation of queued
      members should happen before more worker slots are consumed.
+   Follow-up evidence from the 2026-07-23.31 thirty-minute Huge run:
+   - Landmark Bridges 4-7 all started from checkpoint 0011dc3e. Each consumed
+     60,000 states and generated about 1.35-1.42 million successors, reported
+     deceptively low h=29-32/projected=117-133, and produced no connection or
+     incumbent. Compatible is not equivalent to promising: deduplicate campaigns
+     by source, target region, and failed connection boundary, and require
+     measured bridge-distance reduction before scheduling another sibling.
+   - The first macro lane took 214 seconds for only 4,000 retained expansions. Its
+     low-h checkpoint was g=305, h=33, f=338, while the useful bound checkpoint
+     remained g=53, h=157, f=210. The subsequent packing handoff spent another
+     212 seconds and returned only f=272-286 checkpoints. Reject a handoff that
+     worsens both the source bound and structural milestone state; low h alone
+     must not supersede the source or reserve solution-discovery capacity.
+   - At user stop, three guided lanes occupied three of four slots despite all
+     reporting zero useful strategic samples. Worker replacement must use
+     marginal solution evidence, not the fact that a profile continues emitting
+     progress events.
+   Resolution in build 2026-07-23.32:
+   - Ultimate now schedules one structural plan lane before the redundant guided
+     opening work. The released limits solved Huge in 138.2 seconds with 3,752
+     visited structural states, versus the .31 run's unsolved 30-minute campaign
+     and 2,175,135-state exact contour.
+   - The result confirms that projected cost and raw throughput were the wrong
+     first-solution signals for this board. Doorway phase completion, packing
+     feasibility, and continued goal access now provide the decisive discovery
+     evidence; exact contours remain the proof fallback.
 
 44. Prevent superseded opening work from delaying handoffs and exact search.
     Current status: Strong, bounded in build 2026-07-22.23.
@@ -842,6 +904,13 @@ Sprint 16 supplies deterministic resource gates.
      had produced no incumbent. Measure time-to-first-exact-progress as a campaign
      outcome and reserve earlier proof capacity when opening work's marginal yield
      falls below the exact lane.
+   Follow-up evidence from the 2026-07-23.31 thirty-minute Huge run:
+   - Persistent exact search did not start until 455 seconds. Before that point,
+     the director spent two 212-214 second macro/packing searches, four completed
+     60,000-state bridge searches, two 100,000-state exact handoffs, and several
+     reverse/opening campaigns without producing an incumbent. Enforce a wall-time
+     deadline for the opening-to-proof transition and allow structurally stronger
+     work to replace a scheduled phase instead of completing the fixed ceremony.
 
 Sprint completion gate:
 All four items are Done, browser campaigns prove checkpoint-to-exact progress, and
@@ -905,6 +974,10 @@ capabilities and interfaces stabilize, avoiding repeated parity and UI rewrites.
      Build .29 repeated this after 1,264,357 ms: the final event only reported
      `activeWorkers: 4`, `status: cancelled`, and `reason: user-stop`, despite a
      1.8 MB log whose useful final state again had to be reconstructed manually.
+     Build .31 repeated it after 1,801,281 ms and 1,947 records: the terminal
+     event again contained only the user-stop status/reason. It omitted the
+     2,175,135-state exact contour, the three stagnant guided lanes, the best
+     replayable checkpoint, and the failed bridge/handoff totals.
 
 48. Consolidate public search modes and remove redundant compatibility bloat.
     Current status: Backlog.

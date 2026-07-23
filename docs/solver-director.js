@@ -137,6 +137,8 @@ function runBidirectionalSolver(purpose, analysis) {
     gates: analysis.articulations,
     tunnels: analysis.tunnelCells,
     surplus: analysis.surplusBoxes,
+    goalAccessClauses: analysis.goalAccessClauses,
+    blockedGoalAccess: analysis.blockedGoalAccess,
     pressure: analysis.pressure,
     reverseRegions: analysis.reverseStartRegions,
     productiveReverseRegions: analysis.productiveReverseStartRegions,
@@ -192,18 +194,7 @@ function runBidirectionalSolver(purpose, analysis) {
     : {beamProfile: "milestone", weight: 2.4, topologyWeight: 1.6,
       goalPackingWeight: 1.3, diversity: 2, seed: 29, beamWidth: 50,
       sequenceMacroResults: 8, handoffStage: "packing"};
-  const macroProfiles = [
-    primaryMacroProfile,
-    {beamProfile: "detour", weight: 3.2, topologyWeight: 0.7,
-      goalPackingWeight: 1.5, diversity: 1.2, seed: 104800, beamWidth: 50,
-      sequenceMacroResults: 6},
-    {beamProfile: "detour", weight: 3, topologyWeight: 0.9,
-      goalPackingWeight: 1.7, diversity: 1.8, seed: 314258, beamWidth: 50,
-      sequenceMacroResults: 8},
-    {beamProfile: "milestone", weight: 2.5, topologyWeight: 1.1,
-      goalPackingWeight: 1.4, diversity: 2.2, seed: 418987, beamWidth: 50,
-      sequenceMacroResults: 8},
-  ];
+  const macroProfiles = [primaryMacroProfile];
   const macroPlans = advancedPortfolio && recommendations.useSequenceMacros ? macroProfiles.map((settings, index) => ({
     algorithm: "push-beam",
     side: "direct",
@@ -252,10 +243,34 @@ function runBidirectionalSolver(purpose, analysis) {
     ...settings,
   })) : [];
   macroPlans.forEach(plan => { plan.checkpointLimit = recommendations.checkpointLimit; });
+  const structuralPlans = advancedPortfolio && recommendations.useSequenceMacros ? [{
+    algorithm: "plan-macro-beam",
+    side: "direct",
+    label: "Structural Plan Macro",
+    maxDepth: 460,
+    maxVisited: 6000,
+    transpositionLimit: 60000,
+    planBeamWidth: 40,
+    planBoxBranches: 6,
+    maxPlanSegments: 160,
+    planSlack: 240,
+    sequenceMacroLimit: 24,
+    sequenceMacroExplored: 48,
+    sequenceMacroResults: 4,
+    progressIntervalMs: 5000,
+    phaseScope: recommendations.useEvacuation ? "evacuation" : "opening",
+    handoffStage: "structural",
+  }] : [];
   const evacuationPlans = macroPlans.filter(plan => plan.phaseScope === "evacuation");
   const remainingMacroPlans = macroPlans.filter(plan => plan.phaseScope !== "evacuation");
   let directOrder = 0;
-  const directQueue = [...evacuationPlans, ...beamPlans, ...remainingMacroPlans, ...dfsPlans]
+  const directQueue = [
+    ...structuralPlans,
+    ...evacuationPlans,
+    ...beamPlans,
+    ...remainingMacroPlans,
+    ...dfsPlans,
+  ]
     .map(plan => ({...plan, queuePriority: plan.phaseScope === "evacuation" ? 0 : 50,
       queueOrder: directOrder++}));
   const maxWorkerConcurrency = Math.max(2, Math.min(4, hardware));
@@ -1182,6 +1197,11 @@ function runBidirectionalSolver(purpose, analysis) {
           relevanceRecentUses: data.performance?.relevanceRecentUses,
           relevanceDoorwayUses: data.performance?.relevanceDoorwayUses,
           relevanceRestorationUses: data.performance?.relevanceRestorationUses,
+          relevanceGoalAccessUses: data.performance?.relevanceGoalAccessUses,
+          goalAccessCalls: data.performance?.goalAccessCalls,
+          goalAccessCacheHits: data.performance?.goalAccessCacheHits,
+          goalAccessBlockedGoals: data.performance?.goalAccessBlockedGoals,
+          goalAccessMs: data.performance?.goalAccessMs,
           supportDependencyCacheHits: data.performance?.supportDependencyCacheHits,
           localRoomCacheHits: data.performance?.localRoomCacheHits,
           localCorralCacheHits: data.performance?.localCorralCacheHits,
@@ -1294,6 +1314,11 @@ function runBidirectionalSolver(purpose, analysis) {
           relevanceRecentUses: data.performance?.relevanceRecentUses,
           relevanceDoorwayUses: data.performance?.relevanceDoorwayUses,
           relevanceRestorationUses: data.performance?.relevanceRestorationUses,
+          relevanceGoalAccessUses: data.performance?.relevanceGoalAccessUses,
+          goalAccessCalls: data.performance?.goalAccessCalls,
+          goalAccessCacheHits: data.performance?.goalAccessCacheHits,
+          goalAccessBlockedGoals: data.performance?.goalAccessBlockedGoals,
+          goalAccessMs: data.performance?.goalAccessMs,
           supportDependencyCacheHits: data.performance?.supportDependencyCacheHits,
           localRoomCacheHits: data.performance?.localRoomCacheHits,
           localCorralCacheHits: data.performance?.localCorralCacheHits,
@@ -1578,6 +1603,11 @@ function startSolver(purpose) {
         relevanceRecentUses: data.performance?.relevanceRecentUses,
         relevanceDoorwayUses: data.performance?.relevanceDoorwayUses,
         relevanceRestorationUses: data.performance?.relevanceRestorationUses,
+        relevanceGoalAccessUses: data.performance?.relevanceGoalAccessUses,
+        goalAccessCalls: data.performance?.goalAccessCalls,
+        goalAccessCacheHits: data.performance?.goalAccessCacheHits,
+        goalAccessBlockedGoals: data.performance?.goalAccessBlockedGoals,
+        goalAccessMs: data.performance?.goalAccessMs,
       });
       if (data.path) {
         const path = validatePathToGoal(data.path);

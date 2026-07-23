@@ -62,7 +62,10 @@ test("Ultimate scheduling retires stale phases and reclaims silent workers", () 
     .map(file => fs.readFileSync(path.join(__dirname, file), "utf8"))
     .join("\n");
 
-  assert.match(app, /const directQueue = \[\.\.\.evacuationPlans, \.\.\.beamPlans/);
+  assert.match(
+    app,
+    /const directQueue = \[\s*\.\.\.structuralPlans,\s*\.\.\.evacuationPlans,\s*\.\.\.beamPlans/,
+  );
   assert.match(app, /retirePendingPlans\(/);
   assert.match(app, /packing checkpoint superseded opening and bridge exploration/);
   assert.match(app, /silentSeconds >= 120/);

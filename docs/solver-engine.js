@@ -185,6 +185,7 @@ function localReasoningLimits() {
   };
 }
 const DOORWAY_FLOW_MEMO_LIMIT = 5000;
+const GOAL_ACCESS_MEMO_LIMIT = 5000;
 const GOAL_COMMITMENT = Object.freeze({
   TEMPORARY: "temporary",
   CONDITIONAL: "conditional",
@@ -278,6 +279,7 @@ function createPerformanceMetrics() {
     relevanceRecentUses: 0,
     relevanceDoorwayUses: 0,
     relevanceRestorationUses: 0,
+    relevanceGoalAccessUses: 0,
     strategicSignalEvaluations: 0,
     strategicSignalSkips: 0,
     strategicSignalUseful: 0,
@@ -325,6 +327,10 @@ function createPerformanceMetrics() {
     doorwayFlowCalls: 0,
     doorwayFlowCacheHits: 0,
     doorwayFlowMs: 0,
+    goalAccessCalls: 0,
+    goalAccessCacheHits: 0,
+    goalAccessBlockedGoals: 0,
+    goalAccessMs: 0,
     assignmentCalls: 0,
     incrementalAssignmentCalls: 0,
     incrementalAssignmentFallbacks: 0,
@@ -641,7 +647,21 @@ function analyzeTopology(floor, goals) {
     if (rooms.some(room => [...candidate.cells].every(cell => room.cells.has(cell)))) continue;
     rooms.push(candidate);
   }
-  return {articulations, rooms, tunnels};
+  const goalAccess = [...goals].map(([goal, label]) => {
+    const [y, x] = goal.split(",").map(Number);
+    const lanes = DIRECTION_ENTRIES.flatMap(([, [dy, dx]]) => {
+      const source = pkey(y - dy, x - dx);
+      const support = pkey(y - 2 * dy, x - 2 * dx);
+      if (!floor.has(source) || !floor.has(support)) return [];
+      return [{
+        source,
+        support,
+        blockingGoals: [source, support].filter(position => goals.has(position)),
+      }];
+    });
+    return {goal, label, lanes};
+  });
+  return {articulations, rooms, tunnels, goalAccess};
 }
 
 const PREPARED_BOARD_SCHEMA = 3;
@@ -740,6 +760,7 @@ function hydratePreparedBoard(data, seed, metrics) {
     stateCommitmentMemo: new Map(),
     commitmentPushDistances: new Map(),
     supportDependencyMemo: new Map(),
+    goalAccessMemo: new Map(),
     localRoomMemo: new Map(),
     goalRoomPackingTables: new Map(seed.goalRoomPackingTables || []),
     roomPatternTables: new Map(seed.roomPatternTables || []),
@@ -839,6 +860,7 @@ function parse(data) {
     patternWindowMemo: new Map(),
     commitmentPushDistances: new Map(),
     supportDependencyMemo: new Map(),
+    goalAccessMemo: new Map(),
     localRoomMemo: new Map(),
     goalRoomPackingTables: new Map(),
     roomPatternTables: new Map(),
@@ -1217,6 +1239,7 @@ function boxesByLabelWithIndices(boxes) {
 function cacheFullAssignmentDetail(boxes, board) {
   if (board.assignmentMemo.has(boxes)) return board.assignmentMemo.get(boxes);
   const labels = new Map();
+  const assignedTargets = new Map();
   let total = 0;
   for (const [label, entries] of boxesByLabelWithIndices(boxes)) {
     const targets = board.goalsByLabel.get(label) || [];
@@ -1225,6 +1248,10 @@ function cacheFullAssignmentDetail(boxes, board) {
     board.metrics.assignmentCalls++;
     const assignment = minimumAssignment(costs);
     labels.set(label, {boxIndices: entries.map(entry => entry.index), costs, assignment});
+    for (let column = 1; column < (assignment.matching?.length || 0); column++) {
+      const row = assignment.matching[column] - 1;
+      if (row >= 0) assignedTargets.set(entries[row].index, targets[column - 1]);
+    }
     total += assignment.cost;
   }
   total += interactionHeuristicBoost(
@@ -1232,7 +1259,7 @@ function cacheFullAssignmentDetail(boxes, board) {
     board,
     new Map([...labels].map(([label, detail]) => [label, detail.assignment.cost])),
   );
-  const detail = {labels, cost: total};
+  const detail = {labels, assignedTargets, cost: total};
   board.assignmentMemo.set(boxes, detail);
   return detail;
 }
@@ -1365,6 +1392,190 @@ function roomEvacuationPenalty(boxes, board) {
   return penalty;
 }
 
+function assignmentDoorwayPlan(boxes, board) {
+  const assignment = cacheFullAssignmentDetail(boxes, board);
+  if (assignment.doorwayPlan) return assignment.doorwayPlan;
+  const occupied = new Set(boxes.map(([y, x]) => pkey(y, x)));
+  const tasks = [];
+  for (let roomIndex = 0; roomIndex < board.topology.rooms.length; roomIndex++) {
+    const room = board.topology.rooms[roomIndex];
+    boxes.forEach(([y, x, label], boxIndex) => {
+      const box = pkey(y, x), target = assignment.assignedTargets.get(boxIndex);
+      if (!target) return;
+      const inside = room.cells.has(box), targetInside = room.cells.has(target);
+      const direction = inside && !targetInside
+        ? "export" : !inside && targetInside ? "import" : null;
+      if (direction) {
+        tasks.push({box, boxIndex, label, target, direction, roomIndex, gate: room.gate});
+      }
+    });
+  }
+  let penalty = tasks.length;
+  for (const room of board.topology.rooms) {
+    const crossings = tasks.filter(task => task.gate === room.gate).length;
+    if (crossings && occupied.has(room.gate)) penalty += 2 * crossings;
+  }
+  assignment.doorwayPlan = {tasks, penalty};
+  return assignment.doorwayPlan;
+}
+
+function doorwayScheduleState(boxes, board, tasks) {
+  let penalty = 0, pendingExports = 0, remainingImports = 0;
+  let prematureImports = 0, gateBlockers = 0, crossingConflicts = 0;
+  let crossingDistance = 0, packingDistance = 0, unpackedImports = 0;
+  let stagingBlockers = 0, strandedExports = 0, blockedImportAccess = 0;
+  let packingOrderViolations = 0;
+  const occupied = new Set(boxes.map(([y, x]) => pkey(y, x)));
+  for (let roomIndex = 0; roomIndex < board.topology.rooms.length; roomIndex++) {
+    const room = board.topology.rooms[roomIndex];
+    const roomTasks = tasks.filter(task => task.roomIndex === roomIndex);
+    const exports = roomTasks.filter(task => task.direction === "export");
+    const imports = roomTasks.filter(task => task.direction === "import");
+    const pending = exports.filter(task => {
+      const [y, x] = boxes[task.boxIndex];
+      const position = pkey(y, x);
+      return room.cells.has(position) || position === room.gate;
+    });
+    const imported = imports.filter(task => {
+      const [y, x] = boxes[task.boxIndex];
+      return room.cells.has(pkey(y, x));
+    });
+    const unpacked = imported.filter(task => {
+      const [y, x] = boxes[task.boxIndex];
+      return task.target && pkey(y, x) !== task.target;
+    });
+    const blocking = imports.filter(task => {
+      const [y, x] = boxes[task.boxIndex];
+      return pkey(y, x) === room.gate;
+    });
+    const completedExports = exports.length - pending.length;
+    const requiredExportLead = Math.max(0, exports.length - imports.length);
+    const balancedImports = Math.max(0, completedExports - requiredExportLead);
+    const allowedImports = pending.length
+      ? Math.min(1, balancedImports) : balancedImports;
+    const excessImports = Math.max(0, imported.length - allowedImports);
+    const blockedImports = blocking.length && imported.length >= allowedImports
+      ? blocking.length : 0;
+    const conflicts = occupied.has(room.gate)
+      ? room.doorwayLanes.filter(lane =>
+        occupied.has(lane.inside) || occupied.has(lane.outside)).length
+      : 0;
+    const exportedInApproach = exports.filter(task => {
+      const [y, x] = boxes[task.boxIndex];
+      return !pending.includes(task) && room.exteriorStaging.has(pkey(y, x));
+    });
+    const blockedStaging = pending.length && exportedInApproach.length
+      ? [...room.exteriorStaging].filter(position =>
+        occupied.has(position)).length
+      : !pending.length && imported.length < imports.length
+        ? exportedInApproach.length
+        : 0;
+    let accessible = null;
+    const crossingAccessible = () => {
+      if (accessible) return accessible;
+      const accessStart = !occupied.has(room.gate)
+        ? room.gate
+        : [...room.cells].find(position => !occupied.has(position));
+      accessible = new Set(accessStart ? [accessStart] : []);
+      const accessQueue = accessStart ? [accessStart] : [];
+      for (let head = 0; head < accessQueue.length; head++) {
+        for (const next of floorNeighbors(accessQueue[head], board.floor)) {
+          if (occupied.has(next) || accessible.has(next)) continue;
+          accessible.add(next);
+          accessQueue.push(next);
+        }
+      }
+      return accessible;
+    };
+    let stranded = 0;
+    if (imported.length && pending.length) {
+      const reached = crossingAccessible();
+      stranded = pending.filter(task => {
+        const [y, x] = boxes[task.boxIndex];
+        return !DIRECTION_ENTRIES.some(([, [dy, dx]]) => {
+          const destination = pkey(y + dy, x + dx);
+          const support = pkey(y - dy, x - dx);
+          return board.floor.has(destination) && !occupied.has(destination) &&
+            reached.has(support) &&
+            !staticDead(y + dy, x + dx, board, task.label);
+        });
+      }).length;
+    }
+    let inaccessibleImports = 0;
+    if (!pending.length) {
+      const reached = crossingAccessible();
+      inaccessibleImports = imports.filter(task => {
+        const [y, x] = boxes[task.boxIndex];
+        const position = pkey(y, x);
+        if (room.cells.has(position)) return false;
+        const currentDistance = playerAwarePushDistances(board, position).get(room.gate);
+        return !DIRECTION_ENTRIES.some(([, [dy, dx]]) => {
+          const destination = pkey(y + dy, x + dx);
+          const support = pkey(y - dy, x - dx);
+          const nextDistance = playerAwarePushDistances(board, destination).get(room.gate);
+          const candidateBoxes = boxes.slice();
+          candidateBoxes[task.boxIndex] = [y + dy, x + dx, task.label];
+          return board.floor.has(destination) && !occupied.has(destination) &&
+            reached.has(support) && nextDistance < currentDistance &&
+            !staticDead(y + dy, x + dx, board, task.label) &&
+            !createsDynamicDeadlock(candidateBoxes, board, [y + dy, x + dx]);
+        });
+      }).length;
+    }
+    const packingViolations = room.dependencies.filter(([blocker, prerequisite]) =>
+      occupied.has(blocker) &&
+      boxes.some(([y, x, label]) =>
+        pkey(y, x) === blocker && board.goals.get(blocker) === label) &&
+      !boxes.some(([y, x, label]) =>
+        pkey(y, x) === prerequisite && board.goals.get(prerequisite) === label),
+    ).length;
+    const distanceTasks = pending.length ? pending : imports.filter(task => {
+      const [y, x] = boxes[task.boxIndex];
+      return !room.cells.has(pkey(y, x));
+    });
+    for (const task of distanceTasks) {
+      const [y, x] = boxes[task.boxIndex];
+      const distance = playerAwarePushDistances(board, pkey(y, x)).get(room.gate);
+      crossingDistance += Number.isFinite(distance) ? Math.min(12, distance + 1) : 12;
+    }
+    for (const task of unpacked) {
+      const [y, x] = boxes[task.boxIndex];
+      const distance = compiledGoalPushDistance(board, pkey(y, x), task.target);
+      packingDistance += Number.isFinite(distance) ? Math.min(12, distance) : 12;
+    }
+    pendingExports += pending.length;
+    remainingImports += imports.length - imported.length;
+    unpackedImports += unpacked.length;
+    prematureImports += excessImports;
+    gateBlockers += blockedImports;
+    crossingConflicts += conflicts;
+    stagingBlockers += blockedStaging;
+    strandedExports += stranded;
+    blockedImportAccess += inaccessibleImports;
+    packingOrderViolations += packingViolations;
+    penalty += pending.length + imports.length - imported.length;
+    penalty += 8 * excessImports + 12 * blockedImports +
+      40 * conflicts + 6 * blockedStaging + 8 * inaccessibleImports +
+      20 * packingViolations;
+  }
+  penalty += crossingDistance + packingDistance;
+  return {
+    penalty,
+    pendingExports,
+    remainingImports,
+    unpackedImports,
+    prematureImports,
+    gateBlockers,
+    crossingConflicts,
+    stagingBlockers,
+    strandedExports,
+    blockedImportAccess,
+    packingOrderViolations,
+    crossingDistance,
+    packingDistance,
+  };
+}
+
 function typedDoorwayFlow(boxes, board) {
   const metrics = board.metrics;
   metrics.doorwayFlowCalls++;
@@ -1375,6 +1586,8 @@ function typedDoorwayFlow(boxes, board) {
   }
   const started = now();
   const occupied = new Map(boxes.map(([y, x, label]) => [pkey(y, x), label]));
+  const assignedTargets = cacheFullAssignmentDetail(boxes, board).assignedTargets;
+  const assignmentComplete = assignedTargets.size === boxes.length;
   let penalty = 0;
   const rooms = board.topology.rooms.map((room, index) => {
     const current = new Map(), target = new Map();
@@ -1385,11 +1598,59 @@ function typedDoorwayFlow(boxes, board) {
       const label = board.goals.get(goal);
       target.set(label, (target.get(label) || 0) + 1);
     });
-    const imports = new Map(), exports = new Map();
-    for (const label of new Set([...current.keys(), ...target.keys()])) {
-      const difference = (target.get(label) || 0) - (current.get(label) || 0);
-      if (difference > 0) imports.set(label, difference);
-      if (difference < 0) exports.set(label, -difference);
+    const imports = new Map(), exports = new Map(), crossingTasks = [];
+    boxes.forEach(([y, x, label], boxIndex) => {
+      const box = pkey(y, x);
+      const assigned = assignedTargets.get(boxIndex);
+      if (!assigned) return;
+      const inside = room.cells.has(box);
+      const targetInside = room.cells.has(assigned);
+      const direction = inside && !targetInside
+        ? "export" : !inside && targetInside ? "import" : null;
+      if (!direction) return;
+      const flow = direction === "import" ? imports : exports;
+      flow.set(label, (flow.get(label) || 0) + 1);
+      crossingTasks.push({
+        id: `${box}|${index}|${direction}`,
+        box,
+        label,
+        direction,
+        roomIndex: index,
+        order: 0,
+        gate: room.gate,
+        target: assigned,
+      });
+    });
+    if (!assignmentComplete) {
+      imports.clear();
+      exports.clear();
+      crossingTasks.length = 0;
+      for (const label of new Set([...current.keys(), ...target.keys()])) {
+        const difference = (target.get(label) || 0) - (current.get(label) || 0);
+        if (difference > 0) imports.set(label, difference);
+        if (difference < 0) exports.set(label, -difference);
+      }
+      for (const [direction, flow] of [["export", exports], ["import", imports]]) {
+        for (const [label, count] of flow) {
+          boxes.filter(([y, x, boxLabel]) =>
+            boxLabel === label &&
+            room.cells.has(pkey(y, x)) === (direction === "export"))
+            .slice(0, count)
+            .forEach(([y, x]) => {
+              const box = pkey(y, x);
+              crossingTasks.push({
+                id: `${box}|${index}|${direction}`,
+                box,
+                label,
+                direction,
+                roomIndex: index,
+                order: 0,
+                gate: room.gate,
+                target: null,
+              });
+            });
+        }
+      }
     }
     const importTotal = [...imports.values()].reduce((sum, count) => sum + count, 0);
     const exportTotal = [...exports.values()].reduce((sum, count) => sum + count, 0);
@@ -1414,40 +1675,20 @@ function typedDoorwayFlow(boxes, board) {
       (exportTotal && !readyExportLanes.length ? 2 : 0) +
       2 * contradictions.length;
     penalty += roomPenalty;
-    const crossingTasks = [];
     const distanceToGate = ([y, x]) => {
       const [gateY, gateX] = room.gate.split(",").map(Number);
       return Math.abs(y - gateY) + Math.abs(x - gateX);
     };
-    for (const [label, count] of exports) {
-      boxes.filter(([y, x, boxLabel]) =>
-        boxLabel === label && room.cells.has(pkey(y, x)))
-        .sort((left, right) => distanceToGate(left) - distanceToGate(right))
-        .slice(0, count)
-        .forEach(([y, x], order) => crossingTasks.push({
-          id: `${pkey(y, x)}|${index}|export`,
-          box: pkey(y, x),
-          label,
-          direction: "export",
-          roomIndex: index,
-          order,
-          gate: room.gate,
-        }));
-    }
-    for (const [label, count] of imports) {
-      boxes.filter(([y, x, boxLabel]) =>
-        boxLabel === label && !room.cells.has(pkey(y, x)))
-        .sort((left, right) => distanceToGate(left) - distanceToGate(right))
-        .slice(0, count)
-        .forEach(([y, x], order) => crossingTasks.push({
-          id: `${pkey(y, x)}|${index}|import`,
-          box: pkey(y, x),
-          label,
-          direction: "import",
-          roomIndex: index,
-          order,
-          gate: room.gate,
-        }));
+    for (const direction of ["export", "import"]) {
+      const ordered = crossingTasks
+        .filter(task => task.direction === direction)
+        .sort((left, right) => {
+          const leftBox = boxes.find(([y, x]) => pkey(y, x) === left.box);
+          const rightBox = boxes.find(([y, x]) => pkey(y, x) === right.box);
+          return distanceToGate(leftBox) - distanceToGate(rightBox) ||
+            left.box.localeCompare(right.box);
+        });
+      ordered.forEach((task, order) => { task.order = order; });
     }
     const restoration = [];
     if (gateLabel && crossings) restoration.push(room.gate);
@@ -1573,9 +1814,92 @@ function doorwayFlowDelta(analysis, state, next) {
   return delta;
 }
 
+function evaluateGoalAccess(goalAccess, occupied) {
+  let penalty = 0;
+  const goals = goalAccess.map(entry => {
+    const solved = occupied.get(entry.goal) === entry.label;
+    const lanes = entry.lanes.map(lane => {
+      const sourceLabel = occupied.get(lane.source);
+      const supportLabel = occupied.get(lane.support);
+      const sourceCompatible = sourceLabel === undefined || sourceLabel === entry.label;
+      const open = supportLabel === undefined && sourceCompatible;
+      const blockers = [];
+      if (sourceLabel !== undefined && sourceLabel !== entry.label) blockers.push(lane.source);
+      if (supportLabel !== undefined) blockers.push(lane.support);
+      return {...lane, open, ready: sourceLabel === entry.label && !supportLabel, blockers};
+    });
+    const openLanes = lanes.filter(lane => lane.open).length;
+    let accessPenalty = 0;
+    if (!solved && lanes.length) {
+      accessPenalty = (lanes.length - openLanes) / lanes.length;
+      if (!openLanes) accessPenalty += 4;
+      else if (openLanes === 1 && lanes.length > 1) accessPenalty += 0.5;
+      penalty += accessPenalty;
+    }
+    return {
+      goal: entry.goal,
+      label: entry.label,
+      solved,
+      lanes,
+      openLanes,
+      accessPenalty,
+      blockers: new Set(lanes.flatMap(lane => lane.blockers)),
+    };
+  });
+  return {
+    goals,
+    penalty,
+    blockedGoals: goals.filter(goal => !goal.solved && !goal.openLanes),
+  };
+}
+
+function goalAccessAnalysis(boxes, board) {
+  const metrics = board.metrics;
+  metrics.goalAccessCalls++;
+  const signature = boxSignature(boxes, board);
+  if (board.goalAccessMemo.has(signature)) {
+    metrics.goalAccessCacheHits++;
+    return board.goalAccessMemo.get(signature);
+  }
+  const started = now();
+  const occupied = new Map(boxes.map(([y, x, label]) => [pkey(y, x), label]));
+  const result = evaluateGoalAccess(board.topology.goalAccess, occupied);
+  result.packingRisk = new Map();
+  result.safeGoals = new Set();
+  for (const goal of result.goals) {
+    if (goal.solved) continue;
+    let risk = 5;
+    if (!occupied.has(goal.goal)) {
+      const packed = new Map(occupied);
+      packed.set(goal.goal, goal.label);
+      risk = evaluateGoalAccess(board.topology.goalAccess, packed).penalty - result.penalty;
+    }
+    result.packingRisk.set(goal.goal, risk);
+    if (risk <= 0) result.safeGoals.add(goal.goal);
+  }
+  metrics.goalAccessBlockedGoals += result.blockedGoals.length;
+  metrics.goalAccessMs += now() - started;
+  return memoizeBounded(
+    board.goalAccessMemo,
+    signature,
+    result,
+    GOAL_ACCESS_MEMO_LIMIT,
+  );
+}
+
+function goalAccessDelta(analysis, state, next, board) {
+  const occupied = new Map(state.boxes.map(([y, x, label]) => [pkey(y, x), label]));
+  const label = occupied.get(next.pushedFrom);
+  if (label === undefined) return 0;
+  occupied.delete(next.pushedFrom);
+  occupied.set(next.pushedTo, label);
+  return evaluateGoalAccess(board.topology.goalAccess, occupied).penalty - analysis.penalty;
+}
+
 function relevanceOrderingScore(state, board, next, evidence = {}) {
   const dependency = evidence.supportDependency;
   const doorway = evidence.doorway;
+  const goalAccess = evidence.goalAccess;
   const recent = evidence.recentPush;
   const movedIndex = state.boxes.findIndex(([y, x]) => pkey(y, x) === next.pushedFrom);
   const target = dependency?.assignedTargets.get(movedIndex);
@@ -1583,8 +1907,14 @@ function relevanceOrderingScore(state, board, next, evidence = {}) {
     ? compiledGoalPushDistance(board, next.pushedFrom, target) : Infinity;
   const afterDistance = target
     ? compiledGoalPushDistance(board, next.pushedTo, target) : Infinity;
-  const assignmentProgress = Number.isFinite(beforeDistance) && Number.isFinite(afterDistance)
+  const rawAssignmentProgress = Number.isFinite(beforeDistance) && Number.isFinite(afterDistance)
     ? afterDistance - beforeDistance : 0;
+  const targetPackingRisk = target && goalAccess?.packingRisk.get(target) || 0;
+  const assignmentProgress = targetPackingRisk > 0
+    ? rawAssignmentProgress < 0
+      ? -rawAssignmentProgress * Math.min(1, targetPackingRisk)
+      : -0.5 * rawAssignmentProgress
+    : rawAssignmentProgress;
   const dependencyDelta = dependency ? supportDependencyDelta(dependency, next) : 0;
   const doorwayDelta = doorway ? doorwayFlowDelta(doorway, state, next) : 0;
   const bottleneck = dependency?.nodes.reduce((best, node) =>
@@ -1597,6 +1927,9 @@ function relevanceOrderingScore(state, board, next, evidence = {}) {
     ? -0.75 : 0;
   const restorationDelta = doorway?.restoration.has(next.pushedFrom) ? -0.5 :
     doorway?.restoration.has(next.pushedTo) ? 0.5 : 0;
+  const goalAccessChange = goalAccess
+    ? goalAccessDelta(goalAccess, state, next, board)
+    : 0;
   const signals = {
     assignment: assignmentProgress,
     dependency: dependencyDelta,
@@ -1604,6 +1937,7 @@ function relevanceOrderingScore(state, board, next, evidence = {}) {
     recentEnablement,
     doorway: doorwayDelta,
     restoration: restorationDelta,
+    goalAccess: goalAccessChange,
   };
   return {
     score: Object.values(signals).reduce((total, value) => total + value, 0),
@@ -1621,6 +1955,7 @@ function recordRelevanceOrdering(metrics, relevance) {
     recentEnablement: "relevanceRecentUses",
     doorway: "relevanceDoorwayUses",
     restoration: "relevanceRestorationUses",
+    goalAccess: "relevanceGoalAccessUses",
   };
   for (const [signal, metric] of Object.entries(mapping)) {
     if (relevance.signals[signal]) metrics[metric]++;
@@ -1655,6 +1990,7 @@ function analyzePuzzleForSearch(data) {
   boxes.forEach(([, , label]) => { labels[label] = (labels[label] || 0) + 1; });
   const initialHeuristic = heuristic(boxes, board);
   const evacuationPenalty = roomEvacuationPenalty(boxes, board);
+  const initialGoalAccess = goalAccessAnalysis(boxes, board);
   const legalPushes = pushNeighbors(initial, board).length;
   const solvedBoxes = boxes.filter(([y, x, label]) =>
     board.goals.get(pkey(y, x)) === label).length;
@@ -1723,6 +2059,12 @@ function analyzePuzzleForSearch(data) {
     rooms: roomSummaries,
     surplusBoxes,
     evacuationPenalty,
+    goalAccessClauses: board.topology.goalAccess.reduce(
+      (total, goal) => total + goal.lanes.filter(lane => lane.blockingGoals.length).length,
+      0,
+    ),
+    blockedGoalAccess: initialGoalAccess.blockedGoals.length,
+    goalAccessPenalty: initialGoalAccess.penalty,
     dependencyCount,
     reverseStartRegions: reversePortfolio.length,
     productiveReverseStartRegions: productiveReverseRegions.length,
@@ -2430,23 +2772,10 @@ function supportDependencyGraph(state, board, reachable = reachablePaths(state, 
     return board.supportDependencyMemo.get(key);
   }
   const started = now(), routes = minimumBlockerRoutes(reachable, board);
-  const assignedTargets = new Map();
-  let assignmentComplete = true;
-  for (const [, entries] of boxesByLabelWithIndices(state.boxes)) {
-    const label = state.boxes[entries[0].index][2];
-    const targets = board.goalsByLabel.get(label) || [];
-    const costs = entries.map(({y, x}) =>
-      targets.map(target => compiledGoalPushDistance(board, pkey(y, x), target)));
-    const assignment = minimumAssignment(costs);
-    if (!Number.isFinite(assignment.cost)) {
-      assignmentComplete = false;
-      continue;
-    }
-    for (let column = 1; column < assignment.matching.length; column++) {
-      const row = assignment.matching[column] - 1;
-      if (row >= 0) assignedTargets.set(entries[row].index, targets[column - 1]);
-    }
-  }
+  const assignment = cacheFullAssignmentDetail(state.boxes, board);
+  const assignedTargets = new Map(assignment.assignedTargets);
+  let assignmentComplete = Number.isFinite(assignment.cost) &&
+    assignedTargets.size === state.boxes.length;
   const nodes = [], supportDemand = new Map(), prerequisiteDemand = new Map();
   const prerequisiteEdges = new Map(), enablingActions = new Map();
   const stagingSides = new Map();
@@ -3893,7 +4222,9 @@ function expandPushSequences(
       reachable,
       {lockProven: options.lockProven},
     );
-    if (!continuations.length) endpoints.push({...current, macroDecision: true});
+    if (!continuations.length) {
+      endpoints.push({...current, macroDecision: true, targetDeadEnd: true});
+    }
     else if (continuations.length > 1) endpoints.push({...current, macroDecision: true});
     for (const next of continuations) {
       const sequence = {
@@ -3916,6 +4247,112 @@ function expandPushSequences(
   endpoints.sort((left, right) =>
     Number(Boolean(right.macroDecision)) - Number(Boolean(left.macroDecision)) ||
     right.pushes - left.pushes);
+  const selected = [], destinations = new Set();
+  for (const endpoint of endpoints) {
+    if (destinations.has(endpoint.pushedTo)) continue;
+    if (endpoint.targetDistance > 0) {
+      const state = {robot: endpoint.robot, boxes: endpoint.boxes};
+      const reachable = reachablePaths(state, board);
+      if (!pushBoxNeighbors(
+        state,
+        board,
+        endpoint.pushedTo,
+        reachable,
+        {lockProven: options.lockProven},
+      ).length) continue;
+    }
+    destinations.add(endpoint.pushedTo);
+    selected.push(endpoint);
+    if (selected.length >= maxReturned) break;
+  }
+  return [initial, ...selected.filter(endpoint =>
+    exactPushKey(endpoint, board) !== exactPushKey(initial, board))];
+}
+
+function expandTargetedPushSequence(
+  first,
+  board,
+  objective,
+  maxPushes = 24,
+  maxExplored = 96,
+  maxReturned = 4,
+  options = {},
+) {
+  const room = Number.isInteger(objective?.roomIndex)
+    ? board.topology.rooms[objective.roomIndex] : null;
+  const distance = state => {
+    const position = state.pushedTo;
+    if (objective?.direction === "export" && room) {
+      if (!room.cells.has(position) && position !== room.gate) return 0;
+      const toGate = playerAwarePushDistances(board, position).get(room.gate);
+      return Number.isFinite(toGate) ? toGate + 1 : Infinity;
+    }
+    if (objective?.direction === "import" && room) {
+      if (room.cells.has(position)) return 0;
+      const toGate = playerAwarePushDistances(board, position).get(room.gate);
+      return Number.isFinite(toGate) ? toGate + 1 : Infinity;
+    }
+    if (objective?.direction === "clear" && room) {
+      if (!room.exteriorStaging.has(position) && position !== room.gate) return 0;
+      const distances = playerAwarePushDistances(board, position);
+      let best = Infinity;
+      for (const candidate of board.floor) {
+        if (room.exteriorStaging.has(candidate) || candidate === room.gate) continue;
+        best = Math.min(best, distances.get(candidate) ?? Infinity);
+      }
+      return best;
+    }
+    if (objective?.target) {
+      return compiledGoalPushDistance(board, position, objective.target);
+    }
+    return Infinity;
+  };
+  const initial = {...first, pushes: 1};
+  initial.targetDistance = distance(initial);
+  const open = [initial], endpoints = [], seen = new Set([exactPushKey(initial, board)]);
+  let explored = 0;
+  while (open.length && explored++ < maxExplored) {
+    open.sort((left, right) =>
+      left.pushes + left.targetDistance - right.pushes - right.targetDistance ||
+      left.targetDistance - right.targetDistance);
+    const current = open.shift();
+    if (current.targetDistance === 0 || current.pushes >= maxPushes) {
+      endpoints.push(current);
+      continue;
+    }
+    const state = {robot: current.robot, boxes: current.boxes};
+    const reachable = reachablePaths(state, board);
+    if (createsSealedCorralDeadlock(state, board, reachable)) continue;
+    const continuations = pushBoxNeighbors(
+      state,
+      board,
+      current.pushedTo,
+      reachable,
+      {lockProven: options.lockProven},
+    );
+    if (!continuations.length) endpoints.push({...current, macroDecision: true});
+    for (const next of continuations) {
+      const sequence = {
+        robot: next.robot,
+        boxes: next.boxes,
+        path: [...current.path, ...next.path],
+        pushes: current.pushes + 1,
+        pushClass: `${first.pushClass}:target:${current.pushes + 1}`,
+        pushedFrom: next.pushedFrom,
+        pushedTo: next.pushedTo,
+      };
+      const signature = exactPushKey(sequence, board);
+      if (seen.has(signature)) continue;
+      seen.add(signature);
+      sequence.targetDistance = distance(sequence);
+      open.push(sequence);
+    }
+  }
+  endpoints.push(...open);
+  endpoints.sort((left, right) =>
+    Number(Boolean(left.targetDeadEnd)) - Number(Boolean(right.targetDeadEnd)) ||
+    left.targetDistance - right.targetDistance ||
+    left.pushes - right.pushes);
   const selected = [], destinations = new Set();
   for (const endpoint of endpoints) {
     if (destinations.has(endpoint.pushedTo)) continue;

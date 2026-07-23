@@ -295,11 +295,19 @@ first-solution portfolio.
 The first-solution portfolio now separates discovery from proof. Checkpoints are
 ranked by accumulated pushes plus their admissible remaining estimate, while phase
 diversity prevents every worker from starting at a nearly identical packing layout.
+Its first worker constructs board-derived assignment, doorway-flow, staging,
+packing-order, and goal-access objectives, then chains bounded single-box macros
+while retaining both heuristic and structural elites.
 On capable browsers, cost-aware guided beams search from the best distinct
 checkpoints while one persistent exact worker continues the admissible contour.
 Packing checkpoints retire active bridge work and extreme puzzles run only the two
 best local exact handoffs, allowing the anytime workers to begin earlier. No stored
 solution path or puzzle-specific coordinate is used.
+
+Build `2026-07-23.32` replay-validated a fresh Huge solution with the released
+limits in 138.2 seconds after 3,752 structural states and 19,689 generated
+candidates on the development machine. This is a regression datum, not a universal
+time guarantee; exact search remains the completeness fallback.
 
 Guided beam and bounded DFS workers publish progress on both state-count and
 elapsed-time intervals, so expensive states cannot make a productive worker appear
