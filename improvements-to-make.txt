@@ -1,677 +1,780 @@
-Sokomind improvements and implementation status
-===============================================
+Sokomind improvement campaign and sprint plan
+==============================================
 
-Status reviewed against the repository after Improvement Sprint 13: browser
-runtime modularization and independently testable gameplay/search boundaries.
+Plan reorganized after Improvement Sprint 13 on 2026-07-23.
 
-Standing maintenance rules
---------------------------
+Mission
+-------
 
+Build a general-purpose Sokoban search that can find a solution whenever one
+exists and can eventually prove failure when none exists, subject only to an
+explicit user stop or reported platform/resource failure. Production search must
+derive every decision from the supplied board and state. Built-in puzzle names,
+coordinates, saved routes, and the saved Huge solution must never influence
+production search. The Huge route remains diagnostic evidence only.
+
+
+Campaign operating rules
+------------------------
+
+- Future sprints contain 3-5 related improvements and are listed below in
+  dependency and priority order.
+- Once a sprint begins, implement every item in it without waiting for separate
+  "ready for next sprint" messages. Stop only for a genuine external blocker,
+  required user authority, or evidence that cannot be obtained locally.
+- A campaign request may authorize several consecutive sprints. Continue through
+  the authorized range, maintaining versions and this file internally, and return
+  one consolidated handoff instead of requesting approval between sprints.
+- Aim to move every sprint item to Done. "Strong, bounded" is acceptable only
+  when the full claim would be unsound, platform-impossible, or unsupported by
+  proof after the planned work is exhausted. Record the exact remaining boundary;
+  do not use the label merely to end a sprint early.
+- Do not silently move unfinished work to another sprint. If an item misses its
+  finish gate, keep the sprint open unless a documented hard boundary justifies
+  Strong, bounded status.
 - After every change to solver behavior, search strategy, pruning, state
-  representation, worker protocol, or solver orchestration, increment the
-  solver version ID and keep every browser cache-busting reference synchronized.
-- At the end of every sprint, review this file against the repository, update
-  the sprint/status heading, move completed work to the appropriate section,
-  and record any newly discovered limitations or follow-up work.
+  representation, worker protocol, or solver orchestration, increment the solver
+  version ID and synchronize every browser cache-busting reference.
+- After every sprint, update this file with delivered behavior, tests, benchmark
+  results, new limitations, and the next sprint's dependency assumptions.
+- Preserve completeness in exact search. Ordering and bounded discovery may use
+  experimental signals, but pruning requires a proof and independent differential
+  validation.
+- Run the complete JavaScript and Python suites, saved-solution verification,
+  smoke benchmark, and validation benchmark after every sprint. Run browser and
+  Huge campaign gates whenever the sprint changes orchestration or browser flow.
+- Prefer general generated fixtures over built-in-level assertions. Any useful
+  pattern learned from the Huge route must be reformulated as board-derived logic
+  and tested on unrelated puzzles.
 
-The original item numbers and priority order are retained for traceability.
-"Done" means the stated outcome is implemented and adequately validated.
-"Strong, bounded" means the implementation is useful and well tested within a
-deliberate scope, but does not yet provide the complete capability originally
-described. "Partial" means meaningful foundations exist, but important parts of
-the stated outcome remain. Items in the final section have not been implemented
-as backlog capabilities; incidental overlap does not count as delivery.
+
+Status vocabulary
+-----------------
+
+Done
+  The intended practical outcome is implemented and adequately validated.
+
+Strong, bounded
+  The useful and safe portion is implemented, but a precisely documented proof,
+  platform, or scope boundary remains.
+
+Partial
+  Important foundations exist, but the improvement has not reached its finish
+  gate.
+
+Backlog
+  The named capability has not yet been implemented.
 
 
-DONE
-----
+Legacy completion history: Sprints 1-13
+---------------------------------------
+
+The first thirteen sprints used a mostly single-focus cadence. They established
+the solver, validation, telemetry, heuristic, orchestration, and modularity
+foundations summarized in the future sprint entries. Their exact item-by-item
+boundaries predate this campaign plan, so the completed items are grouped into
+the two historical sprint ranges below rather than retroactively inventing a
+false per-sprint attribution. The following eight items already reached Done and
+are not scheduled again.
+
+Legacy Sprints 1-6 - Safety and CI foundations
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 1. Prevent gameplay keyboard shortcuts from firing in editable controls.
-   Implemented for input, textarea, select, button, and contenteditable targets,
-   with policy tests and integration in the web application.
+   Status: Done.
+   Input, textarea, select, button, and contenteditable targets are protected by
+   a tested keyboard policy integrated with the web application.
 
 2. Expand CI deployment gates.
-   docs/director-policy.test.js, the complete JavaScript suite, differential
-   tests, smoke benchmarks, and validation benchmarks run in GitHub Actions.
+   Status: Done.
+   GitHub Actions runs the complete JavaScript, differential, smoke, and
+   validation gates before deployment.
 
 4. Calculate benchmark partial credit independently.
-   The benchmark harness replays solver checkpoints and uses a fixed evaluator
-   rather than trusting solver-reported estimates. This behavior is tested.
+   Status: Done.
+   The harness replays checkpoints and uses a fixed evaluator rather than trusting
+   solver-reported estimates.
 
 6. Restrict GitHub Pages credentials to deployment.
-   The test job is read-only. Pages write and ID-token permissions are scoped to
-   the deploy job.
+   Status: Done.
+   Test jobs are read-only; Pages write and ID-token permissions are scoped to
+   the deployment job.
+
+Legacy Sprints 7-13 - Conformance, generality, and macros
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 11. Add shared cross-implementation conformance fixtures.
-   Python, browser, worker, and benchmark code consume shared level and rule
-   fixtures, with conformance tests guarding parsing and puzzle-rule drift.
+    Status: Done.
+    Python, browser, worker, and benchmark implementations consume shared level
+    and rule fixtures that guard parsing and gameplay semantics.
 
 29. Run CI before merge.
-    The complete test and benchmark workflow now runs on pull requests. The deploy
-    job is explicitly excluded from pull requests and remains restricted to main.
-    Repository branch-protection settings can now require the test job.
+    Status: Done.
+    Pull requests run the complete test and benchmark workflow; deployment remains
+    restricted to main. Repository settings can require the test job.
 
 35. Make saved solution evidence machine-verifiable without specializing search.
-    A generic level-and-file verifier replays numbered solution artifacts against
-    the independent benchmark rules and checks the final goal state. The saved
-    Huge route is verified in CI as a 640-move, 250-push diagnostic replay and is
-    explicitly documented as evidence that is never consumed by production search.
-    A source guard rejects saved-route consumption and built-in-level branches in
-    both production solver implementations.
+    Status: Done.
+    A generic verifier replays the 640-move, 250-push Huge artifact in CI. Source
+    guards reject saved-route consumption and built-in-level branches in both
+    production solvers.
 
 38. Collapse genuinely forced box sequences into macro edges.
-    The browser and Python solvers collapse globally forced push chains while
-    preserving replay moves. The browser also has tunnel-entry, straight-run,
-    and bounded same-box sequence macros with commitment and deadlock checks.
-    This covers the external forced-corridor proposal without assuming that a
-    visually narrow passage is forced when another legal box push exists.
+    Status: Done.
+    Browser and Python searches collapse globally forced chains while preserving
+    replay moves. Browser tunnel, straight-run, and bounded same-box macros retain
+    commitment and deadlock checks without assuming that visual tunnels are forced.
 
 
-STRONG IMPLEMENTATION, WITH BOUNDED LIMITATIONS
------------------------------------------------
+PRIORITIZED FUTURE SPRINTS
+==========================
+
+Sprint 14 - Exact-search contract and interruption resilience
+-------------------------------------------------------------
+
+Priority reason:
+The campaign currently tests individual pruning rules and selected exact contours,
+but the mission depends on the complete composition of canonicalization,
+transposition dominance, sharding, bounds, termination, and result reporting.
+These contracts must be proven before adding more pruning or orchestration.
+
+45. Differentially certify the complete exact-search kernel.
+    Current status: Partial.
+    Existing foundation:
+    - Small tests cover canonical push identities, one partitioned contour,
+      transposition eviction, admissible assignment, and individual hard-pruning
+      rules.
+    Audit finding:
+    - Item 3 validates pruning rules, but no independent harness proves that the
+      composed exact engine preserves every reachable push state across robot-region
+      canonicalization, cost dominance, shard ownership, finite incumbent bounds,
+      contour transitions, commitment locking, and transposition eviction.
+   Finish gate:
+   - Compare browser exact IDA* and Python push A* against a deliberately simple
+     reference push BFS over exhaustive and generated multi-box/typed boards.
+   - Compare solvability and optimal push count, not merely whether a known route
+     survives. Exercise every exact option both enabled and disabled.
+   - Prove that shard unions cover each contour exactly as intended, eviction can
+     only repeat work, canonical robot regions preserve legal successors, and an
+     invalid incumbent is removed without producing a false proof.
+   - Make this a required CI gate for changes to state identity, successor
+     generation, exact bounds, pruning, macros, or sharding.
+
+46. Define one trustworthy terminal-result contract.
+    Current status: Partial.
+    Existing foundation:
+    - Browser workers report cutoff flags and reasons; the advanced director
+      distinguishes a completed exact proof in its UI.
+    Audit finding:
+    - Python commonly returns the same `(None, None, ...)` shape for cancellation,
+      time budget, frontier exhaustion, and a proof of impossibility. Browser
+      strategies also expose partially different result fields. This makes "no
+      solution found" easy to confuse with "no solution exists."
+   Finish gate:
+   - Use the same explicit statuses across Python, workers, director, GUI, CLI,
+     benchmarks, and logs: solved, proven-unsolvable, cutoff, cancelled, and
+     failed, with a structured reason and resource counters.
+   - Permit proven-unsolvable only after the certified exact kernel exhausts the
+     full relevant state space; guided or budgeted searches may report only cutoff.
+   - Independently replay every returned solution before exposing success, reject
+     incomplete or illegal paths at the public solver boundary, and test every
+     status transition including worker crashes and stale messages.
+
+47. Make persistent exact search stack-safe, resumable, and crash-recoverable.
+    Current status: Backlog.
+    Audit finding:
+    - Browser exact IDA* is recursive and its persistent state lives only inside a
+      worker. A deep push path can hit the JavaScript call-stack limit, while a tab
+      reload, browser suspension, or worker failure discards a long proof search.
+   Finish gate:
+   - Replace recursive exact traversal with an explicit bounded work stack or
+     equivalent resumable contour iterator and cooperative yield points.
+   - Save versioned, board-hashed exact checkpoints containing contour, shard,
+     traversal, and proof-progress state without treating heuristic checkpoints as
+     proof evidence.
+   - Resume after a worker restart or page reload without skipping work; reject
+     incompatible build/board checkpoints safely and make clearing saved search
+     state explicit.
+   - Add deterministic interruption-at-many-points tests whose resumed result and
+     proof match an uninterrupted reference run.
+
+Sprint completion gate:
+All three items are Done; exact search has an independently checked completeness
+contract, every terminal outcome is unambiguous, and interruption cannot silently
+turn a proof run into a restart, false failure, or false proof.
+
+
+Sprint 15 - End-to-end validation foundation
+--------------------------------------------
+
+Priority reason:
+These gates must exist before broader pruning, decomposition, and orchestration
+changes. Finishing them first prevents later sprints from relying on manual Huge
+logs or narrow unit wiring assertions.
 
 3. Add exhaustive differential tests for every hard pruning rule.
-   Implemented:
-   - A reference BFS checks every current hard pruning rule independently over
-     reachable states, including their combined successor behavior.
-   - The harness exhaustively enumerates all 780 box, goal, and robot placements
-     across every connected 2x3 floor layout. It independently identifies and
-     checks the 60 solvable configurations alongside four larger authored boards.
-   - It scans the complete corpus and retains the globally smallest false
-     positive by floor size, box count, board area, and state size for reporting.
-   Bounded limitations:
-   - Exhaustive generation does not yet cover larger floors, multiple boxes, or
-     typed-label combinations.
-   - Counterexamples are selected from the corpus but not structurally minimized.
-   - Coverage must continue to be extended whenever hard rejection rules change.
-   Remaining validation expansion:
-   - Add exhaustive or systematically sampled 3x3 and 3x4 floor layouts.
-   - Cover multiple typed boxes, interacting doorways, corrals, and closed
-     diagonals as those pruning rules are introduced.
-   - Add property-based state generation and automatic counterexample shrinking
-     so failures produce the smallest practical reproducible puzzle.
+   Current status: Strong, bounded.
+   Existing foundation:
+   - Reference BFS checks every current hard-pruning rule independently and in
+     combination.
+   - All 780 placements across connected 2x3 floors are enumerated, including 60
+     independently proven solvable configurations and authored larger boards.
+   - The harness retains the smallest discovered false positive.
+   Finish gate:
+   - Add systematic 3x3 and 3x4 sampling, multiple generic and typed boxes,
+     doorways, corrals, closed diagonals, and interacting freeze patterns.
+   - Add property-based generation and structural counterexample shrinking.
+   - Require every registered hard-pruning rule to provide an independent oracle
+     family so future rules cannot enter production without differential coverage.
 
 5. Add hidden or generated benchmark families.
-   Implemented:
-   - Generated mirror, rotation, label permutation, premature-goal, typed
-     doorway-import, exact room-packing, and corral-reopening cases.
-   - A separate procedural lane-warehouse family covers three and four boxes,
-     longer push distances, and distinct typed boxes without deriving its boards
-     from the built-in level catalog or the authored strategic seeds.
-   - An independent exact A* over canonical push states certifies every procedural
-     multi-box case with an admissible label-aware assignment bound.
-   - The replay-validated validation suite now contains 16 deterministic cases.
-   Bounded limitations:
-   - The procedural family currently uses open lane geometry rather than shared
-     bottlenecks, interacting staging capacity, or coupled packing orders.
-   - The suite remains repository-visible and deterministic, not a secret test
-     corpus; more separately maintained challenge layouts would further reduce
-     tuning against familiar cases.
+   Current status: Strong, bounded.
+   Existing foundation:
+   - Sixteen replay-validated mirror, rotation, relabeling, premature-goal,
+     doorway, room-packing, corral, and certified lane-warehouse cases.
+   Finish gate:
+   - Add deterministic but separately seeded bottleneck, staging-capacity,
+     coupled-room ordering, dependency-cycle, and multi-gate families.
+   - Independently certify bounded instances and keep generator seeds outside
+     solver inputs.
+   - Record reviewed state/push expectations without tuning production code to
+     fixture names.
 
-7. Add detailed solver performance instrumentation.
-   Implemented:
-   - Counters and timings cover reachability, matching, hashing, successor
-     generation, pruning, caches, frontier behavior, and strategic reasoning.
-   - Capability-detected heap telemetry records current, peak, delta, and sample
-     counts. Node benchmarks inject a reliable heap sampler; unsupported browser
-     workers report that status explicitly instead of returning false zeroes.
-   - Isolated benchmark cases record worker loading, search, validation, first
-     output, result delivery, shutdown, total process time, and heap deltas.
-   - Browser portfolio logs expose first-message, wall-clock, termination-call,
-     heap, and cancelled-worker measurements.
-   Bounded limitations:
-   - Per-allocation profiling and exact GC event/pause counts are not portable to
-     ordinary browser workers; the runner reports explicit-GC availability but
-     does not force collection during scored searches.
-   - The specialized bidirectional director has less lifecycle detail than the
-     standard portfolio path, although worker-owned heap telemetry is shared.
-
-8. Replace repeated single-box searches with a compiled push graph.
-   Implemented:
-   - Static graph nodes encode a box cell and robot-region representative.
-   - Transitions and player-aware distances are compiled, cached, and tested
-     against the reference implementation.
-   Bounded limitations:
-   - The graph is geometry-based rather than intrinsically type-aware.
-   - It searches forward from box starts instead of reverse-searching from each
-     typed goal into reusable typed feasibility tables.
-
-9. Replace string-heavy hot-path state data with dense representations.
-   Implemented:
-   - Integer cell IDs, dense neighbor/support tables, typed reachability arrays,
-     compact parent directions, and deferred walking-path reconstruction.
-   - Typed box layouts are encoded as sorted dense cell/label tokens and packed
-     into collision-free BigInt identities, cached by immutable box-array object.
-   - Exact robot cells or canonical reachable-region IDs are packed into the same
-     identity for beam, bounded DFS, IDA*, bidirectional, and baseline search
-     transposition maps. Diversity and exact-shard hashing consume the packed
-     value directly instead of reconstructing a string.
-   - Exhaustive small-board tests verify permutation invariance, typed-layout
-     uniqueness, exact robot distinction, and canonical robot-region equivalence.
-   Bounded limitations:
-   - Coordinate-heavy solver logic still stores boxes as nested JavaScript arrays
-     and clones those arrays for successors; the packed form is currently the
-     state identity, not the sole state representation.
-   - Strategic memo tables and cross-worker IDs retain compact strings where they
-     simplify interoperability and diagnostics.
-   - Box bitsets and truly incremental move-updated hashing are not implemented.
-
-10. Reuse immutable board analysis across web workers.
-    Implemented:
-    - Prepared board seeds share topology, push distances, compiled graphs, dense
-      board data, and other immutable analysis through structured cloning.
-    - Completed bounded room-pattern and pair-conflict tables are included in the
-      planning seed so subsequent workers do not repeat reverse enumeration.
-    - Mutable caches remain worker-private.
-    Bounded limitations:
-    - Structured cloning still duplicates data in worker memory.
-    - SharedArrayBuffer is intentionally avoided because the current GitHub Pages
-      deployment is not cross-origin isolated.
-    - Dynamic deadlock, heuristic, and local-search caches remain worker-private.
-
-13. Add a goal-commitment safety oracle.
-    Implemented:
-    - Goal boxes are classified as temporary, conditionally safe, or proven using
-      residual perfect matching, room dependencies, static immovability, dynamic
-      support demand, typed doorway flow, and bounded exact local analyses.
-    - State-complete evidence is cached by robot region and box signature. It can
-      downgrade placements that occupy required support or staging cells and can
-      prove movable boxes packed inside an exactly completed one-entry room.
-    - Beam, bounded DFS, and IDA search treat proven boxes as walls. Forced,
-      straight, and sequence macros re-evaluate commitment after every push.
-    - The lock is differentially checked over the exhaustive tiny corpus and all
-      252 pushes of the known Huge solution; it can be disabled diagnostically.
-    Bounded limitations:
-    - Movable proof is currently limited to completed bounded rooms; oversized
-      rooms and exact corrals cannot promote boxes to proven.
-    - Support dependencies are not yet assignment-aware or recursively proven.
-    - Baseline push A* and gameplay retain ordinary legal movement semantics.
-
-15. Add cached exact local searches for small rooms and corrals.
-    Implemented:
-    - Bounded exact room and corral searches are cached by local configuration.
-    - They reason about packing, import/export requirements, doorway restoration,
-      boundary viability, and reopening robot access.
-    Bounded limitations:
-    - Exactness applies only inside the selected local abstraction.
-    - Rooms, domains, or box sets over conservative size limits are skipped.
-    - Some large built-in puzzle regions therefore receive no local exact result.
-    - Corral conclusions are currently used conservatively as ordering signals.
-
-39. Keep expensive discovery workers live and recover a silent search lane.
-    Strong, bounded implementation in solver build 2026-07-22.20:
-    - Guided beam and bounded DFS searches report progress after either a bounded
-      number of states or five seconds, preventing their state thresholds from
-      exceeding the watchdog window on expensive puzzles.
-    - Macro workers use a 250-state reporting interval even though their primary
-      budget is only 4,000 states; anytime workers retain coarse state logging but
-      gain elapsed-time liveness reports.
-    - A watchdog-terminated guided beam is retried once from the same generic state
-      with a reduced width and budget, sequence macros disabled, and nested
-      continuation/endgame probes disabled. A second failure is final, preventing
-      an infinite restart cycle.
-    - Required-work accounting includes required recovery workers, so exact search
-      cannot launch merely because an opening phase was replaced.
-    - Regression tests cover elapsed-time progress below the state threshold and
-      the bounded director recovery policy.
-    Bounded limitations:
-    - JavaScript cannot preempt a single synchronous state expansion; an individual
-      expansion lasting the entire watchdog window can still be replaced.
-    - A fresh Huge browser run is still required to confirm that the evacuation
-      checkpoint now reaches packing and landmark-bridge consumers in production.
-
-40. Reduce exact transposition churn without multiplying browser memory use.
-    Strong, bounded implementation in solver build 2026-07-22.20:
-    - Exact workers divide a device-memory-aware total transposition budget across
-      active shards instead of always receiving 160,000 entries each.
-    - A lone shard receives up to 320,000 entries, directly addressing the observed
-      saturation and eviction slowdown, while parallel shards remain collectively
-      bounded and low-memory devices receive a smaller total budget.
-    - The selected per-shard capacity is written to the search log and deterministic
-      policy tests cover low-memory, default, and multi-shard allocations.
-    Bounded limitations:
-    - Browser device-memory reporting is coarse and sometimes unavailable; the
-      default is conservative rather than based on live heap pressure.
-    - The table still uses bounded insertion-order replacement and does not resize
-      during a contour.
-
-43. Keep available Ultimate worker capacity productively occupied.
-    Strong, bounded implementation in solver build 2026-07-22.21:
-    - Queued direct searches can use hardware slots released by bounded forward and
-      reverse workers while the evacuation search remains active; evacuation no
-      longer freezes the entire direct queue.
-    - Direct capacity follows remaining reported hardware capacity instead of a
-      fixed two-worker ceiling, while the existing one-active-bridge restriction
-      prevents landmark probes from monopolizing every lane.
-    - Once persistent exact search begins, completion of a bridge or anytime worker
-      triggers checkpoint-guided refill without interrupting or repartitioning the
-      exact contour.
-    - Checkpoints receive at most two anytime attempts. Four rotating strategic
-      profiles and attempt-specific seeds provide bounded diversity, and newly
-      published replayable checkpoints can feed later refill rounds.
-    - Refill logs its active/capacity counts, and scheduler regression checks cover
-      evacuation concurrency, retry bounds, exact-phase refill, and synchronized
-      browser build identifiers.
-    Bounded limitations:
-    - Refill depends on eligible replayable checkpoints. The scheduler intentionally
-      leaves a slot idle when only exhausted or over-attempted work remains.
-    - Concurrent direct workers can increase CPU contention and memory pressure;
-      the Huge browser trace should be compared with build 20 before increasing
-      per-worker search budgets.
-    - The current browser tests validate policy and wiring but do not yet provide
-      the real-browser campaign coverage tracked by item 42.
-
-44. Prevent superseded opening work from delaying checkpoint handoffs and exact
-    search.
-    Strong, bounded implementation in solver build 2026-07-22.23:
-    - While evacuation is active, the director caps direct-search occupancy at two
-      lanes. This preserves useful parallel opening exploration without allowing
-      it to consume every lane and delay the phase-defining checkpoint.
-    - A successful evacuation checkpoint immediately retires queued opening plans.
-      Already-running opening workers are not discarded; they continue as
-      opportunistic solution discovery but no longer count against completion of
-      the required heuristic portfolio.
-    - Packing checkpoints repeat the active-plan release defensively, while bridge
-      retirement and exact handoff behavior remain unchanged.
-    - Required-plan release is idempotent across normal completion, cancellation,
-      watchdog termination, and recovery. A watchdog replacement is required only
-      when the terminated source still had a required obligation.
-    - Deterministic policy tests cover evacuation capacity with one and three side
-      workers, unrestricted post-evacuation capacity, phase-supersession wiring,
-      and synchronized browser build identifiers.
-    Bounded limitations:
-    - An active opportunistic opening worker still consumes real CPU and memory;
-      it is retained because the July 22 build 21 trace showed productive progress.
-    - Browser policy tests do not measure operating-system scheduling or contention.
-      The next Huge trace should confirm earlier packing launch, a completed required
-      portfolio, and transition into persistent exact search.
-
-41. Make expensive strategic ordering analyses productivity-aware.
-    Strong, bounded implementation in solver build 2026-07-22.22:
-    - Persistent exact search now separates parent commitment evidence used for
-      proven box locking from child commitment and doorway signals used only for
-      successor ordering. Every parent still receives the complete locking oracle.
-    - Child strategic analysis is never evaluated for successors already outside
-      the admissible contour, eliminating work that cannot affect that iteration.
-    - A deterministic productivity gate evaluates 64 eligible branching states and
-      compares baseline and enriched successor order. If the richer signals never
-      change the order, it skips 512 eligible states and then samples again.
-    - Telemetry reports strategic ordering evaluations, gated skips, and actual
-      ordering changes in progress and completion logs.
-    - A 10,000-state Huge probe exercised 1,920 evaluated states, 765 gated skips,
-      and 311 genuine ordering changes; exact-path, shard, pruning-differential,
-      saved-solution, smoke, and validation tests remain green.
-    Bounded limitations:
-    - Parent commitment, dependency, local-room, and doorway evidence remains active
-      because it can prove safe box locks or supply multiple existing ordering terms.
-    - The gate measures whether ordering changes, not whether a change ultimately
-      reduces time to a solution; reviewed Huge traces remain necessary.
-    - Guided beam searches retain full strategic scoring because their primary job
-      is first-solution discovery rather than exhaustive contour proof.
-
-27. Split the browser runtime into focused modules.
-    Strong, bounded implementation in solver build 2026-07-22.24:
-    - docs/app.js now owns page state, rendering, controls, timing, and animation;
-      Ultimate and ordinary portfolio orchestration moved to solver-director.js.
-    - Pure gameplay parsing, cloning, movement, goal checks, and serialization live
-      in a reusable UMD module, game-state.js. Search-log text, JSONL conversion,
-      numeric normalization, time formatting, and checkpoint IDs moved to a second
-      independently testable module.
-    - The stable solver-worker.js URL is now a small protocol entry point. It loads
-      the cache-matched board/rules/heuristic engine and search-algorithm module,
-      then dispatches ordinary and bidirectional messages.
-    - solver-engine.js owns parsing, dense state identities, topology, heuristics,
-      commitments, deadlocks, dependencies, local exact analyses, and push rules.
-      solver-search.js owns beams, DFS, IDA*, bridges, bidirectional search, baseline
-      algorithms, reconstruction, checkpoints, and progress emission.
-    - Browser-module tests enforce these source boundaries and exercise typed game
-      movement, telemetry formatting, and worker delegation. A real browser smoke
-      test loaded the modular page, ran Ultimate Bidirectional through the split
-      worker, solved Ultra Tiny, displayed build 24, and produced no console errors.
-    Bounded limitations:
-    - The 119 KB engine still contains several separable domains; deadlock, local
-      analysis, topology, and heuristic modules can be extracted incrementally when
-      those areas next change.
-    - Python, the benchmark validator, and the browser engine still maintain some
-      parallel rule implementations. Shared conformance fixtures protect behavior,
-      but a single cross-runtime implementation is not practical without changing
-      the dependency-free Python/browser architecture.
-    - Browser integration remains a manual smoke check rather than the CI browser
-      matrix tracked by item 30.
-
-
-PARTIALLY DELIVERED
--------------------
-
-12. Bring the Python/local solver closer to the JavaScript solver.
-    Delivered so far:
-    - Exact distinct box-to-goal matching, including larger assignments.
-    - Bounded heuristic caching.
-    - More compact robot-reachability parents and reduced path copying.
-    - Replay-safe globally forced push chains collapse into one search edge in
-      every push-level search while preserving all GUI movement steps.
-    - A deterministic push-beam search has explicit frontier, push-depth, state,
-      cancellation, and wall-clock limits. It is exposed through the CLI and
-      desktop GUI, and is now the opening phase of local Ultimate Search before
-      weighted and exact push A* fallbacks.
-    - Conservative mutually frozen box-component detection now complements the
-      existing static and 2x2 rules in every local search. It requires that no
-      component member have both a free destination and free support square.
-    - An independent mechanical-move graph exhaustively checks all generated 2x3
-      two-box layouts and confirms that the freeze rule and combined Python
-      neighbor pruning retain every transition leading to a solvable state.
-    Remaining:
-    - Align more Ultimate Search phases and telemetry with the browser director.
-    - Port selected topology, sequence macros, closed-diagonal and broader
-      deadlocks, IDA, commitment, dependency, room, corral, and doorway capabilities.
-    - Remove or integrate remaining redundant priority/heuristic state machinery.
-
-14. Build dynamic support-square dependency graphs.
-    Delivered so far:
-    - Required standing squares, routes, blockers, support demand, and access loss
-      influence move ordering and are cached by state.
-    Remaining:
-    - Make dependencies assignment-aware so boxes do not independently select the
-      same nearest goal.
-    - Represent recursive prerequisite box moves and dependency chains.
-    - Track recent enabling actions and explicit staging-side requirements.
-    - Estimate the minimum displacement needed when one box occupies another
-      box's assigned route. Keep this ordering-only until costs are proven
-      independent; one displacement can clear several apparent conflicts.
-    - Use contradictions for pruning only after they are proven and differentially
-      validated.
-
-16. Model typed doorway flow and staging capacity.
-    Delivered so far:
-    - Per-room label imports and exports, empty staging capacity, lane readiness,
-      diagnostics, penalties, and ordering deltas are computed.
-    Remaining:
-    - Model typed crossing sequences and time/order-dependent staging occupancy.
-    - Reason about particular boxes, multiple rooms, shared corridors, simultaneous
-      transfers, and restoration schedules.
-    - Confirm suspected contradictions with exact local reasoning.
-    - Promote only contradictions confirmed by exact reasoning into safe pruning;
-      current flow contradictions remain diagnostic and ordering-only.
-
-17. Add reverse-proven goal-room packing tables that identify safe packing orders
-    and reject room arrangements that cannot be completed from the doorway.
-    Delivered so far:
-    - Bounded one-entrance rooms compile a reusable reverse push-state table from
-      the fully packed, label-correct goal arrangement.
-    - Reverse states retain canonical robot-reachability regions, exact typed box
-      layouts, remaining push distance, and every equally optimal next push.
-    - Exact local-room analysis consults the table before repeating its forward
-      search. Typed two-box tests verify label preservation and multiple optimal
-      doorway choices.
-    - Tables are puzzle-independent and bounded to rooms of at most 16 cells,
-      local domains of at most 24 cells, four boxes, and 20,000 reverse states.
-      Oversized and cutoff cases retain the existing forward-search fallback.
-    - A missing entry is only a proof about the bounded doorway abstraction. It
-      remains diagnostic/ordering evidence and is not promoted to global hard
-      pruning because a box may need to travel farther outside that abstraction.
-    Remaining:
-    - Prove when leaving and re-entering a one-entry room cannot help, allowing a
-      complete table miss to become a safe hard rejection in those cases.
-    - Extend table construction to larger rooms with compact state storage,
-      decomposed subrooms, or on-disk/generated pattern data.
-    - Share compiled immutable tables across workers once construction cost and
-      structured-clone size are shown to be beneficial.
-
-18. Add closed-diagonal deadlock detection and more complete freeze detection.
-    Delivered so far:
-    - Browser and Python searches reject a conservative two-row wall-ended
-      diagonal when each open diagonal square is flanked by exactly one box and
-      one wall, both boxes face outward toward their wall endpoint, and no square
-      in the pattern offers a goal escape.
-    - The detector is board-derived and contains no level names, coordinates, or
-      saved-solution knowledge.
-    - Independent unpruned state graphs enumerate every two-box/two-wall border
-      arrangement and both mirror orientations. Only the two outward-facing cases
-      are accepted, and both are exhaustively proven unsolvable.
-    - The generated family exposed two tempting but solvable false-positive forms
-      during development; they remain rejected by the final detector. A goal-escape
-      variant is also proven solvable and participates in the combined hard-pruning
-      differential suite.
-    - The known Huge replay, generated validation families, and all existing hard
-      pruning differentials remain intact under solver build 2026-07-22.13.
-    Remaining:
-    - Recognize box-ended diagonals and safe goal/wall sequences without losing
-      valid inward-opening pushes.
-    - Add broader transformed, typed, multi-box, and generated diagonal families.
-    - Extend recursive freeze detection beyond the current conservative local
-      component rule, promoting new cases only after differential validation.
-
-19. Add small deadlock pattern databases and use exhaustive local enumeration to
-    recognize additional unsalvageable box patterns safely.
-    Delivered so far:
-    - The browser solver performs a cached relaxed local push search around the
-      moved box for small non-branching neighborhoods with two to five boxes and
-      at least two distinct labels.
-    - The abstraction grants an omnipresent robot and lets boxes escape through
-      any real floor boundary. A hard rejection therefore requires exhaustion
-      even under rules more permissive than the real puzzle.
-    - Static 9x9 windows are compiled once by center and limited to 24 floor cells;
-      each dynamic pattern proof is limited to 64 states. Cutoffs retain the move.
-    - A novel typed corridor-order conflict is detected where individual static
-      distances remain finite and the 2x2/freeze rules do not fire. Independent
-      unpruned enumeration proves it unsolvable, while a larger bypass form is
-      exhaustively solvable and retained.
-    - Build 2026-07-22.16 exposes pattern calls, cache hits, explored states, and
-      prune counts. The known Huge replay remains valid after static-window caching
-      removed the initial prototype's runtime regression.
-    Remaining:
-    - Generate broader wall-pattern families and transformed typed cases rather
-      than relying on one authored corridor-order seed.
-    - Port the proven pattern subset to Python after its browser bounds and
-      generated validation families stabilize.
-    - Add generic-box patterns that improve on existing 2x2/freeze rules without
-      making open warehouse searches pay the local-enumeration cost.
-    - Consider offline canonical pattern generation and symmetry reduction for
-      larger tables after deterministic performance gates exist.
-
-20. Build pattern databases for the lower chamber and other small, strategically
-    important rooms. Use exact local costs or dependency-aware conflict bounds to
-    capture interaction and ordering costs missing from assignment distance.
-    Delivered so far:
-    - One-entrance goal rooms compile reverse multi-box push tables for two to four
-      boxes whose complete typed goal sets belong to that room. A room may select
-      an exclusive typed subset even when shared generic goals are also present.
-    - The abstraction retains the full board's walls, labels, box collisions, and
-      required support squares while removing unrelated boxes and granting the
-      robot access everywhere. Its discovered distances are therefore admissible
-      lower bounds on pushes by those labels.
-    - The heuristic replaces the selected labels' Hungarian contribution with the
-      stronger pattern value. It does not add both costs, and a label-disjoint
-      combination prevents overlapping room/label patterns from being counted
-      twice.
-    - Tables are capped at 12,000 states. Distances discovered by reverse BFS stay
-      exact after a cutoff; a missing entry simply retains ordinary assignment.
-    - A typed interaction fixture independently proves the exact cost increase
-      from Hungarian 1 to pattern 3. The 250-push Huge replay checks admissibility
-      at every push; its lower chamber automatically selects C/D and rejects no
-      valid state. No level name, saved route, or fixed coordinate enters search.
-    - Build 2026-07-22.17 reports table builds, states, hits, and cumulative bound
-      improvement. Prepared-board seeds reuse completed tables across workers.
-    Remaining:
-    - Support shared-label/generic goal subsets by minimizing over every valid
-      candidate-box selection before using a cost in the lower bound.
-    - Extend beyond four boxes with dense encodings, symmetry reduction, selective
-      partitions, or offline generation without making worker startup excessive.
-    - Add generated interacting-room benchmark families that measure bound gains
-      and state reductions rather than only correctness and replay admissibility.
-    - Port the proven bounded subset to Python after the browser representation and
-      selection policy stabilize.
-
-21. Add admissible lower-bound terms where they can be proven, and otherwise
-    ordering penalties, for boxes competing over corridors, gates, staging cells,
-    or robot support squares.
-    Delivered so far:
-    - The browser solver identifies pairs of unique-label boxes whose current
-      shortest push corridors share a board-derived tunnel or articulation cell.
-      Sharing only selects a candidate; it never adds cost by itself.
-    - A reverse two-box table keeps walls, labels, box collisions, and support
-      squares while removing every other box and granting the robot access
-      everywhere. Only an exact table hit can strengthen the lower bound.
-    - Proven pair distance replaces the same two Hungarian contributions rather
-      than being added to them. Room and pair candidates enter one label-disjoint
-      selection, exact for up to 20 involved labels, preventing overlapping
-      conflicts from being counted twice.
-    - Pair candidates are limited to at most 18 independent assignment pushes and
-      tables to 4,000 reverse states. Cutoffs, distant pairs, shared-label goals,
-      and table misses retain the ordinary assignment bound.
-    - An independent exact push search verifies a generic two-room swap where the
-      assignment bound is 9 and the pair-conflict bound and true optimum are 11.
-      Separate tests cover overlap selection, cutoff fallback, prepared-table
-      reuse, and all 250 pushes of the Huge diagnostic replay.
-    - The initial unrestricted prototype built 48,000 unused pair states at the
-      Huge root. Distance gating and room-pattern deduplication restore root setup
-      to its prior range while keeping the proven interaction fixture active.
-    - Build 2026-07-22.18 reports candidates, table builds/states, hits, and
-      cumulative pair-bound improvement.
-    Remaining:
-    - Handle generic/shared-label pairs by minimizing the joint conflict cost over
-      every compatible box-to-goal assignment before tightening the bound.
-    - Generalize from disjoint pairs to three-or-more-box gate, staging-capacity,
-      and support-square conflicts when a safe non-overlap proof is available.
-    - Add generated chokepoint families and performance baselines that quantify
-      state reductions on multiple conflict shapes and distances.
-    - Port the stable bounded conflict subset to Python.
-
-22. Introduce true feature-space search queues rather than relying only on fixed
-    heuristic beam bands. Preserve candidates across dimensions such as room
-    progress, gate state, packing commitments, evacuation progress, mobility, and
-    controlled heuristic detours.
-    Delivered so far:
-    - Oversized browser beam layers compile coarse joint feature cells from
-      heuristic slack, topology/room pressure, evacuation pressure, packing
-      evidence, doorway state and transition, support dependency, local-room
-      guidance, and robot mobility.
-    - Balanced, detour, and milestone profiles reserve 35%, 45%, and 55% of their
-      bounded layer respectively for round-robin feature-cell selection. Remaining
-      capacity retains the established heuristic bands and push/strategic classes.
-    - Selection runs before expensive canonical reachability filtering and again
-      afterward, when robot-region mobility is available. Both stages remain under
-      the existing beam width and transposition limits.
-    - A diagnostic switch restores legacy score-band selection. Push A*, IDA*,
-      discrepancy search, and other exact engines are unchanged and complete
-      within their existing bounds.
-    - A synthetic dominance fixture proves that rare room/gate/packing/dependency
-      cells survive when scalar-score selection would retain only one feature
-      class. Telemetry reports observed cells, feature selections, and remaining
-      band selections.
-    - Build 2026-07-22.19 keeps smoke at 3/3 valid solutions and validation at
-      16/16 while exposing the archive counters in worker performance reports.
-      Under the same validation budget, generated rotated Medium improves from
-      20 pushes to 18; total suite visitation changes only from 7,283 to 7,284.
-    Remaining:
-    - Preserve productive feature elites across depths/restarts rather than
-      rebuilding a layer-local archive every selection pass.
-    - Adapt cell boundaries and profile quotas from observed occupancy, progress,
-      and yield instead of using fixed coarse thresholds.
-    - Represent individual room, gate, commitment, and enabling-action identities
-      where aggregate values currently merge strategically different situations.
-    - Add generated feature-conflict benchmarks that measure solution discovery
-      and state efficiency, then port the stable policy to Python's push beam.
-
-32. Complete project and release hygiene.
-    Delivered so far:
-    - Added concise architecture documentation defining the general-purpose search
-      rule, runtime boundaries, and the proper diagnostic role of saved solutions.
-    Remaining:
-    - Add a LICENSE, CONTRIBUTING.md, and a changelog or release-note convention.
-    - Keep the authoritative implementation and browser/Python capability
-      differences explicit as parity work continues.
-
-34. Replace manually synchronized browser build strings with one generated or
-    centrally defined solver/build version.
-    Delivered so far:
-    - The homepage now displays a compact solver-build badge populated directly
-      from the same SOLVER_BUILD constant used to version the worker URL and
-      search-log events. Build 2026-07-22.19 is visible without opening developer
-      tools, making a stale cached application immediately recognizable.
-    - A policy test requires the badge, binding, and app.js cache-busting query to
-      agree with the loaded solver build.
-    Remaining:
-    - Generate or centrally inject the version into index.html so styles,
-      levels, policy modules, the application, and worker cannot drift.
-    - Add a release/deploy check that rejects mismatched cache revisions.
-
-36. Incrementally update exact box-to-goal assignments after one box moves.
-    Delivered so far:
-    - Browser successor layouts carry a weak parent hint identifying the single
-      changed box row. Cached label assignments reuse every unchanged distance
-      row and repair the Hungarian solution with one augmenting path.
-    - Repair activates for label groups of at least five boxes; profiling showed
-      that full matching is faster and leaner for the common smaller groups.
-    - The repair is O(n^2) worst case rather than the proposed O(n); it remains
-      an improvement over rebuilding the O(n^3) assignment and returns exactly
-      the same admissible value.
-    - Deterministic randomized tests compare 840 one-row repairs, including
-      unreachable edges, against full Hungarian recomputation.
-    - Telemetry counts incremental calls, fallbacks, and reused matrix rows.
-      Solver build 2026-07-22.15 exposes these counters.
-    Bounded limitations:
-    - The optimization currently applies to the browser solver; Python still
-      recomputes each label's assignment after a cache miss.
-    - Layouts without a parent assignment safely use the full solver.
-    - Assignment details are weakly keyed by the box-array object and structurally
-      share unchanged rows, so they follow search-state lifetime rather than
-      accumulating in a separate strong cache.
-
-
-YET TO BE IMPLEMENTED AS BACKLOG CAPABILITIES
-----------------------------------------------
-
-23. Add comprehensive relevance-based move ordering connected to the current
-    bottleneck, unresolved goal, dependency chain, or recent enabling action while
-    retaining completeness in exact searches. Existing support, room, and doorway
-    deltas provide incidental foundations but not the full capability.
-
-24. Add partial-order reduction for independent pushes so equivalent interleavings
-    of noninteracting box moves are not explored repeatedly, without eliminating
-    sequences whose robot access or support dependencies differ.
-
-25. Add symmetry reduction where walls, goals, box labels, and the current state
-    genuinely permit it. Canonicalize mirrored/rotated or interchangeable-box
-    states only when typed-label semantics are preserved.
-
-26. Improve screen-reader support for the web board with an accessible board or
-    live description of the robot, boxes, goals, moves, and completion state.
-    Add live status announcements and a reduced-motion mode for transitions and
-    solver playback.
-
-28. Review desktop and mobile layouts for intuitive human formatting while
-    preserving the current color palette and theme. Improve desktop hierarchy and
-    controls, and substantially improve responsive phone layout, sizing,
-    navigation, logs, and touch interaction. This subjective presentation task
-    remains the lowest priority.
-
-30. Add real-browser integration tests, preferably with Playwright, for loading a
-    level, keyboard and touch play, hints, solver start/stop, worker failures,
-    stale worker messages, undo/reset during animation, completion flow, stored
-    bounds, and responsive layouts. Run a small browser matrix in CI rather than
-    relying only on Node-hosted worker and policy tests.
-
-31. Add deterministic performance and memory regression gates. Track visited
-    states, generated states, peak retained states, and heap use separately from
-    machine-sensitive elapsed time. Store reviewed baselines with tolerances,
-    fail CI on material regressions in representative smoke cases, and run the
-    expensive Huge suite on a scheduled or explicitly requested workflow.
-
-33. Expand compatibility and quality checks. Test the documented Python 3.10+
-    range instead of only Python 3.12, retain the supported Node version check,
-    and add formatting, linting, type checking, and coverage reporting with
-    explicit thresholds appropriate to the dependency-free project.
-
-37. Add proven goal-cut decomposition. Detect separators that divide goals and
-    candidate boxes into closed, label-compatible components, then solve and
-    combine truly independent subproblems. The proof must account for robot
-    traversal, box crossings, shared staging/support cells, and ordering; a visual
-    partition or a cut made only of goals is not sufficient for completeness.
+30. Add real-browser integration tests.
+   Current status: Backlog; manual smoke coverage exists.
+   Finish gate:
+   - Add Playwright coverage for page load, level selection, keyboard and touch
+     play, hint/solve/stop, undo/reset during animation, stored bounds, completion,
+     stale messages, worker errors, build display, and responsive breakpoints.
+   - Run a small browser matrix in CI against the actual modular scripts and Web
+     Worker entry.
 
 42. Add an end-to-end Ultimate campaign regression for checkpoint consumption.
-    Assert that an evacuation phase publishes a replayable checkpoint, packing or
-    milestone work consumes it, and eligible checkpoint/landmark pairs either start
-    a bridge or log a precise incompatibility reason. This should be a bounded
-    deterministic fixture plus a real-browser test, not an assertion tied to the
-    Huge board.
+   Current status: Backlog; policy wiring tests exist.
+   Finish gate:
+   - Build a bounded, puzzle-independent fixture where evacuation publishes a
+     replayable checkpoint and packing/milestone work consumes it.
+   - Assert that compatible checkpoint/landmark pairs launch a bridge and that
+     incompatible pairs log a precise reason.
+   - Cover the full worker/director path in the real-browser suite rather than
+     matching source text or depending on the Huge board.
+
+Sprint completion gate:
+All four items are Done, CI runs the new browser and generated gates, and the
+existing suites remain green.
+
+
+Sprint 16 - Deterministic performance and release gates
+-------------------------------------------------------
+
+Priority reason:
+Later optimization sprints need trustworthy memory/state baselines, compatible
+runtime coverage, and one authoritative build identifier.
+
+7. Add detailed solver performance instrumentation.
+   Current status: Strong, bounded.
+   Existing foundation:
+   - Timings and counters cover reachability, matching, hashing, pruning, caches,
+     frontier behavior, strategic reasoning, heap samples, worker lifecycle, and
+     isolated benchmark processes.
+   Finish gate:
+   - Give the bidirectional director the same lifecycle accounting as ordinary
+     portfolios.
+   - Standardize supported/unsupported memory fields and document unavoidable
+     browser GC limitations.
+   - Add tests proving every performance schema remains stable across algorithms.
+
+31. Add deterministic performance and memory regression gates.
+   Current status: Backlog.
+   Finish gate:
+   - Store reviewed baselines and tolerances for visited/generated states, retained
+     states, frontier peaks, transposition evictions, and heap peaks.
+   - Separate deterministic counters from machine-sensitive elapsed time.
+   - Fail CI on material smoke/validation regressions and add a scheduled or
+     explicitly dispatched Huge performance workflow.
+
+33. Expand compatibility and quality checks.
+   Current status: Backlog.
+   Finish gate:
+   - Test the documented Python 3.10+ range and supported Node range.
+   - Add formatting, linting, type checking where practical, and coverage reports
+     with reviewed thresholds.
+   - Keep dependency-free browser deployment and deterministic tests intact.
+
+34. Replace manually synchronized browser build strings.
+   Current status: Partial.
+   Existing foundation:
+   - The homepage badge, worker URL, search events, and tests expose the current
+     build and currently use synchronized cache queries.
+   Finish gate:
+   - Establish one authoritative version source and generate or inject every HTML,
+     policy, UI, director, engine, search, and worker cache revision.
+   - Add a CI/release check that rejects drift.
+
+Sprint completion gate:
+All four items are Done, build drift is mechanically impossible in normal
+development, and deterministic regression gates protect later tuning.
+
+
+Sprint 17 - Dense reusable state and assignment core
+----------------------------------------------------
+
+Priority reason:
+These hot-path foundations reduce the cost of every later exact, heuristic, and
+decomposition feature.
+
+8. Replace repeated single-box searches with a compiled push graph.
+   Current status: Strong, bounded.
+   Existing foundation:
+   - Geometry nodes encode box cells and robot-region representatives; compiled
+     transitions match the reference implementation.
+   Finish gate:
+   - Compile reusable reverse feasibility/distance tables from typed goals.
+   - Preserve generic-goal compatibility and prove equivalence against the current
+     player-aware search on generated boards.
+
+9. Replace string-heavy hot-path state data with dense representations.
+   Current status: Strong, bounded.
+   Existing foundation:
+   - Dense cell IDs, typed arrays, packed collision-free BigInt identities, compact
+     parents, and deferred walk reconstruction serve all major browser searches.
+   Finish gate:
+   - Replace remaining coordinate-array clones in measured hot paths with a dense
+     immutable layout or copy-on-write representation.
+   - Add box occupancy bitsets and incrementally updated identities where profiling
+     proves a gain.
+   - Retain readable boundary formats only for protocol, logs, and diagnostics.
+
+10. Reuse immutable board analysis across web workers.
+    Current status: Strong, bounded.
+    Existing foundation:
+    - Prepared seeds share topology, push distances, dense indices, graphs, and
+      completed interaction tables through structured cloning.
+   Finish gate:
+   - Quantify startup and clone costs, eliminate duplicated reconstruction, and
+     reuse every safe immutable analysis product.
+   - Treat lack of SharedArrayBuffer on ordinary GitHub Pages as a platform
+     boundary, not a reason to duplicate avoidable computation.
+
+36. Incrementally update exact box-to-goal assignments after one box moves.
+    Current status: Strong, bounded.
+    Existing foundation:
+    - Browser matching reuses unchanged rows and repairs groups of at least five
+      boxes with one O(n^2) augmenting path, exactly matching full Hungarian results.
+   Finish gate:
+   - Profile and select the optimal crossover automatically or from reviewed data.
+   - Port the safe incremental representation to Python.
+   - Retain randomized equivalence tests, unreachable-edge coverage, and telemetry;
+     document why O(n) is unattainable if the exact assignment update requires
+     O(n^2) information.
+
+Sprint completion gate:
+All four items are Done, both runtimes retain exact assignment semantics, and the
+reviewed benchmarks show no material regression.
+
+
+Sprint 18 - Proven deadlocks, commitments, and local exact reasoning
+-------------------------------------------------------------------
+
+Priority reason:
+Safe pruning and proven box locking can shrink the search space dramatically, but
+must precede more aggressive decomposition and ordering.
+
+13. Add a goal-commitment safety oracle.
+    Current status: Strong, bounded.
+    Existing foundation:
+    - Temporary, conditional, and proven placements use matching, dependencies,
+      doorway flow, immovability, support demand, and bounded room evidence.
+   Finish gate:
+   - Extend movable proof to every local room/corral class completed in item 15.
+   - Make support prerequisites assignment-aware and recursively proven.
+   - Differentially validate every new lock and preserve the full Huge replay.
+
+15. Add cached exact local searches for rooms and corrals.
+    Current status: Strong, bounded.
+    Existing foundation:
+    - Bounded exact abstractions reason about packing, transfers, doorway
+      restoration, boundary viability, and reopening access.
+   Finish gate:
+   - Add compact state storage and decomposition so every room/corral within
+     documented practical limits receives a conclusive result.
+   - Define and prove when local unsolvability safely implies global rejection.
+   - Expose cutoff versus proof explicitly and cache only state-complete evidence.
+
+18. Add closed-diagonal deadlock detection and complete freeze detection.
+    Current status: Partial.
+    Existing foundation:
+    - Conservative wall-ended diagonals and frozen components are independently
+      enumerated, transformed, and replay-tested in browser and Python.
+   Finish gate:
+   - Add proven box-ended, wall/goal sequence, recursive freeze, typed, and
+     multi-box variants.
+   - Generate all transformed families and promote only independently proven
+     patterns to pruning.
+
+19. Add small deadlock pattern databases.
+    Current status: Partial.
+    Existing foundation:
+    - A cached relaxed local search proves typed corridor-order conflicts under
+      rules more permissive than the real puzzle.
+   Finish gate:
+   - Generate canonical wall/box/label pattern families, add symmetry reduction,
+     include useful generic-box cases, and port the proven subset to Python.
+   - Establish deterministic cost gates so local enumeration cannot regress open
+     warehouse searches.
+
+Sprint completion gate:
+All four items are Done or carry only a mathematically explicit size boundary;
+every hard rejection is independently proven and differentially tested.
+
+
+Sprint 19 - Admissible interaction heuristics and decomposition
+---------------------------------------------------------------
+
+Priority reason:
+After local proof machinery is complete, use it to close the large assignment
+heuristic gap without sacrificing admissibility.
+
+17. Add reverse-proven goal-room packing tables.
+    Current status: Partial.
+    Existing foundation:
+    - Typed one-entrance rooms up to four boxes compile reverse packing tables with
+      exact distances and all optimal next pushes.
+   Finish gate:
+   - Prove the closed-room conditions under which leaving and re-entering cannot
+     help, making complete misses safe rejections.
+   - Extend practical room coverage with dense storage or proven decomposition.
+   - Reuse immutable tables across workers based on measured clone/build costs.
+
+20. Build strategic multi-box pattern databases.
+    Current status: Partial.
+    Existing foundation:
+    - Label-disjoint room patterns replace Hungarian contributions with exact
+      discovered costs and remain admissible after bounded cutoffs.
+   Finish gate:
+   - Support generic/shared-label candidate selection by minimizing over compatible
+     assignments.
+   - Extend useful coverage beyond four boxes through safe partitions or symmetry.
+   - Add generated interacting-room efficiency benchmarks and port the stable
+     subset to Python.
+
+21. Add proven corridor, gate, staging, and support conflict bounds.
+    Current status: Partial.
+    Existing foundation:
+    - Unique-label pair conflicts use exact relaxed two-box tables and a
+      label-disjoint maximum without double counting.
+   Finish gate:
+   - Handle shared/generic labels by minimizing over compatible assignments.
+   - Add proven three-or-more-box capacity conflicts where non-overlap is explicit.
+   - Add generated chokepoint baselines and port the stable subset to Python.
+
+37. Add proven goal-cut decomposition.
+    Current status: Backlog.
+   Finish gate:
+   - Detect label-compatible separators whose subproblems are independent under
+     robot travel, box crossing, shared support/staging cells, and ordering.
+   - Prove the independence conditions, solve components separately, combine
+     replayable paths, and fall back unchanged whenever proof is incomplete.
+   - Validate on generated positive and near-miss counterexample families.
+
+Sprint completion gate:
+All four items are Done, every lower-bound combination remains admissible, and
+decomposition never activates without a checked independence certificate.
+
+
+Sprint 20 - Assignment-aware dependencies and relevant ordering
+---------------------------------------------------------------
+
+Priority reason:
+Use the stronger assignments and local proofs from Sprint 19 to guide discovery
+through setup moves without making exact search incomplete.
+
+14. Build dynamic support-square dependency graphs.
+    Current status: Partial.
+    Existing foundation:
+    - Standing squares, routes, blockers, support demand, and access loss influence
+      ordering and are cached by state.
+   Finish gate:
+   - Tie dependencies to the current compatible assignment, represent recursive
+     prerequisites and cycles, track enabling actions and staging sides, and
+     estimate minimum blocker displacement without double counting.
+   - Prune only contradictions confirmed by exact local proof.
+
+16. Model typed doorway flow and staging capacity.
+    Current status: Partial.
+    Existing foundation:
+    - Label imports/exports, staging capacity, lane readiness, penalties, deltas,
+      and diagnostics exist per room.
+   Finish gate:
+   - Model ordered crossing schedules for particular boxes across multiple rooms,
+     shared corridors, simultaneous transfers, and required restoration.
+   - Confirm every pruning contradiction with exact reasoning.
+
+23. Add comprehensive relevance-based move ordering.
+    Current status: Backlog with incidental support/doorway foundations.
+   Finish gate:
+   - Connect successor ordering to the current bottleneck, unresolved assignment,
+     dependency chain, recent enabling action, and restoration obligation.
+   - Preserve completeness in exact searches and add ablation telemetry showing
+     when each signal changes order and improves reviewed cases.
+
+41. Make expensive strategic ordering analyses productivity-aware.
+    Current status: Strong, bounded in build 2026-07-22.22.
+    Existing foundation:
+    - Exact search evaluates child strategic signals only inside the contour and
+      gates them using observed ordering changes.
+   Finish gate:
+   - Measure downstream search yield rather than order changes alone.
+   - Apply per-signal and per-phase gates, retain always-required proof evidence,
+     and validate state/time improvements on generated and Huge probes.
+
+Sprint completion gate:
+All four items are Done; ordering is assignment-aware, measurable, and complete,
+while pruning uses only exact contradictions.
+
+
+Sprint 21 - Search-space redundancy and adaptive diversity
+----------------------------------------------------------
+
+Priority reason:
+Once dependencies and relevance are explicit, safely remove equivalent work and
+preserve strategically different work.
+
+22. Introduce true feature-space search queues.
+    Current status: Partial.
+    Existing foundation:
+    - Bounded browser beams reserve joint feature cells for room, gate, evacuation,
+      commitment, doorway, dependency, local guidance, and mobility diversity.
+   Finish gate:
+   - Preserve productive elites across depths/restarts, adapt cell boundaries and
+     quotas from measured yield, and track individual strategic identities.
+   - Add generated feature-conflict efficiency families and port the stable policy
+     to Python.
+
+24. Add partial-order reduction for independent pushes.
+    Current status: Backlog.
+   Finish gate:
+   - Define a conservative independence relation covering box interaction, robot
+     access, support squares, dependencies, commitments, and macro effects.
+   - Canonicalize equivalent interleavings only under a proof, retain a fallback,
+     and exhaustively validate small multi-box cases.
+
+25. Add symmetry reduction.
+    Current status: Backlog.
+   Finish gate:
+   - Detect valid wall/goal/label symmetries and interchangeable boxes.
+   - Canonicalize states without merging typed semantics or robot-access classes.
+   - Validate mirrored/rotated/generated equivalence and quantify state reduction.
+
+27. Complete browser runtime modularization.
+    Current status: Strong, bounded in build 2026-07-22.24.
+    Existing foundation:
+    - UI, gameplay rules, telemetry formatting, director, worker protocol,
+      board/heuristic engine, and search algorithms have explicit tested modules.
+   Finish gate:
+   - Split the remaining engine into focused topology, heuristic, deadlock, and
+     local-analysis modules as those interfaces stabilize in this sprint.
+   - Centralize shared browser rule primitives and remove avoidable test-loader
+     duplication without adding a bundler or weakening GitHub Pages deployment.
+   - Treat Python/browser language separation as an architectural boundary while
+     keeping shared conformance authoritative.
+
+Sprint completion gate:
+All four items are Done, reductions have proof-backed fallbacks, and adaptive
+diversity is protected by deterministic performance gates.
+
+
+Sprint 22 - Ultimate director lifecycle and exact-search utilization
+--------------------------------------------------------------------
+
+Priority reason:
+Finish orchestration only after Sprint 15 supplies real-browser campaign tests and
+Sprint 16 supplies deterministic resource gates.
+
+39. Keep expensive discovery workers live and recover silent lanes.
+    Current status: Strong, bounded in build 2026-07-22.20.
+    Existing foundation:
+    - Elapsed-time liveness, bounded watchdog recovery, and required-work recovery
+      accounting prevent silent guided workers from freezing the portfolio.
+   Finish gate:
+   - Add cooperative yielding or bounded work slices around expansions that can
+     exceed liveness windows.
+   - Prove recovery behavior in the browser campaign suite and retain one bounded
+     recovery maximum.
+
+40. Reduce exact transposition churn without multiplying memory.
+    Current status: Strong, bounded in build 2026-07-22.20.
+    Existing foundation:
+    - Device-memory-aware total budgets give lone shards more capacity while
+      bounding parallel shards.
+   Finish gate:
+   - Replace insertion-order eviction with a measured contour-aware policy.
+   - Adapt capacity using supported live pressure signals without exceeding the
+     deterministic total budget; retain a conservative fallback.
+
+43. Keep available Ultimate worker capacity productively occupied.
+    Current status: Strong, bounded in build 2026-07-22.21.
+    Existing foundation:
+    - Capacity follows released lanes, bridges are bounded, and exact-phase slots
+      receive limited checkpoint-guided refills.
+   Finish gate:
+   - Use campaign-test and resource telemetry to choose work by expected marginal
+     value rather than fixed retry/profile counts.
+   - Prove no opportunistic lane can starve a required handoff or exact shard.
+
+44. Prevent superseded opening work from delaying handoffs and exact search.
+    Current status: Strong, bounded in build 2026-07-22.23.
+    Existing foundation:
+    - Evacuation reserves direct capacity, pending opening work retires, and active
+      opening work becomes opportunistic with idempotent required accounting.
+   Finish gate:
+   - Exercise supersession, watchdog recovery, packing launch, portfolio completion,
+     and exact transition in deterministic browser campaigns.
+   - Add resource-aware cancellation/demotion criteria for active opportunistic
+     work while preserving productive solution discovery.
+
+Sprint completion gate:
+All four items are Done, browser campaigns prove checkpoint-to-exact progress, and
+resource gates show no starvation or unbounded recovery.
+
+
+Sprint 23 - Python parity, accessibility, presentation, and release readiness
+----------------------------------------------------------------------------
+
+Priority reason:
+Finish the local solver and user-facing project after the authoritative browser
+capabilities and interfaces stabilize, avoiding repeated parity and UI rewrites.
+
+12. Bring the Python/local solver to intentional parity with JavaScript.
+    Current status: Partial.
+    Existing foundation:
+    - Exact matching, bounded caches, compact reachability, forced macros, bounded
+      push beam, local Ultimate fallback, freeze detection, and differential tests.
+   Finish gate:
+   - Port the stable topology, sequence, deadlock, IDA*, commitment, dependency,
+     room/corral, doorway, interaction-bound, feature-queue, and telemetry subsets
+     selected by prior sprints.
+   - Document intentional browser-only capabilities and remove redundant local
+     priority/heuristic machinery.
+
+26. Improve screen-reader and reduced-motion support.
+    Current status: Backlog.
+   Finish gate:
+   - Provide an accessible board/live description of robot, boxes, goals, moves,
+     solve state, and solver status.
+   - Add correctly scoped live announcements, keyboard focus behavior, and a
+     reduced-motion mode for transitions and playback.
+   - Cover these behaviors in the browser integration suite.
+
+28. Complete desktop and mobile interaction/layout review.
+    Current status: Backlog.
+   Finish gate:
+   - Improve hierarchy, controls, responsive board sizing, navigation, logs, and
+     touch interaction while preserving the established palette and theme.
+   - Validate supported breakpoints, overflow, focus, and touch targets in browser
+     tests and visual review.
+
+32. Complete project and release hygiene.
+    Current status: Partial.
+    Existing foundation:
+    - Architecture documentation defines the general-purpose rule, modular runtime,
+      and diagnostic role of saved solutions.
+   Finish gate:
+   - Add LICENSE, CONTRIBUTING.md, changelog/release-note convention, support
+     matrix, and explicit browser/Python capability table.
+   - Ensure setup, testing, benchmarking, deployment, and versioning instructions
+     match the final repository.
+
+48. Consolidate public search modes and remove redundant compatibility bloat.
+    Current status: Backlog.
+    Audit finding:
+    - Python exposes both Ultimate Search and Fast Portfolio even though
+      `portfolio_search` directly calls `ultimate_search`; `fast`, `portfolio`,
+      `ultimate`, `a*`, and `push-a*` add further aliases.
+    - The browser likewise treats `ultimate`, `portfolio`, and `fast` identically,
+      while DFS, BFS, Greedy, A*, Push Greedy, Push A*, weighted Push A*, Push Beam,
+      regular Ultimate, and Ultimate Bidirectional all appear as peer user choices.
+      Most are engine strategies, teaching baselines, or compatibility names rather
+      than distinct product modes.
+   Finish gate:
+   - Define a small user-facing contract such as Recommended, Quick/anytime, and
+     Exact/proof, with honest optimality, completeness, and resource descriptions.
+   - Keep genuinely useful internal strategies available to the director,
+     benchmarks, and an explicitly advanced/developer interface instead of the
+     primary selector.
+   - Deprecate and then remove duplicate aliases, the Fast Portfolio GUI entry,
+     obsolete one-file compatibility launchers, and duplicated dispatch branches;
+     retain a documented migration path where external CLI compatibility matters.
+   - Use ablation and deterministic benchmark evidence before removing a genuinely
+     distinct strategy from the portfolio, and simplify tests/docs after removal.
+
+Sprint completion gate:
+All five items are Done, supported interfaces are documented and accessible, both
+runtimes have intentional capability parity, redundant public modes are gone, and
+the project is release-ready.
+
+
+Sprint 24 - User-authored puzzle workflow
+-----------------------------------------
+
+Priority reason:
+Puzzle creation is intentionally last. It should build on the final shared rule
+contract and solver statuses rather than introduce a third parser or imply that a
+budget cutoff means a user puzzle is impossible.
+
+49. Add a browser puzzle editor.
+    Current status: Backlog.
+   Finish gate:
+   - Support create, resize, paint/erase, typed box/goal labels, robot placement,
+     undo/redo, clear, and test-play using the existing game-state rules.
+   - Make mouse, touch, and keyboard editing accessible, preserve work locally, and
+     warn before destructive changes.
+   - Reuse the canonical parser and renderer; do not create editor-only Sokoban
+     semantics.
+
+50. Define canonical puzzle import, export, and sharing.
+    Current status: Partial.
+    Existing foundation:
+    - Python can load UTF-8 text boards and shared conformance JSON defines the
+      current symbol rules.
+   Finish gate:
+   - Specify a versioned interchange format plus lossless plain-text import/export
+     for board rows, typed labels, optional title/author, and future-safe metadata.
+   - Use one validation fixture set across browser, Python, editor, benchmarks, and
+     documentation; reject unsupported versions and malformed metadata clearly.
+   - Add copy/download/upload flows and stable board-content hashes without
+     requiring a hosted backend.
+
+51. Add creator validation and solver-assisted publishing checks.
+    Current status: Backlog.
+   Finish gate:
+   - Report structural errors immediately: robot count, box/goal label counts,
+     disconnected or unreachable floor where relevant, invalid symbols, and
+     obvious static dead starts.
+   - Let authors test-play, request a solution, and attach a replay-validated
+     solution certificate. Distinguish proven-unsolvable, cutoff, cancelled, and
+     failed exactly as item 46 defines.
+   - Never require the bounded guided solver to certify a puzzle before it can be
+     saved; make unverified status explicit and test editor round trips with
+     generated boards.
+
+Sprint completion gate:
+All three items are Done; a user can author, validate, test, save, exchange, and
+reopen a typed Sokomind puzzle without creating a parser or rule fork.
+
+
+Campaign completion definition
+------------------------------
+
+The improvement campaign is complete when:
+
+- all 51 numbered improvements are Done or have a narrowly justified permanent
+  Strong, bounded boundary;
+- every future sprint completion gate has passed;
+- exact search completeness and every hard-pruning proof are independently tested;
+- production search contains no puzzle-specific knowledge;
+- browser and Python capability differences are intentional and documented;
+- deterministic performance gates prevent state or memory regressions;
+- real-browser campaigns cover the complete checkpoint-to-exact lifecycle; and
+- the authoritative version, documentation, CI, benchmark baselines, and release
+  artifacts agree.
