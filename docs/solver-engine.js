@@ -348,6 +348,17 @@ function createPerformanceMetrics() {
     pushNeighborCalls: 0,
     pushCandidates: 0,
     pushesRetained: 0,
+    macroIntermediateStates: 0,
+    macroHardDeadlockRejections: 0,
+    macroDiscoveryRejections: 0,
+    macroEgressRejections: 0,
+    macroPackingRejections: 0,
+    macroGoalAccessRejections: 0,
+    macroTargetUnreachableStates: 0,
+    macroCheapExpansions: 0,
+    macroFullExpansions: 0,
+    macroWidenings: 0,
+    macroEndpointsRetained: 0,
     staticDeadPrunes: 0,
     dynamicDeadPrunes: 0,
     patternDeadlockCalls: 0,
@@ -4222,6 +4233,14 @@ function expandPushMacro(next, board, enabled = true, options = {}) {
   return collapseForcedPushes(next, board, 32, options);
 }
 
+function recordMacroDiscoveryRejection(metrics, reason) {
+  if (!metrics) return;
+  metrics.macroDiscoveryRejections++;
+  if (reason === "stranded-export") metrics.macroEgressRejections++;
+  if (reason === "packing-order") metrics.macroPackingRejections++;
+  if (reason === "goal-access") metrics.macroGoalAccessRejections++;
+}
+
 function expandPushSequences(
   first,
   board,
@@ -4230,6 +4249,7 @@ function expandPushSequences(
   maxReturned = 8,
   options = {},
 ) {
+  const metrics = activePerformance;
   const initial = {...first, pushes: 1};
   const queue = [initial], endpoints = [];
   const seen = new Set([exactPushKey(initial, board)]);
@@ -4243,6 +4263,7 @@ function expandPushSequences(
     const state = {robot: current.robot, boxes: current.boxes};
     const reachable = reachablePaths(state, board);
     if (createsSealedCorralDeadlock(state, board, reachable)) {
+      if (metrics) metrics.macroHardDeadlockRejections++;
       endpoints.push(current);
       continue;
     }
@@ -4267,6 +4288,13 @@ function expandPushSequences(
         pushedFrom: next.pushedFrom,
         pushedTo: next.pushedTo,
       };
+      if (metrics) metrics.macroIntermediateStates++;
+      const rejection = options.intermediateGuard?.(sequence, current);
+      if (rejection) {
+        recordMacroDiscoveryRejection(metrics, rejection);
+        endpoints.push({...sequence, macroRejectedReason: rejection});
+        continue;
+      }
       const signature = exactPushKey(sequence, board);
       if (seen.has(signature)) continue;
       seen.add(signature);
@@ -4296,6 +4324,7 @@ function expandPushSequences(
     selected.push(endpoint);
     if (selected.length >= maxReturned) break;
   }
+  if (metrics) metrics.macroEndpointsRetained += selected.length;
   return [initial, ...selected.filter(endpoint =>
     exactPushKey(endpoint, board) !== exactPushKey(initial, board))];
 }
@@ -4309,6 +4338,7 @@ function expandTargetedPushSequence(
   maxReturned = 4,
   options = {},
 ) {
+  const metrics = activePerformance;
   const room = Number.isInteger(objective?.roomIndex)
     ? board.topology.rooms[objective.roomIndex] : null;
   const distance = state => {
@@ -4353,7 +4383,10 @@ function expandTargetedPushSequence(
     }
     const state = {robot: current.robot, boxes: current.boxes};
     const reachable = reachablePaths(state, board);
-    if (createsSealedCorralDeadlock(state, board, reachable)) continue;
+    if (createsSealedCorralDeadlock(state, board, reachable)) {
+      if (metrics) metrics.macroHardDeadlockRejections++;
+      continue;
+    }
     const continuations = pushBoxNeighbors(
       state,
       board,
@@ -4372,10 +4405,20 @@ function expandTargetedPushSequence(
         pushedFrom: next.pushedFrom,
         pushedTo: next.pushedTo,
       };
+      if (metrics) metrics.macroIntermediateStates++;
+      sequence.targetDistance = distance(sequence);
+      if (!Number.isFinite(sequence.targetDistance)) {
+        if (metrics) metrics.macroTargetUnreachableStates++;
+      }
+      const rejection = options.intermediateGuard?.(sequence, current);
+      if (rejection) {
+        recordMacroDiscoveryRejection(metrics, rejection);
+        endpoints.push({...sequence, macroRejectedReason: rejection});
+        continue;
+      }
       const signature = exactPushKey(sequence, board);
       if (seen.has(signature)) continue;
       seen.add(signature);
-      sequence.targetDistance = distance(sequence);
       open.push(sequence);
     }
   }
@@ -4391,6 +4434,7 @@ function expandTargetedPushSequence(
     selected.push(endpoint);
     if (selected.length >= maxReturned) break;
   }
+  if (metrics) metrics.macroEndpointsRetained += selected.length;
   return [initial, ...selected.filter(endpoint =>
     exactPushKey(endpoint, board) !== exactPushKey(initial, board))];
 }

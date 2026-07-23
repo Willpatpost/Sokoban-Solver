@@ -148,6 +148,19 @@
     return evacuationActive ? Math.min(2, available) : available;
   }
 
+  function portfolioWorkerCapacity(hardwareConcurrency = 2, deviceMemory = 4) {
+    const hardware = Math.max(2, Math.floor(hardwareConcurrency) || 2);
+    const memory = Number.isFinite(deviceMemory) && deviceMemory > 0 ? deviceMemory : 4;
+    const memoryCapacity = memory <= 2 ? 2 : memory <= 4 ? 3 : 4;
+    return Math.max(2, Math.min(4, hardware, memoryCapacity));
+  }
+
+  function structuralHeadStartMs(hasStructuralPlan, deviceMemory = 4) {
+    if (!hasStructuralPlan) return 0;
+    const memory = Number.isFinite(deviceMemory) && deviceMemory > 0 ? deviceMemory : 4;
+    return memory <= 4 ? 900 : 600;
+  }
+
   return {
     DEFAULT_BRIDGE_LIMITS,
     createBridgeCampaignTracker,
@@ -156,5 +169,7 @@
     selectAnytimeCheckpoints,
     exactTranspositionLimit,
     directWorkerCapacity,
+    portfolioWorkerCapacity,
+    structuralHeadStartMs,
   };
 });

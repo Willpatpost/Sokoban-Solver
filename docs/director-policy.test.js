@@ -8,6 +8,8 @@ const {
   selectAnytimeCheckpoints,
   exactTranspositionLimit,
   directWorkerCapacity,
+  portfolioWorkerCapacity,
+  structuralHeadStartMs,
 } = require("./director-policy.js");
 
 test("anytime checkpoint selection minimizes projected cost and preserves phase diversity", () => {
@@ -40,6 +42,19 @@ test("evacuation reserves direct capacity while later phases can fill every free
   assert.equal(directWorkerCapacity(4, 3, true), 1);
   assert.equal(directWorkerCapacity(4, 1, false), 3);
   assert.equal(directWorkerCapacity(2, 3, false), 0);
+});
+
+test("portfolio capacity respects both hardware and coarse memory pressure", () => {
+  assert.equal(portfolioWorkerCapacity(16, 8), 4);
+  assert.equal(portfolioWorkerCapacity(16, 4), 3);
+  assert.equal(portfolioWorkerCapacity(16, 2), 2);
+  assert.equal(portfolioWorkerCapacity(2, 8), 2);
+});
+
+test("a structural plan receives a short, bounded head start", () => {
+  assert.equal(structuralHeadStartMs(false, 8), 0);
+  assert.equal(structuralHeadStartMs(true, 8), 600);
+  assert.equal(structuralHeadStartMs(true, 4), 900);
 });
 
 test("opportunistic bridge churn cannot delay completion of required work", () => {

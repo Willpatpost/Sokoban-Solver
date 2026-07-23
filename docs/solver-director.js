@@ -313,10 +313,14 @@ function runBidirectionalSolver(purpose, analysis) {
   ]
     .map(plan => ({...plan, queuePriority: plan.phaseScope === "evacuation" ? 0 : 50,
       queueOrder: directOrder++}));
-  const maxWorkerConcurrency = Math.max(2, Math.min(4, hardware));
+  const maxWorkerConcurrency = SokomindDirectorPolicy.portfolioWorkerCapacity(
+    hardware, navigator.deviceMemory,
+  );
   const bridgeMaxOutstanding = Math.min(4, Math.max(1, maxWorkerConcurrency - 1));
   let activeDirectWorkers = 0, activeEvacuationWorkers = 0, activeBridgeWorkers = 0;
   let activeSideWorkers = 0;
+  let structuralPriorityActive = structuralPlans.length > 0;
+  let structuralPriorityTimer = null;
   let lastQueuedDirectKind = null;
   const forwardRecords = new Map(), reverseRecordSets = [];
   const directCheckpoints = new Map();
@@ -881,9 +885,10 @@ function runBidirectionalSolver(purpose, analysis) {
 
   function pumpDirectPlans() {
     if (settled) return;
-    const directCapacity = SokomindDirectorPolicy.directWorkerCapacity(
+    let directCapacity = SokomindDirectorPolicy.directWorkerCapacity(
       maxWorkerConcurrency, activeSideWorkers, activeEvacuationWorkers > 0,
     );
+    if (structuralPriorityActive) directCapacity = Math.min(1, directCapacity);
     while (directQueue.length && activeDirectWorkers < directCapacity) {
       const bestPriority = directQueue[0].queuePriority;
       const eligible = directQueue
@@ -971,6 +976,18 @@ function runBidirectionalSolver(purpose, analysis) {
       }
       if (plan.phaseScope === "evacuation") {
         activeEvacuationWorkers = Math.max(0, activeEvacuationWorkers - 1);
+      }
+      if (plan.handoffStage === "structural" && structuralPriorityActive) {
+        structuralPriorityActive = false;
+        if (structuralPriorityTimer !== null) {
+          clearTimeout(structuralPriorityTimer);
+          searchTelemetryTimers = searchTelemetryTimers
+            .filter(handle => handle !== structuralPriorityTimer);
+          structuralPriorityTimer = null;
+        }
+        appendSearchLog("director", "Structural head start completed", {
+          reason, visited: visited.toLocaleString(),
+        });
       }
       if (plan.handoffStage === "bridge") {
         bridgeOutstanding = Math.max(0, bridgeOutstanding - 1);
@@ -1525,6 +1542,26 @@ function runBidirectionalSolver(purpose, analysis) {
     });
   }
   pumpDirectPlans();
+  const structuralDelay = SokomindDirectorPolicy.structuralHeadStartMs(
+    structuralPriorityActive, navigator.deviceMemory,
+  );
+  if (structuralDelay > 0) {
+    structuralPriorityTimer = setTimeout(() => {
+      const expiredTimer = structuralPriorityTimer;
+      structuralPriorityTimer = null;
+      searchTelemetryTimers = searchTelemetryTimers
+        .filter(handle => handle !== expiredTimer);
+      if (settled || !structuralPriorityActive) return;
+      structuralPriorityActive = false;
+      appendSearchLog("director", "Structural head start expired", {
+        delayMs: structuralDelay,
+        active: activeSideWorkers + activeDirectWorkers,
+        capacity: maxWorkerConcurrency,
+      });
+      pumpDirectPlans();
+    }, structuralDelay);
+    searchTelemetryTimers.push(structuralPriorityTimer);
+  }
 }
 function startSolver(purpose) {
   if ($("algorithm").value === "ultimate-bidirectional") {

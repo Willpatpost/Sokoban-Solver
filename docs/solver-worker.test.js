@@ -1612,7 +1612,7 @@ test("push beam returns a replayable solution", () => {
 
 test("plan macro beam solves by chaining bounded single-box objectives", () => {
   const worker = loadWorker();
-  const result = worker.search({
+  const request = {
     algorithm: "plan-macro-beam",
     state: stateFromRows([
       "OOOOOOOO",
@@ -1624,7 +1624,8 @@ test("plan macro beam solves by chaining bounded single-box objectives", () => {
     maxVisited: 1000,
     planBeamWidth: 40,
     maxPlanSegments: 40,
-  });
+  };
+  const result = worker.search(request);
   assert.equal(result.status, "solved");
   assert.ok(result.path.length > 0);
   assert.ok(result.visited < 1000);
@@ -1632,6 +1633,34 @@ test("plan macro beam solves by chaining bounded single-box objectives", () => {
   assert.equal(result.performance.supportDependencyCalls, 0);
   assert.equal(result.performance.commitmentCalls, 0);
   assert.equal(result.performance.roomPatternBuilds, 0);
+  assert.ok(result.performance.macroIntermediateStates > 0);
+  assert.ok(result.performance.macroEndpointsRetained > 0);
+});
+
+test("adaptive macro effort avoids full expansion for a forced corridor", () => {
+  const worker = loadWorker();
+  const request = {
+    algorithm: "plan-macro-beam",
+    state: stateFromRows([
+      "OOOOOOOO",
+      "O R A aO",
+      "OOOOOOOO",
+    ]),
+    maxVisited: 100,
+    planBeamWidth: 10,
+    maxPlanSegments: 10,
+  };
+  const adaptive = worker.search(request);
+  const fixedBudget = worker.search({...request, adaptiveMacroEffort: false});
+
+  assert.equal(adaptive.status, "solved");
+  assert.equal(fixedBudget.status, "solved");
+  assert.equal(adaptive.path.length, fixedBudget.path.length);
+  assert.ok(adaptive.performance.macroCheapExpansions > 0);
+  assert.equal(adaptive.performance.macroFullExpansions, 0);
+  assert.ok(fixedBudget.performance.macroFullExpansions > 0);
+  assert.ok(adaptive.performance.macroIntermediateStates <=
+    fixedBudget.performance.macroIntermediateStates);
 });
 
 test("plan canonicalization removes reflection and rotation ordering bias", () => {
@@ -1777,6 +1806,33 @@ test("box-run macros preserve a replayable sequence of pushes", () => {
   assert.ok(solved);
   assert.equal(solved.pushes, 2);
   assert.deepEqual(Array.from(solved.path), ["Right", "Right", "Right"]);
+});
+
+test("box-run macros can reject an intermediate discovery contradiction", () => {
+  const worker = loadWorker();
+  const parsed = stateFromRows([
+    "OOOOOOOO",
+    "O R A aO",
+    "OOOOOOOO",
+  ]);
+  const board = worker.parse(parsed);
+  const state = {
+    robot: parsed.robot,
+    boxes: parsed.boxes.map(([position, label]) => [
+      ...position.split(",").map(Number), label,
+    ]),
+  };
+  const first = worker.pushNeighbors(state, board)
+    .find(candidate => candidate.pushClass.endsWith(":Right"));
+  const sequences = worker.expandPushSequences(first, board, 4, 12, 4, {
+    intermediateGuard: sequence => sequence.pushes === 2 ? "fixture-conflict" : false,
+  });
+
+  assert.equal(sequences.length, 2);
+  assert.equal(sequences[0].pushes, 1);
+  assert.equal(sequences[1].pushes, 2);
+  assert.equal(sequences[1].macroRejectedReason, "fixture-conflict");
+  assert.equal(sequences.some(sequence => sequence.pushes > 2), false);
 });
 
 test("beam selection reserves room for heuristic detours and push diversity", () => {

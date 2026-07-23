@@ -517,9 +517,11 @@ function planMacroBeamSearch(payload) {
   };
   const scoreCandidate = child => {
     child.estimate = discoveryHeuristic(child.boxes, board);
-    child.goalAccess = goalAccessAnalysis(child.boxes, board);
+    child.goalAccess = child.macroContext?.goalAccess ||
+      goalAccessAnalysis(child.boxes, board);
     child.evacuation = roomEvacuationPenalty(child.boxes, board);
-    child.doorwaySchedule = evaluateDoorwaySchedule(child.boxes);
+    child.doorwaySchedule = child.macroContext?.doorwaySchedule ||
+      evaluateDoorwaySchedule(child.boxes);
     const evacuationActive = child.doorwaySchedule.pendingExports > 0 ||
       child.doorwaySchedule.stagingBlockers > 0 ||
       child.doorwaySchedule.blockedImportAccess > 0;
@@ -616,24 +618,77 @@ function planMacroBeamSearch(payload) {
           ? {direction: "clear", roomIndex: doorwayTask.roomIndex}
           : doorwayTask && !crossingComplete
             ? doorwayTask : assignedTarget ? {target: assignedTarget} : null;
-        const expanded = objective
+        const sameBoxDirections = rankedFirst.filter(candidate =>
+          candidate.next.pushedFrom === first.pushedFrom).length;
+        const ambiguity = sameBoxDirections +
+          Number(Boolean(doorwayTask)) +
+          Number(current.doorwaySchedule.crossingConflicts > 0) +
+          Number(current.doorwaySchedule.stagingBlockers > 0);
+        const forcedMacro = current.boxes.length <= 4 &&
+          sameBoxDirections === 1 &&
+          board.topology.tunnels.has(first.pushedTo);
+        const cheapExplored = ambiguity <= 2 ? 16 : 32;
+        const cheapResults = macroResults;
+        const fullExplored = objective
+          ? payload.targetedMacroExplored || Math.max(96, macroExplored)
+          : macroExplored;
+        const movedPosition = sequence =>
+          pkey(sequence.boxes[movedIndex][0], sequence.boxes[movedIndex][1]);
+        const intermediateGuard = sequence => {
+          if (!doorwayTask && !assignedTarget) return false;
+          const position = movedPosition(sequence);
+          const crossedDoorway = doorwayTask?.direction === "export"
+            ? (doorwayRoom.cells.has(currentPosition) ||
+                currentPosition === doorwayRoom.gate) &&
+              !doorwayRoom.cells.has(position) && position !== doorwayRoom.gate
+            : doorwayTask?.direction === "import" &&
+              !doorwayRoom.cells.has(currentPosition) &&
+              doorwayRoom.cells.has(position);
+          const objectiveComplete = position === assignedTarget ||
+            crossedDoorway ||
+            (clearingStaging && !doorwayRoom.exteriorStaging.has(position) &&
+              position !== doorwayRoom.gate);
+          if (!objectiveComplete) return false;
+          const doorwaySchedule = evaluateDoorwaySchedule(sequence.boxes);
+          const goalAccess = goalAccessAnalysis(sequence.boxes, board);
+          sequence.macroContext = {doorwaySchedule, goalAccess};
+          if (payload.planEgressGuard !== false &&
+              doorwayTask?.direction === "import" &&
+              doorwaySchedule.strandedExports >
+                current.doorwaySchedule.strandedExports) return "stranded-export";
+          return false;
+        };
+        const expand = (explored, results) => objective
           ? expandTargetedPushSequence(
-            first,
-            board,
-            objective,
-            macroLimit,
-            payload.targetedMacroExplored || Math.max(96, macroExplored),
-            macroResults,
-            {lockProven: false},
+            first, board, objective, macroLimit, explored, results,
+            {lockProven: false, intermediateGuard:
+              payload.incrementalMacroGuard === false ? undefined : intermediateGuard},
           )
           : expandPushSequences(
-            first,
-            board,
-            macroLimit,
-            macroExplored,
-            macroResults,
-            {lockProven: false},
+            first, board, macroLimit, explored, results,
+            {lockProven: false, intermediateGuard:
+              payload.incrementalMacroGuard === false ? undefined : intermediateGuard},
           );
+        let expanded;
+        if (payload.adaptiveMacroEffort === false) {
+          if (activePerformance) activePerformance.macroFullExpansions++;
+          expanded = expand(fullExplored, macroResults);
+        } else if (!forcedMacro) {
+          if (activePerformance) activePerformance.macroFullExpansions++;
+          expanded = expand(fullExplored, macroResults);
+        } else {
+          if (activePerformance) activePerformance.macroCheapExpansions++;
+          expanded = expand(Math.min(cheapExplored, fullExplored), cheapResults);
+          const cheapEndpoints = expanded.filter(next => next.pushes > 1);
+          if (fullExplored > cheapExplored &&
+              cheapEndpoints.length === 0) {
+            if (activePerformance) {
+              activePerformance.macroWidenings++;
+              activePerformance.macroFullExpansions++;
+            }
+            expanded = expand(fullExplored, macroResults);
+          }
+        }
         const endpoints = expanded.filter(next => next.pushes > 1);
         const successors = endpoints.length
           ? (firstIndex < 2 ? [expanded[0], ...endpoints] : endpoints)
@@ -647,6 +702,7 @@ function planMacroBeamSearch(payload) {
             cost,
             node: {parent: current.node, segment: next.path},
             pushClass: next.pushClass,
+            macroContext: next.macroContext,
           });
           if (payload.planEgressGuard !== false &&
               doorwayTask?.direction === "import" &&
