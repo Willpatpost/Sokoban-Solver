@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "reviewedBuild": "2026-07-23.34",
+  "expectedCases": 3,
+  "expectedSolved": 3,
+  "maximumPerCase": {
+    "pushes": 330,
+    "visited": 3940,
+    "generated": 20700,
+    "retained": 7400,
+    "peakFrontier": 380,
+    "transpositionEvictions": 0
+  }
+}

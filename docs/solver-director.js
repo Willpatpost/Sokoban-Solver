@@ -1,4 +1,7 @@
 const EXACT_CHECKPOINT_STORAGE_KEY = "sokomind-exact-checkpoints-v1";
+const EXACT_CHECKPOINT_MAX_ENTRIES = 8;
+const SOLVER_WORKER_WATCHDOG_MS = globalThis.SOKOMIND_WORKER_WATCHDOG_MS || 120000;
+let exactCheckpointSaveWarningShown = false;
 
 function exactCheckpointProblemHash(serialized) {
   const boxes = [...serialized.boxes]
@@ -14,7 +17,10 @@ function exactCheckpointProblemHash(serialized) {
 
 function readExactCheckpoints() {
   try {
-    return JSON.parse(globalThis.localStorage?.getItem(EXACT_CHECKPOINT_STORAGE_KEY) || "{}");
+    const parsed = JSON.parse(
+      globalThis.localStorage?.getItem(EXACT_CHECKPOINT_STORAGE_KEY) || "{}",
+    );
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
   } catch (_error) {
     return {};
   }
@@ -22,15 +28,49 @@ function readExactCheckpoints() {
 
 function saveExactCheckpoint(checkpoint) {
   if (!checkpoint?.problemHash || !checkpoint?.exactShard) return false;
-  try {
-    const saved = readExactCheckpoints();
-    const shard = `${checkpoint.exactShard.index}/${checkpoint.exactShard.count}`;
-    saved[`${checkpoint.problemHash}:${shard}`] = checkpoint;
-    globalThis.localStorage?.setItem(EXACT_CHECKPOINT_STORAGE_KEY, JSON.stringify(saved));
-    return true;
-  } catch (_error) {
-    return false;
+  const saved = readExactCheckpoints();
+  for (const [key, existing] of Object.entries(saved)) {
+    if (existing?.solverBuild !== checkpoint.solverBuild) delete saved[key];
   }
+  const shard = `${checkpoint.exactShard.index}/${checkpoint.exactShard.count}`;
+  const checkpointKey = `${checkpoint.problemHash}:${shard}`;
+  const newestSavedAt = Math.max(
+    Date.now(),
+    ...Object.values(saved).map(existing => existing?.storageSavedAt || 0),
+  ) + 1;
+  saved[checkpointKey] = {...checkpoint, storageSavedAt: newestSavedAt};
+  const oldestFirst = () => Object.entries(saved).sort(
+    ([leftKey, left], [rightKey, right]) =>
+      (left?.storageSavedAt || 0) - (right?.storageSavedAt || 0) ||
+      leftKey.localeCompare(rightKey),
+  );
+  while (Object.keys(saved).length > EXACT_CHECKPOINT_MAX_ENTRIES) {
+    delete saved[oldestFirst()[0][0]];
+  }
+  while (Object.keys(saved).length) {
+    try {
+      const storage = globalThis.localStorage;
+      if (!storage) return false;
+      storage.setItem(EXACT_CHECKPOINT_STORAGE_KEY, JSON.stringify(saved));
+      return true;
+    } catch (_error) {
+      const oldest = oldestFirst().find(([key]) => key !== checkpointKey);
+      if (!oldest) return false;
+      delete saved[oldest[0]];
+    }
+  }
+  return false;
+}
+
+function persistExactCheckpoint(checkpoint) {
+  const saved = saveExactCheckpoint(checkpoint);
+  if (!saved && !exactCheckpointSaveWarningShown) {
+    exactCheckpointSaveWarningShown = true;
+    appendSearchLog("warning", "Exact-search checkpoint could not be saved", {
+      reason: "storage-unavailable-or-full",
+    });
+  }
+  return saved;
 }
 
 function loadExactCheckpoint(serialized, shard, upperBound) {
@@ -1065,7 +1105,7 @@ function runBidirectionalSolver(purpose, analysis) {
       const silentSeconds = Math.round(
         (performance.now() - (workerLastMessage.get(worker) || performance.now())) / 1000,
       );
-      if (silentSeconds >= 120) {
+      if (silentSeconds * 1000 >= SOLVER_WORKER_WATCHDOG_MS) {
         abandonWorker("watchdog");
         return;
       }
@@ -1117,7 +1157,7 @@ function runBidirectionalSolver(purpose, analysis) {
       }
       if (data.type === "progress") {
         if (plan.persistentExact && data.exactCheckpoint) {
-          saveExactCheckpoint(data.exactCheckpoint);
+          persistExactCheckpoint(data.exactCheckpoint);
           plan.resumeExactCheckpoint = data.exactCheckpoint;
         }
         const previous = workerProgress.get(worker) || 0;
@@ -1329,7 +1369,7 @@ function runBidirectionalSolver(purpose, analysis) {
         });
         if (plan.persistentExact && data.terminationReason === "checkpoint-yield" &&
             data.exactCheckpoint) {
-          saveExactCheckpoint(data.exactCheckpoint);
+          persistExactCheckpoint(data.exactCheckpoint);
           plan.resumeExactCheckpoint = data.exactCheckpoint;
           doneWorkers++;
           releaseWorker({reason: "checkpoint-yield"});
@@ -1506,6 +1546,44 @@ function startSolver(purpose) {
     workers.push(worker); active.set(worker, plan);
     const launchedAt = performance.now();
     let firstMessageMs = null;
+    let lastMessageAt = launchedAt;
+    let watchdogTimer = null;
+    const clearWorkerWatchdog = () => {
+      if (watchdogTimer === null) return;
+      clearInterval(watchdogTimer);
+      searchTelemetryTimers = searchTelemetryTimers.filter(handle => handle !== watchdogTimer);
+      watchdogTimer = null;
+    };
+    const finishFailedWorker = (reason) => {
+      if (!workers.includes(worker) || settled) return;
+      const failedAt = performance.now(), terminateStarted = performance.now();
+      worker.terminate();
+      const terminateCallMs = performance.now() - terminateStarted;
+      workers = workers.filter(item => item !== worker);
+      active.delete(worker);
+      clearWorkerWatchdog();
+      appendSearchLog(reason === "worker-watchdog" ? "warning" : "error",
+        `${plan.label} worker failed`, {
+          reason,
+          firstMessageMs: firstMessageMs === null ? undefined : Math.round(firstMessageMs),
+          wallMs: Math.round(failedAt - launchedAt),
+          terminateCallMs: Math.round(terminateCallMs * 1000) / 1000,
+        });
+      finished.push({visited: 0, status: "failed", terminationReason: reason});
+      launchNext();
+      if (!queue.length && active.size === 0) {
+        setControlsBusy(false);
+        setStatus(reason === "worker-watchdog"
+          ? "Solver worker stopped responding."
+          : "Solver worker failed.");
+      }
+    };
+    watchdogTimer = setInterval(() => {
+      if (performance.now() - lastMessageAt >= SOLVER_WORKER_WATCHDOG_MS) {
+        finishFailedWorker("worker-watchdog");
+      }
+    }, Math.max(10, Math.min(30000, SOLVER_WORKER_WATCHDOG_MS / 4)));
+    searchTelemetryTimers.push(watchdogTimer);
     appendSearchLog("worker", `Started ${plan.label}`, {
       algorithm: plan.algorithm, budget: plan.maxVisited?.toLocaleString(),
       width: plan.beamWidth,
@@ -1513,6 +1591,7 @@ function startSolver(purpose) {
     worker.onmessage = ({data}) => {
       if (!workers.includes(worker)) return;
       if (settled) return;
+      lastMessageAt = performance.now();
       if (firstMessageMs === null) firstMessageMs = performance.now() - launchedAt;
       if (data.type === "progress") {
         const seconds = Math.max(.001, (performance.now() - launchedAt) / 1000);
@@ -1547,6 +1626,7 @@ function startSolver(purpose) {
       const terminateCallMs = performance.now() - terminateStarted;
       workers = workers.filter(item => item !== worker);
       active.delete(worker);
+      clearWorkerWatchdog();
       totalVisited += data.visited || 0;
       appendSearchLog("worker", `Finished ${plan.label}`, {
         visited: (data.visited || 0).toLocaleString(), solved: Boolean(data.path),
@@ -1619,6 +1699,7 @@ function startSolver(purpose) {
           });
           const cancellationStarted = performance.now(), cancelledWorkers = workers.length;
           workers.forEach(item => item.terminate()); workers = [];
+          clearSearchTelemetry();
           appendSearchLog("lifecycle", "Stopped remaining portfolio workers", {
             workers: cancelledWorkers,
             terminateCallsMs: Math.round((performance.now() - cancellationStarted) * 1000) / 1000,
@@ -1658,26 +1739,7 @@ function startSolver(purpose) {
       }
       launchNext();
     };
-    worker.onerror = () => {
-      if (!workers.includes(worker)) return;
-      if (settled) return;
-      const failedAt = performance.now(), terminateStarted = performance.now();
-      worker.terminate();
-      const terminateCallMs = performance.now() - terminateStarted;
-      workers = workers.filter(item => item !== worker);
-      active.delete(worker);
-      appendSearchLog("error", `${plan.label} worker failed`, {
-        firstMessageMs: firstMessageMs === null ? undefined : Math.round(firstMessageMs),
-        wallMs: Math.round(failedAt - launchedAt),
-        terminateCallMs: Math.round(terminateCallMs * 1000) / 1000,
-      });
-      finished.push({visited: 0, status: "failed", terminationReason: "worker-error"});
-      launchNext();
-      if (!queue.length && active.size === 0) {
-        setControlsBusy(false);
-        setStatus("Solver worker failed.");
-      }
-    };
+    worker.onerror = () => finishFailedWorker("worker-error");
     worker.postMessage({
       state: serializeState(state),
       upperBound: planUpperBound(plan),

@@ -8,7 +8,7 @@
     "check:build": "node scripts/check-build.js",
     "check:quality": "node scripts/quality-check.js",
     "test:unit": "node --test docs/*.test.js bench/*.test.js",
-    "test:coverage": "node --test --experimental-test-coverage --test-coverage-lines=90 --test-coverage-branches=75 --test-coverage-functions=90 --test-coverage-include=docs/director-policy.js --test-coverage-include=docs/game-state.js --test-coverage-include=docs/keyboard-policy.js --test-coverage-include=docs/path-validation.js --test-coverage-include=docs/search-log.js docs/*.test.js bench/*.test.js",
+    "test:coverage": "node --test --experimental-test-coverage --test-coverage-lines=90 --test-coverage-branches=75 --test-coverage-functions=90 --test-coverage-include=docs/director-policy.js --test-coverage-include=docs/game-state.js --test-coverage-include=docs/keyboard-policy.js --test-coverage-include=docs/path-validation.js --test-coverage-include=docs/search-log.js --test-coverage-include=docs/solver-engine.js --test-coverage-include=docs/solver-search.js docs/*.test.js bench/*.test.js",
     "test:performance": "node bench/performance-gate.js",
     "test:browser": "playwright test",
     "test:browser:chromium": "playwright test --project=chromium"

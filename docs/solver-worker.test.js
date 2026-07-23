@@ -8,15 +8,16 @@ const localReasoningBaseline = require("../bench/local-reasoning-baseline.json")
 const {mirrorRows, rotateRows} = require("../bench/generated-cases.js");
 
 function loadWorker(postMessage = () => {}) {
-  const source = ["solver-engine.js", "solver-search.js"]
-    .map(file => fs.readFileSync(path.join(__dirname, file), "utf8"))
-    .join("\n");
   const context = {
     postMessage,
     onmessage: null,
     console,
   };
-  vm.runInNewContext(source, context, {filename: "solver-engine.js"});
+  vm.createContext(context);
+  for (const file of ["solver-engine.js", "solver-search.js"]) {
+    const filename = path.join(__dirname, file);
+    vm.runInContext(fs.readFileSync(filename, "utf8"), context, {filename});
+  }
   return context;
 }
 

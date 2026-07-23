@@ -13,6 +13,7 @@ async function enterGame(page) {
 function installScriptedWorker(page, mode) {
   return page.addInitScript(selectedMode => {
     window.__workerMessages = [];
+    if (selectedMode === "silent") window.SOKOMIND_WORKER_WATCHDOG_MS = 80;
     let bridgeNumber = 0;
     let milestoneWorker = null;
     let milestoneState = null;
@@ -43,6 +44,7 @@ function installScriptedWorker(page, mode) {
           })), 0);
           return;
         }
+        if (selectedMode === "silent") return;
         if (payload.algorithm === "analyze-puzzle") {
           emitLater(this, {
             type: "done",
@@ -206,6 +208,16 @@ test("worker errors surface as an explicit failed search", async ({page}) => {
   await page.getByRole("button", {name: "Solve"}).click();
   await expect(page.locator("#status")).toHaveText("Solver worker failed.");
   await expect(page.locator("#search-log-text")).toHaveValue(/worker failed/);
+});
+
+test("silent standard workers are retired by the liveness watchdog", async ({page}) => {
+  await installScriptedWorker(page, "silent");
+  await enterGame(page);
+  await page.locator("#algorithm").selectOption("push-astar");
+  await page.getByRole("button", {name: "Solve"}).click();
+  await expect(page.locator("#status")).toHaveText("Solver worker stopped responding.");
+  await expect(page.locator("#search-log-text")).toHaveValue(/worker-watchdog/);
+  await expect(page.getByRole("button", {name: "Solve"})).toBeEnabled();
 });
 
 test("Ultimate consumes an evacuation checkpoint and exercises compatible and incompatible bridges", async ({page}) => {

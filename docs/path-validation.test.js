@@ -68,7 +68,7 @@ test("Ultimate scheduling retires stale phases and reclaims silent workers", () 
   );
   assert.match(app, /retirePendingPlans\(/);
   assert.match(app, /packing checkpoint superseded opening and bridge exploration/);
-  assert.match(app, /silentSeconds >= 120/);
+  assert.match(app, /silentSeconds \* 1000 >= SOLVER_WORKER_WATCHDOG_MS/);
   assert.match(app, /abandonWorker\("watchdog"\)/);
   assert.match(app, /Recovering silent discovery worker/);
   assert.match(app, /watchdogRecovery/);
