@@ -12,6 +12,8 @@ function installScriptedWorker(page, mode) {
   return page.addInitScript(selectedMode => {
     window.__workerMessages = [];
     let bridgeNumber = 0;
+    let milestoneWorker = null;
+    let milestoneState = null;
     const emitLater = (worker, data, delay = 0, ignoreTermination = false) => {
       setTimeout(() => {
         if (!worker.terminated || ignoreTermination) worker.onmessage?.({data});
@@ -80,18 +82,12 @@ function installScriptedWorker(page, mode) {
           estimate: 1,
         };
         if (payload.targetedReverse) {
+          milestoneWorker = this;
+          milestoneState = payload.state;
           emitLater(this, {
             type: "landmarks",
             landmarks: [{id: "compatible-layout", state: payload.state, cost: 0, estimate: 1}],
           });
-          emitLater(this, {
-            type: "landmarks",
-            landmarks: [{id: "incompatible-layout", state: payload.state, cost: 0, estimate: 2}],
-          }, 20);
-          emitLater(this, {
-            type: "done", path: null, cutoff: true, visited: 1,
-            status: "cutoff", terminationReason: "fixture-complete",
-          }, 40);
           return;
         }
         if (payload.handoffStage === "evacuation") {
@@ -115,7 +111,22 @@ function installScriptedWorker(page, mode) {
             type: "done", path: null, cutoff: true, visited: 2,
             status: "cutoff",
             terminationReason: bridgeNumber === 1 ? "bridge-budget" : "target-incompatible",
-          }, 5);
+          });
+          if (bridgeNumber === 1) {
+            emitLater(milestoneWorker, {
+              type: "landmarks",
+              landmarks: [{
+                id: "incompatible-layout",
+                state: milestoneState,
+                cost: 0,
+                estimate: 2,
+              }],
+            }, 1);
+            emitLater(milestoneWorker, {
+              type: "done", path: null, cutoff: true, visited: 1,
+              status: "cutoff", terminationReason: "fixture-complete",
+            }, 20);
+          }
           return;
         }
         emitLater(this, {
