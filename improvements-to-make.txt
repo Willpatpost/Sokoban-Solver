@@ -1,8 +1,8 @@
 Sokomind improvements and implementation status
 ===============================================
 
-Status reviewed against the repository after Improvement Sprint 12: phase-aware
-Ultimate capacity reservation and required-work supersession.
+Status reviewed against the repository after Improvement Sprint 13: browser
+runtime modularization and independently testable gameplay/search boundaries.
 
 Standing maintenance rules
 --------------------------
@@ -309,6 +309,36 @@ STRONG IMPLEMENTATION, WITH BOUNDED LIMITATIONS
     - Guided beam searches retain full strategic scoring because their primary job
       is first-solution discovery rather than exhaustive contour proof.
 
+27. Split the browser runtime into focused modules.
+    Strong, bounded implementation in solver build 2026-07-22.24:
+    - docs/app.js now owns page state, rendering, controls, timing, and animation;
+      Ultimate and ordinary portfolio orchestration moved to solver-director.js.
+    - Pure gameplay parsing, cloning, movement, goal checks, and serialization live
+      in a reusable UMD module, game-state.js. Search-log text, JSONL conversion,
+      numeric normalization, time formatting, and checkpoint IDs moved to a second
+      independently testable module.
+    - The stable solver-worker.js URL is now a small protocol entry point. It loads
+      the cache-matched board/rules/heuristic engine and search-algorithm module,
+      then dispatches ordinary and bidirectional messages.
+    - solver-engine.js owns parsing, dense state identities, topology, heuristics,
+      commitments, deadlocks, dependencies, local exact analyses, and push rules.
+      solver-search.js owns beams, DFS, IDA*, bridges, bidirectional search, baseline
+      algorithms, reconstruction, checkpoints, and progress emission.
+    - Browser-module tests enforce these source boundaries and exercise typed game
+      movement, telemetry formatting, and worker delegation. A real browser smoke
+      test loaded the modular page, ran Ultimate Bidirectional through the split
+      worker, solved Ultra Tiny, displayed build 24, and produced no console errors.
+    Bounded limitations:
+    - The 119 KB engine still contains several separable domains; deadlock, local
+      analysis, topology, and heuristic modules can be extracted incrementally when
+      those areas next change.
+    - Python, the benchmark validator, and the browser engine still maintain some
+      parallel rule implementations. Shared conformance fixtures protect behavior,
+      but a single cross-runtime implementation is not practical without changing
+      the dependency-free Python/browser architecture.
+    - Browser integration remains a manual smoke check rather than the CI browser
+      matrix tracked by item 30.
+
 
 PARTIALLY DELIVERED
 -------------------
@@ -609,13 +639,6 @@ YET TO BE IMPLEMENTED AS BACKLOG CAPABILITIES
     live description of the robot, boxes, goals, moves, and completion state.
     Add live status announcements and a reduced-motion mode for transitions and
     solver playback.
-
-27. Split docs/app.js and docs/solver-worker.js into focused modules for game
-    rules, UI rendering, worker orchestration, telemetry, and search engines.
-    Extract a reusable rules/state core where practical so the UI, worker,
-    benchmark validator, and tests do not maintain parallel implementations.
-    Perform this alongside or after well-tested functional changes so a large
-    refactor does not obscure solver regressions.
 
 28. Review desktop and mobile layouts for intuitive human formatting while
     preserving the current color palette and theme. Improve desktop hierarchy and

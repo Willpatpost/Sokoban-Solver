@@ -5,13 +5,15 @@ const test = require("node:test");
 const vm = require("node:vm");
 
 function loadWorker(postMessage = () => {}) {
-  const source = fs.readFileSync(path.join(__dirname, "solver-worker.js"), "utf8");
+  const source = ["solver-engine.js", "solver-search.js"]
+    .map(file => fs.readFileSync(path.join(__dirname, file), "utf8"))
+    .join("\n");
   const context = {
     postMessage,
     onmessage: null,
     console,
   };
-  vm.runInNewContext(source, context, {filename: "solver-worker.js"});
+  vm.runInNewContext(source, context, {filename: "solver-engine.js"});
   return context;
 }
 

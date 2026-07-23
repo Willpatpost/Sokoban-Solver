@@ -38,7 +38,9 @@ function validateRows(rows) {
 }
 
 function loadWorker(progress, streamProgress) {
-  const source = fs.readFileSync(path.join(__dirname, "..", "docs", "solver-worker.js"), "utf8");
+  const source = ["solver-engine.js", "solver-search.js"]
+    .map(file => fs.readFileSync(path.join(__dirname, "..", "docs", file), "utf8"))
+    .join("\n");
   const context = {
     postMessage: message => {
       progress.push(message);
@@ -51,7 +53,7 @@ function loadWorker(progress, streamProgress) {
     performance,
     __sokomindMemoryUsage: () => process.memoryUsage().heapUsed,
   };
-  vm.runInNewContext(source, context, {filename: "solver-worker.js"});
+  vm.runInNewContext(source, context, {filename: "solver-engine.js"});
   return context;
 }
 

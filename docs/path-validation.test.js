@@ -33,6 +33,7 @@ test("path validation rejects illegal and incomplete paths", () => {
 test("web UI exposes a separate copyable search log", () => {
   const html = fs.readFileSync(path.join(__dirname, "index.html"), "utf8");
   const app = fs.readFileSync(path.join(__dirname, "app.js"), "utf8");
+  const director = fs.readFileSync(path.join(__dirname, "solver-director.js"), "utf8");
 
   assert.match(html, /id="search-log-count"/);
   assert.match(html, /id="search-log-text"/);
@@ -40,22 +41,28 @@ test("web UI exposes a separate copyable search log", () => {
   assert.match(html, /id="copy-search-json"/);
   assert.match(html, /levels\.js\?build=[\s\S]*app\.js\?build=/);
   assert.match(html, /director-policy\.js/);
+  assert.match(html, /game-state\.js[\s\S]*search-log\.js[\s\S]*solver-director\.js[\s\S]*app\.js/);
   assert.match(html, /keyboard-policy\.js[\s\S]*app\.js/);
   assert.match(html, /id="solver-build"/);
   const build = app.match(/const SOLVER_BUILD = "([^"]+)";/)?.[1];
   assert.ok(build);
   assert.match(html, new RegExp(`director-policy\\.js\\?build=${build.replaceAll(".", "\\.")}`));
+  for (const asset of ["game-state", "search-log", "solver-director"]) {
+    assert.match(html, new RegExp(`${asset}\\.js\\?build=${build.replaceAll(".", "\\.")}`));
+  }
   assert.match(app, /\$\("solver-build"\)\.textContent = SOLVER_BUILD/);
   assert.match(html, new RegExp(`app\\.js\\?build=${build.replaceAll(".", "\\.")}`));
   assert.match(app, /function appendSearchLog\(/);
-  assert.match(app, /algorithm: "analyze-puzzle"/);
+  assert.match(director, /algorithm: "analyze-puzzle"/);
   assert.match(app, /copy-search-log/);
   assert.match(app, /searchLogJsonLines/);
   assert.match(app, /SokomindKeyboard\.shouldIgnoreGameShortcut\(event\.target\)/);
 });
 
 test("Ultimate scheduling retires stale phases and reclaims silent workers", () => {
-  const app = fs.readFileSync(path.join(__dirname, "app.js"), "utf8");
+  const app = ["solver-director.js", "app.js"]
+    .map(file => fs.readFileSync(path.join(__dirname, file), "utf8"))
+    .join("\n");
 
   assert.match(app, /const directQueue = \[\.\.\.evacuationPlans, \.\.\.beamPlans/);
   assert.match(app, /retirePendingPlans\(/);

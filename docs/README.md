@@ -5,6 +5,12 @@ Pages. It includes five levels from Ultra Tiny through Huge, keyboard play,
 undo/reset, a first-move timer, hints, and animated solving in a background Web
 Worker.
 
+The browser runtime is split by responsibility without requiring a build tool:
+game rules, telemetry formatting, page UI, worker orchestration, solver rules and
+heuristics, search algorithms, and the Web Worker protocol each have an explicit
+module boundary. Pure rule and formatting modules run directly in Node tests, while
+the page and worker load the same files as classic scripts.
+
 The move-history panel records every direction, marks pushes, follows
 undo/reset, and can copy the complete numbered sequence for sharing.
 
@@ -314,7 +320,7 @@ Then open `http://localhost:8000`.
 From the repository root:
 
 ```powershell
-node --test docs/solver-worker.test.js docs/path-validation.test.js docs/director-policy.test.js docs/keyboard-policy.test.js docs/conformance.test.js
+node --test docs/solver-worker.test.js docs/browser-modules.test.js docs/path-validation.test.js docs/director-policy.test.js docs/keyboard-policy.test.js docs/conformance.test.js
 node --test docs/pruning-differential.test.js bench/evaluator.test.js bench/generated-cases.test.js bench/benchmark.test.js bench/conformance.test.js
 node bench/benchmark.js --suite smoke
 node bench/benchmark.js --suite validation

@@ -23,7 +23,7 @@ Run the automated solver tests with:
 
 ```powershell
 python -m unittest discover -v
-node --test docs/solver-worker.test.js docs/path-validation.test.js docs/director-policy.test.js docs/keyboard-policy.test.js docs/conformance.test.js
+node --test docs/solver-worker.test.js docs/browser-modules.test.js docs/path-validation.test.js docs/director-policy.test.js docs/keyboard-policy.test.js docs/conformance.test.js
 node --test docs/pruning-differential.test.js bench/evaluator.test.js bench/generated-cases.test.js bench/benchmark.test.js bench/conformance.test.js
 node bench/benchmark.js --suite smoke
 node bench/benchmark.js --suite validation
