@@ -1,8 +1,8 @@
 Sokomind improvements and implementation status
 ===============================================
 
-Status reviewed against the repository after Improvement Sprint 6: admissible
-relaxed multi-box cost pattern tables for bounded goal rooms.
+Status reviewed against the repository after Improvement Sprint 7: admissible
+pairwise chokepoint-conflict tightening with bounded exact relaxed tables.
 
 Standing maintenance rules
 --------------------------
@@ -160,8 +160,8 @@ STRONG IMPLEMENTATION, WITH BOUNDED LIMITATIONS
     Implemented:
     - Prepared board seeds share topology, push distances, compiled graphs, dense
       board data, and other immutable analysis through structured cloning.
-    - Completed bounded room-pattern tables are included in the planning seed so
-      subsequent portfolio workers do not repeat their reverse enumeration.
+    - Completed bounded room-pattern and pair-conflict tables are included in the
+      planning seed so subsequent workers do not repeat reverse enumeration.
     - Mutable caches remain worker-private.
     Bounded limitations:
     - Structured cloning still duplicates data in worker memory.
@@ -340,7 +340,7 @@ PARTIALLY DELIVERED
       robot access everywhere. Its discovered distances are therefore admissible
       lower bounds on pushes by those labels.
     - The heuristic replaces the selected labels' Hungarian contribution with the
-      stronger pattern value. It does not add both costs, and a maximum disjoint
+      stronger pattern value. It does not add both costs, and a label-disjoint
       combination prevents overlapping room/label patterns from being counted
       twice.
     - Tables are capped at 12,000 states. Distances discovered by reverse BFS stay
@@ -361,6 +361,41 @@ PARTIALLY DELIVERED
     - Port the proven bounded subset to Python after the browser representation and
       selection policy stabilize.
 
+21. Add admissible lower-bound terms where they can be proven, and otherwise
+    ordering penalties, for boxes competing over corridors, gates, staging cells,
+    or robot support squares.
+    Delivered so far:
+    - The browser solver identifies pairs of unique-label boxes whose current
+      shortest push corridors share a board-derived tunnel or articulation cell.
+      Sharing only selects a candidate; it never adds cost by itself.
+    - A reverse two-box table keeps walls, labels, box collisions, and support
+      squares while removing every other box and granting the robot access
+      everywhere. Only an exact table hit can strengthen the lower bound.
+    - Proven pair distance replaces the same two Hungarian contributions rather
+      than being added to them. Room and pair candidates enter one label-disjoint
+      selection, exact for up to 20 involved labels, preventing overlapping
+      conflicts from being counted twice.
+    - Pair candidates are limited to at most 18 independent assignment pushes and
+      tables to 4,000 reverse states. Cutoffs, distant pairs, shared-label goals,
+      and table misses retain the ordinary assignment bound.
+    - An independent exact push search verifies a generic two-room swap where the
+      assignment bound is 9 and the pair-conflict bound and true optimum are 11.
+      Separate tests cover overlap selection, cutoff fallback, prepared-table
+      reuse, and all 250 pushes of the Huge diagnostic replay.
+    - The initial unrestricted prototype built 48,000 unused pair states at the
+      Huge root. Distance gating and room-pattern deduplication restore root setup
+      to its prior range while keeping the proven interaction fixture active.
+    - Build 2026-07-22.18 reports candidates, table builds/states, hits, and
+      cumulative pair-bound improvement.
+    Remaining:
+    - Handle generic/shared-label pairs by minimizing the joint conflict cost over
+      every compatible box-to-goal assignment before tightening the bound.
+    - Generalize from disjoint pairs to three-or-more-box gate, staging-capacity,
+      and support-square conflicts when a safe non-overlap proof is available.
+    - Add generated chokepoint families and performance baselines that quantify
+      state reductions on multiple conflict shapes and distances.
+    - Port the stable bounded conflict subset to Python.
+
 32. Complete project and release hygiene.
     Delivered so far:
     - Added concise architecture documentation defining the general-purpose search
@@ -375,7 +410,7 @@ PARTIALLY DELIVERED
     Delivered so far:
     - The homepage now displays a compact solver-build badge populated directly
       from the same SOLVER_BUILD constant used to version the worker URL and
-      search-log events. Build 2026-07-22.17 is visible without opening developer
+      search-log events. Build 2026-07-22.18 is visible without opening developer
       tools, making a stale cached application immediately recognizable.
     - A policy test requires the badge, binding, and app.js cache-busting query to
       agree with the loaded solver build.
@@ -409,14 +444,6 @@ PARTIALLY DELIVERED
 
 YET TO BE IMPLEMENTED AS BACKLOG CAPABILITIES
 ----------------------------------------------
-
-21. Add admissible lower-bound terms where they can be proven, and otherwise
-    ordering penalties, for boxes competing over corridors, gates, staging cells,
-    or robot support squares. Existing doorway and support penalties are useful
-    foundations but do not yet constitute this general capability. Merely sharing
-    a shortest-path chokepoint is not additive because boxes may traverse it
-    sequentially. A conflict term must prove unavoidable extra pushes and avoid
-    double-counting overlapping conflicts before entering the exact lower bound.
 
 22. Introduce true feature-space search queues rather than relying only on fixed
     heuristic beam bands. Preserve candidates across dimensions such as room

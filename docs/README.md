@@ -50,13 +50,22 @@ both, and combines only label-disjoint room patterns. Tables stop after 12,000
 states; discovered distances remain exact, while missing cutoff entries leave the
 ordinary assignment bound unchanged.
 
+Unique-label box pairs whose shortest push corridors overlap a tunnel or
+articulation receive a second bounded check. A reverse two-box table removes all
+other boxes and robot-connectivity constraints, so any interaction cost it proves
+is also admissible. Pair tables are limited to nearby conflicts with at most 18
+independent pushes and 4,000 reverse states. Room and pair improvements enter one
+label-disjoint selection—an exact maximum for up to 20 involved labels—preventing
+a box's unavoidable detour from being counted twice. Cutoffs and shared-label
+assignments retain the Hungarian bound.
+
 Ultimate Bidirectional's planning worker also returns a clone-safe prepared-board
 seed. Subsequent portfolio workers reuse its immutable geometry, topology,
 reverse-distance tables, dense indices, and compiled single-box graph while
 creating private heuristic, deadlock, and signature caches. Workers verify the
 exact board contents and schema before reuse and rebuild normally on a mismatch.
-Compiled room-pattern tables are included in that seed so portfolio workers do
-not repeat their bounded reverse enumeration.
+Compiled room-pattern and pair-conflict tables are included in that seed so
+portfolio workers do not repeat their bounded reverse enumeration.
 This uses standard structured cloning because shared memory requires
 cross-origin isolation headers that GitHub Pages does not reliably provide.
 The adjacent `{ }` control copies the complete run as newline-delimited JSON.

@@ -629,6 +629,70 @@ test("room pattern bounds skip labels whose candidate boxes can serve outside go
   assert.equal(table.states.size, 0);
 });
 
+test("pair conflict tables prove extra pushes through a shared chokepoint", () => {
+  const worker = loadWorker();
+  const parsed = stateFromRows([
+    "OOOOOOOOO", "O   O   O", "O R O   O", "Ob A  BaO",
+    "O   O   O", "O   O   O", "OOOOOOOOO",
+  ]);
+  const board = worker.parse(parsed);
+  const boxes = [[3, 3, "A"], [3, 6, "B"]];
+  const independent = boxes.reduce((total, [y, x, label]) => {
+    const goal = board.goalsByLabel.get(label)[0];
+    return total + worker.playerAwarePushDistances(board, `${y},${x}`).get(goal);
+  }, 0);
+  assert.equal(independent, 9);
+  assert.equal(worker.heuristic(boxes, board), 11);
+  assert.equal(board.metrics.pairConflictBuilds, 1);
+  assert.equal(board.metrics.pairConflictHits, 1);
+  assert.equal(board.metrics.pairConflictBoost, 2);
+
+  const exact = worker.exactLocalPushSearch({
+    domain: board.floor,
+    boxes: boxes.map(([y, x, label]) => [`${y},${x}`, label]),
+    robot: "2,2",
+    gate: "3,4",
+    maxStates: 50000,
+    isGoal: occupied => [...board.goals].every(([position, label]) =>
+      occupied.get(position)?.label === label),
+  });
+  assert.equal(exact.pushes, 11);
+
+  const preparedBoard = structuredClone(worker.createPreparedBoardSeed(board));
+  const hydrated = worker.parse({...parsed, preparedBoard});
+  assert.equal(worker.heuristic(boxes, hydrated), 11);
+  assert.equal(hydrated.metrics.pairConflictBuilds, 0);
+  assert.equal(hydrated.metrics.pairConflictBoost, 2);
+});
+
+test("overlapping heuristic conflicts use the maximum label-disjoint combination", () => {
+  const worker = loadWorker();
+  const candidate = (labels, boost) => ({labels: new Set(labels), boost, kind: "pair"});
+  const selected = worker.maximumDisjointPatternSelection([
+    candidate(["A", "B"], 3),
+    candidate(["B", "C"], 5),
+    candidate(["C", "D"], 4),
+  ]);
+  assert.equal(selected.reduce((total, entry) => total + entry.boost, 0), 7);
+  assert.deepEqual(
+    Array.from(selected, entry => [...entry.labels].join("")).sort(),
+    ["AB", "CD"],
+  );
+});
+
+test("pair conflict table cutoffs retain the ordinary assignment bound", () => {
+  const worker = loadWorker();
+  const board = worker.parse(stateFromRows([
+    "OOOOOOOOO", "O   O   O", "O R O   O", "Ob A  BaO",
+    "O   O   O", "O   O   O", "OOOOOOOOO",
+  ]));
+  const table = worker.reversePairConflictTable(board, "A", "B", 10);
+  assert.equal(table.status, "cutoff");
+  assert.equal(table.states.size, 10);
+  assert.equal(worker.heuristic([[3, 3, "A"], [3, 6, "B"]], board), 9);
+  assert.equal(board.metrics.pairConflictBoost, 0);
+});
+
 test("exact local room search reports exhausted and import-dependent abstractions safely", () => {
   const worker = loadWorker();
   const blockedParsed = stateFromRows([
@@ -742,6 +806,8 @@ test("prepared board seeds are clone-safe and preserve search results", () => {
   assert.notEqual(firstBoard.supportDependencyMemo, secondBoard.supportDependencyMemo);
   assert.notEqual(firstBoard.localRoomMemo, secondBoard.localRoomMemo);
   assert.notEqual(firstBoard.roomPatternTables, secondBoard.roomPatternTables);
+  assert.notEqual(firstBoard.pairConflictTables, secondBoard.pairConflictTables);
+  assert.notEqual(firstBoard.shortestCorridorMemo, secondBoard.shortestCorridorMemo);
   assert.notEqual(firstBoard.localCorralMemo, secondBoard.localCorralMemo);
   assert.notEqual(firstBoard.doorwayFlowMemo, secondBoard.doorwayFlowMemo);
   assert.notEqual(firstBoard.boxSignatureMemo, secondBoard.boxSignatureMemo);
@@ -810,6 +876,11 @@ test("search results expose bounded hot-path performance telemetry", () => {
   assert.equal(typeof result.performance.roomPatternStates, "number");
   assert.equal(typeof result.performance.roomPatternHits, "number");
   assert.equal(typeof result.performance.roomPatternBoost, "number");
+  assert.equal(typeof result.performance.pairConflictBuilds, "number");
+  assert.equal(typeof result.performance.pairConflictStates, "number");
+  assert.equal(typeof result.performance.pairConflictCandidates, "number");
+  assert.equal(typeof result.performance.pairConflictHits, "number");
+  assert.equal(typeof result.performance.pairConflictBoost, "number");
   assert.ok(result.performance.localCorralMs >= 0);
   assert.ok(result.performance.doorwayFlowMs >= 0);
   assert.ok(result.performance.reachabilityCalls > 0);
