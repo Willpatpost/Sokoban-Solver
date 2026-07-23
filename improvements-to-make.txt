@@ -1,1094 +1,527 @@
-Sokomind improvement campaign and sprint plan
-==============================================
-
-Plan reorganized after Improvement Sprint 13 and updated after Sprint 15 on
-2026-07-23.
+Sokomind forward roadmap
+=========================
 
 Mission
 -------
 
-Build a general-purpose Sokoban search that can find a solution whenever one
-exists and can eventually prove failure when none exists, subject only to an
-explicit user stop or reported platform/resource failure. Production search must
-derive every decision from the supplied board and state. Built-in puzzle names,
-coordinates, saved routes, and the saved Huge solution must never influence
-production search. The Huge route remains diagnostic evidence only.
-
-
-Campaign operating rules
-------------------------
-
-- Future sprints contain 3-5 related improvements and are listed below in
-  dependency and priority order.
-- Once a sprint begins, implement every item in it without waiting for separate
-  "ready for next sprint" messages. Stop only for a genuine external blocker,
-  required user authority, or evidence that cannot be obtained locally.
-- A campaign request may authorize several consecutive sprints. Continue through
-  the authorized range, maintaining versions and this file internally, and return
-  one consolidated handoff instead of requesting approval between sprints.
-- Aim to move every sprint item to Done. "Strong, bounded" is acceptable only
-  when the full claim would be unsound, platform-impossible, or unsupported by
-  proof after the planned work is exhausted. Record the exact remaining boundary;
-  do not use the label merely to end a sprint early.
-- Do not silently move unfinished work to another sprint. If an item misses its
-  finish gate, keep the sprint open unless a documented hard boundary justifies
-  Strong, bounded status.
-- After every change to solver behavior, search strategy, pruning, state
-  representation, worker protocol, or solver orchestration, increment the solver
-  version ID and synchronize every browser cache-busting reference.
-- After every sprint, update this file with delivered behavior, tests, benchmark
-  results, new limitations, and the next sprint's dependency assumptions.
-- Preserve completeness in exact search. Ordering and bounded discovery may use
-  experimental signals, but pruning requires a proof and independent differential
-  validation.
-- Run the complete JavaScript and Python suites, saved-solution verification,
-  smoke benchmark, and validation benchmark after every sprint. Run browser and
-  Huge campaign gates whenever the sprint changes orchestration or browser flow.
-- Prefer general generated fixtures over built-in-level assertions. Any useful
-  pattern learned from the Huge route must be reformulated as board-derived logic
-  and tested on unrelated puzzles.
-
-
-Status vocabulary
------------------
-
-Done
-  The intended practical outcome is implemented and adequately validated.
-
-Strong, bounded
-  The useful and safe portion is implemented, but a precisely documented proof,
-  platform, or scope boundary remains.
-
-Partial
-  Important foundations exist, but the improvement has not reached its finish
-  gate.
-
-Backlog
-  The named capability has not yet been implemented.
-
-
-Legacy completion history: Sprints 1-13
----------------------------------------
-
-The first thirteen sprints used a mostly single-focus cadence. They established
-the solver, validation, telemetry, heuristic, orchestration, and modularity
-foundations summarized in the future sprint entries. Their exact item-by-item
-boundaries predate this campaign plan, so the completed items are grouped into
-the two historical sprint ranges below rather than retroactively inventing a
-false per-sprint attribution. The following eight items already reached Done and
-are not scheduled again.
-
-Legacy Sprints 1-6 - Safety and CI foundations
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-1. Prevent gameplay keyboard shortcuts from firing in editable controls.
-   Status: Done.
-   Input, textarea, select, button, and contenteditable targets are protected by
-   a tested keyboard policy integrated with the web application.
-
-2. Expand CI deployment gates.
-   Status: Done.
-   GitHub Actions runs the complete JavaScript, differential, smoke, and
-   validation gates before deployment.
-
-4. Calculate benchmark partial credit independently.
-   Status: Done.
-   The harness replays checkpoints and uses a fixed evaluator rather than trusting
-   solver-reported estimates.
-
-6. Restrict GitHub Pages credentials to deployment.
-   Status: Done.
-   Test jobs are read-only; Pages write and ID-token permissions are scoped to
-   the deployment job.
-
-Legacy Sprints 7-13 - Conformance, generality, and macros
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-11. Add shared cross-implementation conformance fixtures.
-    Status: Done.
-    Python, browser, worker, and benchmark implementations consume shared level
-    and rule fixtures that guard parsing and gameplay semantics.
-
-29. Run CI before merge.
-    Status: Done.
-    Pull requests run the complete test and benchmark workflow; deployment remains
-    restricted to main. Repository settings can require the test job.
-
-35. Make saved solution evidence machine-verifiable without specializing search.
-    Status: Done.
-    A generic verifier replays the 640-move, 250-push Huge artifact in CI. Source
-    guards reject saved-route consumption and built-in-level branches in both
-    production solvers.
-
-38. Collapse genuinely forced box sequences into macro edges.
-    Status: Done.
-    Browser and Python searches collapse globally forced chains while preserving
-    replay moves. Browser tunnel, straight-run, and bounded same-box macros retain
-    commitment and deadlock checks without assuming that visual tunnels are forced.
-
-
-PRIORITIZED FUTURE SPRINTS
-==========================
-
-Sprint 14 - Exact-search contract and interruption resilience
--------------------------------------------------------------
-
-Priority reason:
-The campaign currently tests individual pruning rules and selected exact contours,
-but the mission depends on the complete composition of canonicalization,
-transposition dominance, sharding, bounds, termination, and result reporting.
-These contracts must be proven before adding more pruning or orchestration.
-
-45. Differentially certify the complete exact-search kernel.
-    Status: Done in build 2026-07-23.25.
-    Delivered:
-    - Browser Push A* is compared with an independent unpruned step-state 0-1 BFS
-      over all 120 distinct box, goal, and robot placements on a connected 2x3
-      floor plus generic and typed multi-box boards.
-    - Browser exact IDA* is checked against the same oracle with commitment locking,
-      forced macros, and transposition capacities varied independently. Tests compare
-      solvability and optimal push count rather than route survival alone.
-    - Three-way shard unions, finite invalid incumbents, unbounded reruns,
-      transposition eviction, default finite bounds, and canonical push behavior
-      have explicit regression coverage.
-    - Python Push A* is compared with a separate unpruned step-state 0-1 BFS over
-      generic, typed, solvable, and unsolvable multi-box cases.
-    - The new exact-kernel differential suite is a required GitHub Actions gate.
-
-46. Define one trustworthy terminal-result contract.
-    Status: Done in build 2026-07-23.25.
-    Delivered:
-    - Python, browser search, Web Worker protocol, director, GUI, CLI, benchmark
-      results, and structured logs use solved, proven-unsolvable, cutoff, cancelled,
-      and failed with an explicit reason.
-    - Python's SearchResult remains tuple-unpack compatible while exposing status,
-      reason, and cutoff fields to new callers.
-    - Finite contours, guided portfolios, and bounded beams cannot claim
-      unsolvability. Only certified unbounded exact exhaustion can do so.
-    - Both production solvers independently replay and trim candidate solutions
-      before reporting solved. Illegal, incomplete, or state-mismatched paths become
-      failed results.
-    - Worker exceptions become structured failures, repeated proof-worker crashes
-      have a bounded recovery policy, user stops log cancellation, and existing
-      stale-message guards remain covered.
-
-47. Make persistent exact search stack-safe, resumable, and crash-recoverable.
-    Status: Done in build 2026-07-23.25.
-    Delivered:
-    - Exact IDA* now uses an explicit traversal stack. A 600-push regression proves
-      deep paths no longer depend on the JavaScript call stack.
-    - Production exact workers yield after bounded state slices. Versioned
-      checkpoints include a board/state hash, build, bound, shard, contour,
-      traversal stack, counters, and a bounded recent transposition tail.
-    - Transpositions remain a performance cache: omitted entries can only repeat
-      work, while the serialized traversal stack preserves proof progress.
-    - Compatible checkpoints persist in browser storage and resume after worker
-      replacement or page reload. Board, build, bound, and shard mismatches are
-      rejected, and Clear Saved Search explicitly removes the current proof state.
-    - Deterministic tests interrupt at five different slice sizes, JSON-round-trip
-      every checkpoint, and require the resumed outcome and push count to match an
-      uninterrupted run. Storage round trips and incompatible checkpoints are
-      independently tested.
-
-Sprint completion gate:
-Completed in build 2026-07-23.25. All three items are Done; exact search has an
-independently checked completeness contract, every terminal outcome is
-unambiguous, and interruption cannot silently turn a proof run into a restart,
-false failure, or false proof.
-
-
-Sprint 15 - End-to-end validation foundation
---------------------------------------------
-
-Priority reason:
-These gates must exist before broader pruning, decomposition, and orchestration
-changes. Finishing them first prevents later sprints from relying on manual Huge
-logs or narrow unit wiring assertions.
-
-3. Add exhaustive differential tests for every hard pruning rule.
-   Status: Done in build 2026-07-23.26.
-   Existing foundation:
-   - Reference BFS checks every current hard-pruning rule independently and in
-     combination.
-   - All 780 placements across connected 2x3 floors are enumerated, including 60
-     independently proven solvable configurations and authored larger boards.
-   - The harness retains the smallest discovered false positive.
-   Delivered:
-   - Deterministically sampled 3x3 and 3x4 properties exercise generic and typed
-     multi-box layouts alongside authored doorway, corral, diagonal, and freeze
-     structures.
-   - Structural shrinking removes irrelevant floor while retaining a reproducible
-     predicate, and the existing smallest-counterexample retention remains active.
-   - Hard pruning is now an executable production registry. Every rule names an
-     independent unpruned oracle family, and CI rejects unregistered coverage.
-
-5. Add hidden or generated benchmark families.
-   Status: Done in build 2026-07-23.26.
-   Existing foundation:
-   - Sixteen replay-validated mirror, rotation, relabeling, premature-goal,
-     doorway, room-packing, corral, and certified lane-warehouse cases.
-   Delivered:
-   - Added separately seeded bottleneck, staging-capacity, coupled-room-ordering,
-     dependency-cycle, and multi-gate families.
-   - Seeds remain harness-only; every bounded case is independently exact-solved
-     and checked against its reviewed solved/push expectation.
-   - Production search receives only ordinary puzzle and budget inputs and has no
-     fixture-name branches.
-
-30. Add real-browser integration tests.
-   Status: Done in build 2026-07-23.26.
-   Delivered:
-   - Playwright covers page load, level selection, keyboard/touch play,
-     hint/solve/stop, undo/reset during animation, persisted bounds, completion,
-     stale messages, worker errors, build display, and mobile layout.
-   - Chromium and WebKit projects run in a required CI matrix against the served
-     modular page and real worker entry.
-   - Director callbacks now reject messages and errors from workers already
-     removed by stop or supersession.
-
-42. Add an end-to-end Ultimate campaign regression for checkpoint consumption.
-   Status: Done in build 2026-07-23.26.
-   Delivered:
-   - A bounded scripted-worker fixture drives the real page and director from
-     analysis through evacuation, packing, milestone reverse work, and bridges.
-   - The test proves the packing handoff consumes the checkpoint, compatible
-     candidates launch bridge work, and target incompatibility reaches the
-     structured browser log with its exact reason.
-   - The fixture is puzzle-independent and does not depend on the Huge board or
-     source-text matching.
-
-Sprint completion gate:
-Completed in build 2026-07-23.26. All four items are Done; CI runs the generated
-and Chromium/WebKit browser gates, and all existing suites remain green.
-
-
-Sprint 16 - Deterministic performance and release gates
--------------------------------------------------------
-
-Priority reason:
-Later optimization sprints need trustworthy memory/state baselines, compatible
-runtime coverage, and one authoritative build identifier.
-
-7. Add detailed solver performance instrumentation.
-   Status: Done in build 2026-07-23.27.
-   Existing foundation:
-   - Timings and counters cover reachability, matching, hashing, pruning, caches,
-     frontier behavior, strategic reasoning, heap samples, worker lifecycle, and
-     isolated benchmark processes.
-   Finish gate:
-   - Give the bidirectional director the same lifecycle accounting as ordinary
-     portfolios.
-   - Standardize supported/unsupported memory fields and document unavoidable
-     browser GC limitations.
-   - Add tests proving every performance schema remains stable across algorithms.
-   Completion notes:
-   - Bidirectional, planner, and ordinary portfolio workers share startup,
-     first-message, wall-clock, termination-call, and release-reason accounting.
-   - Memory has a versioned supported/unsupported schema with an explicit source
-     and documented uncontrolled-GC limitation.
-   - Cross-algorithm schema tests cover every public search family.
-
-31. Add deterministic performance and memory regression gates.
-   Status: Done in build 2026-07-23.27.
-   Finish gate:
-   - Store reviewed baselines and tolerances for visited/generated states, retained
-     states, frontier peaks, transposition evictions, and heap peaks.
-   - Separate deterministic counters from machine-sensitive elapsed time.
-   - Fail CI on material smoke/validation regressions and add a scheduled or
-     explicitly dispatched Huge performance workflow.
-   Completion notes:
-   - Reviewed smoke/validation baselines gate visited, generated, retained,
-     frontier, eviction, solution, and replay-validity counters.
-   - Heap uses an isolated-process envelope; elapsed time remains telemetry-only.
-   - Huge has a weekly and manually dispatched artifact-producing workflow.
-
-33. Expand compatibility and quality checks.
-   Status: Done in build 2026-07-23.27.
-   Finish gate:
-   - Test the documented Python 3.10+ range and supported Node range.
-   - Add formatting, linting, type checking where practical, and coverage reports
-     with reviewed thresholds.
-   - Keep dependency-free browser deployment and deterministic tests intact.
-   Completion notes:
-   - CI covers Python 3.10/3.12/3.14 and Node 20/22/24.
-   - Ruff formatting/lint, mypy, JavaScript syntax/format checks, Python branch
-     coverage (85%), and Node line/branch/function coverage gates are enforced.
-
-34. Replace manually synchronized browser build strings.
-   Status: Done in build 2026-07-23.27.
-   Existing foundation:
-   - The homepage badge, worker URL, search events, and tests expose the current
-     build and currently use synchronized cache queries.
-   Finish gate:
-   - Establish one authoritative version source and generate or inject every HTML,
-     policy, UI, director, engine, search, and worker cache revision.
-   - Add a CI/release check that rejects drift.
-   Completion notes:
-   - `docs/build.json` is the single source consumed by a cache-busting bootstrap.
-   - The release check validates every browser asset and worker import revision.
-
-Sprint completion gate:
-All four items are Done, build drift is mechanically impossible in normal
-development, and deterministic regression gates protect later tuning.
-
-Completed in build 2026-07-23.27. All four items are Done; reviewed state and
-memory gates, supported-runtime matrices, quality/coverage checks, and the single
-browser build manifest now protect subsequent optimization sprints.
-
-
-Sprint 17 - Dense reusable state and assignment core
-----------------------------------------------------
-
-Priority reason:
-These hot-path foundations reduce the cost of every later exact, heuristic, and
-decomposition feature.
-
-8. Replace repeated single-box searches with a compiled push graph.
-   Current status: Done in build 2026-07-23.28.
-   Existing foundation:
-   - Geometry nodes encode box cells and robot-region representatives; compiled
-     transitions match the reference implementation.
-   Finish gate:
-   - Compile reusable reverse feasibility/distance tables from typed goals.
-   - Preserve generic-goal compatibility and prove equivalence against the current
-     player-aware search on generated boards.
-   Completion notes:
-   - Typed and generic goals now own reusable reverse feasibility/distance tables
-     compiled from the single-box graph.
-   - Mirrored and rotated generated-board tests compare every floor-to-goal entry
-     with the independent player-aware reference search.
-
-9. Replace string-heavy hot-path state data with dense representations.
-   Current status: Done in build 2026-07-23.28.
-   Existing foundation:
-   - Dense cell IDs, typed arrays, packed collision-free BigInt identities, compact
-     parents, and deferred walk reconstruction serve all major browser searches.
-   Finish gate:
-   - Replace remaining coordinate-array clones in measured hot paths with a dense
-     immutable layout or copy-on-write representation.
-   - Add box occupancy bitsets and incrementally updated identities where profiling
-     proves a gain.
-   - Retain readable boundary formats only for protocol, logs, and diagnostics.
-   Completion notes:
-   - Immutable layouts cache typed cells, labels, tokens, cell indices, occupancy
-     bitsets, compact signatures, and collision-free identities.
-   - Successors use copy-on-write dense containers and update only the moved box,
-     affected occupancy words, and identity; telemetry separates builds and
-     derivations.
-
-10. Reuse immutable board analysis across web workers.
-    Current status: Done in build 2026-07-23.28.
-    Existing foundation:
-    - Prepared seeds share topology, push distances, dense indices, graphs, and
-      completed interaction tables through structured cloning.
-   Finish gate:
-   - Quantify startup and clone costs, eliminate duplicated reconstruction, and
-     reuse every safe immutable analysis product.
-   - Treat lack of SharedArrayBuffer on ordinary GitHub Pages as a platform
-     boundary, not a reason to duplicate avoidable computation.
-   Completion notes:
-   - Prepared seeds now reuse typed-goal tables, seeded player push distances, and
-     goal-room packing tables in addition to topology, indices, and compiled graph.
-   - The reviewed Huge Node profile records a 106,838-byte estimate and median
-     55.463 ms build, 2.377 ms structured clone, and 19.354 ms hydration. Standard
-     cloning remains the portable GitHub Pages boundary.
-
-36. Incrementally update exact box-to-goal assignments after one box moves.
-    Current status: Done in build 2026-07-23.28.
-    Existing foundation:
-    - Browser matching already reused unchanged rows and repaired larger groups
-      with one O(n^2) augmenting path, exactly matching full Hungarian results.
-   Finish gate:
-   - Profile and select the optimal crossover automatically or from reviewed data.
-   - Port the safe incremental representation to Python.
-   - Retain randomized equivalence tests, unreachable-edge coverage, and telemetry;
-     document why O(n) is unattainable if the exact assignment update requires
-     O(n^2) information.
-   Completion notes:
-   - Reviewed seven-sample profiles select crossover 3 for JavaScript and 5 for
-     Python; both runtimes retain exact full-Hungarian fallback.
-   - Python now carries safe parent assignment hints and repairs one row exactly.
-     Randomized, unreachable-edge, successor, and telemetry tests cover both paths.
-   - An exact augmenting path may inspect every row/goal edge, so the general
-     one-row repair is O(n^2), not O(n).
-
-Sprint completion gate:
-All four items are Done, both runtimes retain exact assignment semantics, and the
-reviewed benchmarks show no material regression.
-
-
-Sprint 18 - Proven deadlocks, commitments, and local exact reasoning
--------------------------------------------------------------------
-
-Priority reason:
-Safe pruning and proven box locking can shrink the search space dramatically, but
-must precede more aggressive decomposition and ordering.
-
-13. Add a goal-commitment safety oracle.
-    Current status: Done in build 2026-07-23.29.
-    Existing foundation:
-    - Temporary, conditional, and proven placements use matching, dependencies,
-      doorway flow, immovability, support demand, and bounded room evidence.
-   Finish gate:
-   - Extend movable proof to every local room/corral class completed in item 15.
-   - Make support prerequisites assignment-aware and recursively proven.
-   - Differentially validate every new lock and preserve the full Huge replay.
-   Completion notes:
-   - Support prerequisites now follow the exact box-to-goal matching and compute
-     transitive blocker closure; incomplete assignments and cycles cannot justify
-     a proven lock.
-   - Proof-complete rooms retain movable commitment evidence. A corral can prove a
-     movable placement only in a globally closed domain after solving every
-     remaining goal with the committed cell treated as a wall.
-   - Exhaustive small-board differential tests and the full 250-push Huge replay
-     preserve every solvable transition under proven locking.
-
-15. Add cached exact local searches for rooms and corrals.
-    Current status: Done with explicit limits in build 2026-07-23.29.
-    Existing foundation:
-    - Bounded exact abstractions reason about packing, transfers, doorway
-      restoration, boundary viability, and reopening access.
-   Finish gate:
-   - Add compact state storage and decomposition so every room/corral within
-     documented practical limits receives a conclusive result.
-   - Define and prove when local unsolvability safely implies global rejection.
-   - Expose cutoff versus proof explicitly and cache only state-complete evidence.
-   Completion notes:
-   - Dense typed tokens, occupancy bitsets, canonical robot regions, and static
-     component decomposition provide compact collision-free local states.
-   - A combinatorial upper bound makes every eligible search conclusive: at most
-     16 room cells, 24 domain cells, five boxes, and 250,000 canonical states.
-     Larger cases are explicitly oversized; only proof-complete results are cached.
-   - Local exhaustion implies global rejection only when the domain contains every
-     box and every floor edge and requires no import or export.
-
-18. Add closed-diagonal deadlock detection and complete freeze detection.
-    Current status: Done in build 2026-07-23.29.
-    Existing foundation:
-    - Conservative wall-ended diagonals and frozen components are independently
-      enumerated, transformed, and replay-tested in browser and Python.
-   Finish gate:
-   - Add proven box-ended, wall/goal sequence, recursive freeze, typed, and
-     multi-box variants.
-   - Generate all transformed families and promote only independently proven
-     patterns to pruning.
-   Completion notes:
-   - Recursive per-box axis blocking now finds frozen members even when another
-     box in the connected group can move.
-   - Wall-ended, immovable-box-ended, typed goal-sequence, generic, and multi-box
-     cases use exact matching-goal checks or complete relaxed pattern evidence.
-   - Mirrored and rotated generated families are independently enumerated in
-     JavaScript; the proven recursive and diagonal subset is also tested in Python.
-
-19. Add small deadlock pattern databases.
-    Current status: Done with explicit limits in build 2026-07-23.29.
-    Existing foundation:
-    - A cached relaxed local search proves typed corridor-order conflicts under
-      rules more permissive than the real puzzle.
-   Finish gate:
-   - Generate canonical wall/box/label pattern families, add symmetry reduction,
-     include useful generic-box cases, and port the proven subset to Python.
-   - Establish deterministic cost gates so local enumeration cannot regress open
-     warehouse searches.
-   Completion notes:
-   - Wall, box, goal, and label layouts use eight-way dihedral canonicalization;
-     both typed and useful generic-box corridor families are supported.
-   - The relaxed proof lets the robot use every support and lets boxes escape the
-     window, so only complete unsalvageability can prune. Python carries the same
-     proven corridor subset.
-   - Reviewed gates cap production enumeration at 512 states, 18 floor cells, and
-     four boxes. Branching, oversized, and cutoff windows retain the state.
-
-Sprint completion gate:
-All four items are Done or carry only a mathematically explicit size boundary;
-every hard rejection is independently proven and differentially tested.
-
-
-Sprint 19 - Admissible interaction heuristics and decomposition
----------------------------------------------------------------
-
-Priority reason:
-After local proof machinery is complete, use it to close the large assignment
-heuristic gap without sacrificing admissibility.
-
-17. Add reverse-proven goal-room packing tables.
-    Current status: Done with explicit limits in build 2026-07-23.30.
-    Existing foundation:
-    - Typed one-entrance rooms up to four boxes compile reverse packing tables with
-      exact distances and all optimal next pushes.
-   Finish gate:
-   - Prove the closed-room conditions under which leaving and re-entering cannot
-     help, making complete misses safe rejections.
-   - Extend practical room coverage with dense storage or proven decomposition.
-   - Reuse immutable tables across workers based on measured clone/build costs.
-   Completion notes:
-   - Complete tables now carry their finite state bound, compact canonical storage
-     contract, and a checked closed-domain flag. Only a complete miss in a domain
-     with no exterior floor edge can become a local or global rejection.
-   - The reviewed room/domain/five-box/250,000-state limits make every eligible
-     table conclusive; larger tables remain explicitly oversized.
-   - Packing tables remain part of the clone-safe prepared-board seed, and strict
-     static-dead goal cuts provide the safe larger-component path.
-
-20. Build strategic multi-box pattern databases.
-    Current status: Done with explicit limits in build 2026-07-23.30.
-    Existing foundation:
-    - Label-disjoint room patterns replace Hungarian contributions with exact
-      discovered costs and remain admissible after bounded cutoffs.
-   Finish gate:
-   - Support generic/shared-label candidate selection by minimizing over compatible
-     assignments.
-   - Extend useful coverage beyond four boxes through safe partitions or symmetry.
-   - Add generated interacting-room efficiency benchmarks and port the stable
-     subset to Python.
-   Completion notes:
-   - Shared and generic labels minimize over compatible room-box selections plus
-     the exact outside assignment, with a 512-combination fallback to Hungarian.
-   - Larger rooms are partitioned into label-disjoint two-to-four-box tables;
-     shared-label groups are never split or double counted.
-   - Browser tests cover shared-label and five-goal partitions. The stable global
-     two/three-box relaxed table is also used by Python.
-
-21. Add proven corridor, gate, staging, and support conflict bounds.
-    Current status: Done with explicit limits in build 2026-07-23.30.
-    Existing foundation:
-    - Unique-label pair conflicts use exact relaxed two-box tables and a
-      label-disjoint maximum without double counting.
-   Finish gate:
-   - Handle shared/generic labels by minimizing over compatible assignments.
-   - Add proven three-or-more-box capacity conflicts where non-overlap is explicit.
-   - Add generated chokepoint baselines and port the stable subset to Python.
-   Completion notes:
-   - Existing unique-label corridor pairs remain, while boards with at most three
-     boxes and 32 floor cells compile an exact relaxed capacity table.
-   - The capacity table removes robot connectivity and unrelated restrictions, so
-     its shared/generic, gate, staging, and support interaction cost is admissible.
-   - Room, pair, and capacity candidates share one exact label-disjoint selector.
-     JavaScript and Python both reproduce the independently checked chokepoint
-     bound; cutoff or ineligible cases retain ordinary assignment.
-
-37. Add proven goal-cut decomposition.
-    Current status: Done with a strict certificate in build 2026-07-23.30.
-   Finish gate:
-   - Detect label-compatible separators whose subproblems are independent under
-     robot travel, box crossing, shared support/staging cells, and ordering.
-   - Prove the independence conditions, solve components separately, combine
-     replayable paths, and fall back unchanged whenever proof is incomplete.
-   - Validate on generated positive and near-miss counterexample families.
-   Completion notes:
-   - A certificate requires a non-goal articulation that is statically dead for
-     every label plus exact per-component box/goal label balance. Boxes therefore
-     cannot cross the separator or satisfy another component's goals.
-   - Exact Push A* solves certified components separately, permits robot travel
-     between them, restricts pushes to the active component, stitches the paths,
-     and accepts only a globally replay-validated solution.
-   - Positive certification and replay tests are paired with unchanged fallback
-     for every board that lacks the complete certificate.
-
-Sprint completion gate:
-All four items are Done, every lower-bound combination remains admissible, and
-decomposition never activates without a checked independence certificate.
-
-
-Sprint 20 - Assignment-aware dependencies and relevant ordering
----------------------------------------------------------------
-
-Priority reason:
-Use the stronger assignments and local proofs from Sprint 19 to guide discovery
-through setup moves without making exact search incomplete.
-
-14. Build dynamic support-square dependency graphs.
-    Current status: Done in build 2026-07-23.31.
-    Completion:
-    - Dependencies use the current compatible box-to-goal assignment and expose
-      recursive prerequisite closures, cycles, concrete blocker-vacating actions,
-      target staging sides, and unique-box minimum displacement.
-    - The graph remains ordering evidence and exposes no pruning contradiction.
-      Pruning consumers must obtain a separate exact local certificate, so this
-      model cannot make exact search incomplete.
-
-16. Model typed doorway flow and staging capacity.
-    Current status: Done in build 2026-07-23.31.
-    Completion:
-    - Doorway analysis emits particular-box import/export tasks, shared-corridor
-      and same-box dependencies, compatible simultaneous waves, and restoration
-      obligations for blocked gates and full staging areas.
-    - Multi-room tests exercise dependent and simultaneous transfers. The model
-      is ordering-only unless an exact local proof confirms a contradiction.
-
-23. Add comprehensive relevance-based move ordering.
-    Current status: Done in build 2026-07-23.31.
-    Completion:
-    - Beam, bounded DFS, and exact Push IDA* successor ordering combine unresolved
-      assignment progress, the active bottleneck and dependency chain, recent
-      enabling actions, typed doorway tasks, and restoration obligations.
-    - Exact search changes order only, preserving completeness. Signal-specific
-      telemetry and a deterministic chokepoint ablation show when relevance
-      changes order and reduces visited states.
-
-41. Make expensive strategic ordering analyses productivity-aware.
-    Current status: Done in build 2026-07-23.31.
-    Completion:
-    - Per-worker and per-profile child doorway and packing gates measure useful
-      best-estimate or solution progress, not merely a changed ordering. Exact
-      ordering probes likewise attribute later subtree progress to the signal.
-    - Required proof evidence is never gated. Evaluations, skips, useful samples,
-      changed orderings, and cooldowns are reported separately.
-    - Reviewed generated and Huge performance probes remain inside deterministic
-      state and memory envelopes; strategic memo caps are bounded at 5,000 entries.
-   Evidence from the 2026-07-23.27 eight-minute Huge run:
-   - The three exact-phase guided workers ended near 23, 24, and 69 states/second.
-     Their projected costs worsened from 214/214/208 to 234/226/216 while
-     signature, commitment, dependency, doorway, and reachability analysis
-     accumulated tens of seconds per worker.
-   - Add per-worker useful-progress telemetry and retire or simplify a profile
-     when expensive signals do not improve its best checkpoint, projected cost,
-     solved-goal count, or a replay-validated incumbent within a reviewed window.
-   Follow-up evidence from the 2026-07-23.29 twenty-one-minute Huge run:
-   - Detour and balanced guided workers both settled at h=137, four new pushes,
-     73 total pushes, and projected cost 210. Those best-result signatures then
-     remained unchanged for 816 and 776 seconds respectively while each lane ran
-     near 23 states/second.
-   - Those two workers accumulated 73.1/71.6 and 66.4/67.6 seconds in support
-     dependency/commitment analysis, yet both reported zero strategic-ordering
-     evaluations or changes. Attribute expensive signals to their actual beam
-      scoring, proof, or ordering consumer, then gate each consumer by measured
-      useful progress rather than treating aggregate profile time as sufficient.
-   Follow-up evidence from the 2026-07-23.31 thirty-minute Huge run:
-   - All three anytime guided lanes still reported zero useful strategic-ordering
-     samples. Guided 1 and 2 examined only 14,254 and 13,241 states in roughly
-     22 minutes while accumulating 361/337 seconds of heuristic work, 96/89
-     seconds of support analysis, and 42/47 seconds of commitment analysis.
-     Their lower h values were bought with projected costs of 244 and 256, not a
-     solution or a stronger bound. A zero-useful window must disable the costly
-     consumer or retire the lane; telemetry alone is not a productivity gate.
-   - Guided 3 reproduced the prior plateau: h moved only from 138 to 137 and
-     projected cost worsened from 208 to 210 over 34,100 states, while heuristic,
-     support, and commitment work consumed about 238, 74, and 77 seconds.
-     Identical structural/checkpoint progress must be the retirement key even
-     when raw states continue to increase.
-
-Sprint completion gate:
-All four items are Done; ordering is assignment-aware, measurable, and complete,
-while pruning uses only exact contradictions.
-
-Completed in build 2026-07-23.31. All four items are Done; assignment-aware
-dependency actions and typed crossing schedules feed a unified relevance order,
-while useful-progress gates bound optional strategic work without suppressing
-proof evidence.
-
-
-Sprint 21 - Search-space redundancy and adaptive diversity
-----------------------------------------------------------
-
-Priority reason:
-Once dependencies and relevance are explicit, safely remove equivalent work and
-preserve strategically different work.
-
-22. Introduce true feature-space search queues.
-    Current status: Strong browser foundation in build 2026-07-23.33.
-    Existing foundation:
-    - Bounded browser beams reserve joint feature cells for room, gate, evacuation,
-      commitment, doorway, dependency, local guidance, and mobility diversity.
-    - The structural plan-macro beam retains separate heuristic and structural
-      elites while pursuing board-derived assignments, doorway export/import
-      waves, blocker clearing, staging restoration, and packing dependencies.
-    - Its global access guard rejects discovery branches that newly strand an
-      exporter, violate packing order, immobilize an assigned box away from its
-      goal, or block access needed by an unsolved goal. These are bounded
-      discovery-lane decisions, not hard pruning in the complete exact kernel.
-    - With the shipped Ultimate limits, a clean Huge run solved and replay
-      validated in 85.4 seconds after 3,752 structural states and 19,689
-      generated candidates (330 pushes and 1,306 player moves). The same solve
-      passed under a 256 MB V8 heap ceiling in 86.8 seconds. No saved route,
-      level name, or board coordinate was available to the search.
-    - Discovery assignment scoring no longer constructs proof-only room,
-      pair-conflict, or capacity tables. On Huge, heuristic time fell from about
-      54 seconds to 2.8 seconds without changing the path or search counters.
-   Finish gate:
-   - Preserve productive elites across depths/restarts, adapt cell boundaries and
-     quotas from measured yield, and track individual strategic identities.
-   - Add generated feature-conflict efficiency families and port the stable policy
-     to Python.
-
-24. Add partial-order reduction for independent pushes.
-    Current status: Backlog.
-   Finish gate:
-   - Define a conservative independence relation covering box interaction, robot
-     access, support squares, dependencies, commitments, and macro effects.
-   - Canonicalize equivalent interleavings only under a proof, retain a fallback,
-     and exhaustively validate small multi-box cases.
-
-25. Add symmetry reduction.
-    Current status: Partial in build 2026-07-23.33.
-   Existing foundation:
-   - The structural discovery lane canonicalizes all eight rotations/reflections,
-     including rectangular boards, and restores solution moves and checkpoint
-     states to the supplied orientation.
-   - Base, horizontally mirrored, and 180-degree rotated Huge each solved with
-     identical deterministic work: 3,752 states, 19,689 generated candidates,
-     and a replay-valid 330-push solution. Fast tests cover 90-degree rectangular
-     path restoration, and the weekly suite runs all three Huge orientations
-     under a 256 MB heap ceiling.
-   Finish gate:
-   - Detect valid wall/goal/label symmetries and interchangeable boxes.
-   - Canonicalize states without merging typed semantics or robot-access classes.
-   - Validate mirrored/rotated/generated equivalence and quantify state reduction.
-
-27. Complete browser runtime modularization.
-    Current status: Strong, bounded in build 2026-07-22.24.
-    Existing foundation:
-    - UI, gameplay rules, telemetry formatting, director, worker protocol,
-      board/heuristic engine, and search algorithms have explicit tested modules.
-   Finish gate:
-   - Split the remaining engine into focused topology, heuristic, deadlock, and
-     local-analysis modules as those interfaces stabilize in this sprint.
-   - Centralize shared browser rule primitives and remove avoidable test-loader
-     duplication without adding a bundler or weakening GitHub Pages deployment.
-   - Treat Python/browser language separation as an architectural boundary while
-     keeping shared conformance authoritative.
-
-Sprint completion gate:
-All four items are Done, reductions have proof-backed fallbacks, and adaptive
-diversity is protected by deterministic performance gates.
-
-
-Sprint 22 - Ultimate director lifecycle and exact-search utilization
---------------------------------------------------------------------
-
-Priority reason:
-Finish orchestration only after Sprint 15 supplies real-browser campaign tests and
-Sprint 16 supplies deterministic resource gates.
-
-39. Keep expensive discovery workers live and recover silent lanes.
-    Current status: Strong, bounded in build 2026-07-22.20.
-    Existing foundation:
-    - Elapsed-time liveness, bounded watchdog recovery, and required-work recovery
-      accounting prevent silent guided workers from freezing the portfolio.
-   Finish gate:
-   - Add cooperative yielding or bounded work slices around expansions that can
-     exceed liveness windows.
-   - Prove recovery behavior in the browser campaign suite and retain one bounded
-     recovery maximum.
-   - Split first-message time into worker-ready, checkpoint-restore,
-     first-expansion, and first-progress timings. In the Huge run, 14 exact slices
-     spent 50.3 of 237.9 aggregate worker-wall seconds before their first message,
-     but the current log cannot distinguish startup cost from the first 25,000
-     expansions.
-   - On terminal results and user stop, record the terminal visited count and a
-     lifecycle release for every worker. The final exact completion reported
-     1,400,062 states while its release entry retained the preceding 1,375,062
-     progress sample, and the four workers terminated by user stop had no
-     individual release records.
-   Follow-up evidence from the 2026-07-23.29 twenty-one-minute Huge run:
-   - Twenty-two exact continuation slices accumulated 815.2 seconds of worker
-     wall time and 189.9 seconds before first progress, but their inter-slice
-     relaunch gaps totaled only 2.9 seconds and termination calls totaled 0.5 ms.
-     This makes the timing split essential: the current first-message number is
-     mostly compatible with the first 25,000 expansions, not demonstrated worker
-     startup or checkpoint-restore loss.
-   - User stop again ended with four active workers and no per-worker cancellation
-     releases, so cancellation-path lifecycle accounting remains unfinished.
-
-40. Reduce exact transposition churn without multiplying memory.
-    Current status: Strong, bounded in build 2026-07-22.20.
-    Existing foundation:
-    - Device-memory-aware total budgets give lone shards more capacity while
-      bounding parallel shards.
-   Finish gate:
-   - Replace insertion-order eviction with a measured contour-aware policy.
-   - Adapt capacity using supported live pressure signals without exceeding the
-     deterministic total budget; retain a conservative fallback.
-   Evidence from the 2026-07-23.27 eight-minute Huge run:
-   - One persistent shard advanced from 0 to 1.4 million visited states through
-     fourteen 100,000-state slices at threshold 208 without completing the
-     contour; every slice still reported next threshold 210.
-   - Live transpositions peaked around 25,000-27,000 against a 320,000 allocation
-     with zero evictions. Verify how much useful transposition state survives a
-     checkpoint boundary, distinguish cumulative retained states from live table
-     occupancy, and trade demonstrably unused capacity for safe parallel shards
-     before increasing any memory limit.
-   Follow-up evidence from the 2026-07-23.29 twenty-one-minute Huge run:
-   - The same contour reached 2.3 million completed states plus an in-flight
-     partial slice at threshold 208; h=154, g=54, next threshold 210, and maximum
-     depth 54 remained unchanged. The shard continuously made search progress,
-     but still did not finish the first contour.
-   - Its live transposition high-water mark remained roughly 25,000-27,000 with
-     zero evictions under the 320,000-entry allocation. Treat cumulative retained
-     states and live transposition occupancy as separate resource signals when
-     deciding whether another exact shard is affordable.
-   Follow-up evidence from the 2026-07-23.31 thirty-minute Huge run:
-   - Persistent exact search reached 2,175,135 states and 5,083,228 generated
-     successors but remained at h=159, g=49, threshold 208, and next threshold
-     210. The known replay's lower bound rises from f=208 to f=250, so completing
-     successive blind contours is not a feasible first-solution strategy.
-     Reserve exact contours for proof/bound work and use structural milestones to
-     obtain an incumbent; do not present uninterrupted state growth as solution
-     progress.
-   - Twenty-one continuation launches remained on round 1. Add contour-completion
-     and threshold-advance rate to the director, and treat a checkpoint slice as
-     resumable progress only when its frontier/transposition state demonstrably
-     avoids re-expanding prior contour work.
-
-43. Keep available Ultimate worker capacity productively occupied.
-    Current status: Strong, bounded in build 2026-07-22.21.
-    Existing foundation:
-    - Capacity follows released lanes, bridges are bounded, and exact-phase slots
-      receive limited checkpoint-guided refills.
-   Finish gate:
-   - Use campaign-test and resource telemetry to choose work by expected marginal
-     value rather than fixed retry/profile counts.
-   - Prove no opportunistic lane can starve a required handoff or exact shard.
-   Evidence from the 2026-07-23.27 eight-minute Huge run:
-   - Once exact search began, the presence of anytime discovery forced exact
-     shard count to one. The director then filled the other three lanes with slow
-     guided workers while the exact shard processed 1.4 million states. Allow
-     marginal-yield policy to replace stagnant guided lanes with additional
-     deterministic exact shards without exceeding the total memory budget.
-   - Checkpoint selection currently ranks primarily by g+h. The run discovered
-     replayable h=7 checkpoints near 305 pushes at 114 seconds but selected the
-     g=53, h=157, f=210 checkpoint for later discovery. Maintain separate lanes
-     for first-solution proximity (low h/remaining structure) and bound quality
-     (low g+h), with replay validation and fixed budgets for both.
-   - Twenty-one bridge workers terminated target-incompatible at zero states; the
-     first campaign opened its breaker after 19 schedules, 16 incompatibilities,
-     and only one productive target. Batch or preflight cheap compatibility,
-     deduplicate equivalent landmark targets, and lower a generation's bridge
-     budget when its measured compatibility rate collapses.
-   Follow-up evidence from the 2026-07-23.29 twenty-one-minute Huge run:
-   - The exact shard advanced essentially continuously to more than 2.3 million
-     states, while detour and balanced guided lanes held identical best-result
-     signatures without improvement for about 13 minutes. Use profile overlap and
-     lack of best-result change as explicit replacement signals; a different
-     profile name is not evidence of useful diversity.
-   - The checkpoint registry saw 43 publications but only 39 canonical state IDs.
-     Four states were republished with six-push-cheaper prefixes. The registry
-     correctly upserts those paths; expose publication versus unique-state counts
-     separately, do not treat the update as fresh strategic diversity, and retry
-     prior budget-limited work only when the improved bound can change its outcome.
-   - The best published checkpoint by remaining estimate had h=22, while the
-     exact-phase guided lanes were seeded around h=139-157 from lower-f states.
-     The first-solution and bound-quality lanes therefore still need separate,
-     observable checkpoint selection policies.
-   - The bridge breaker opened after 16 zero-state incompatibilities, but already
-     queued work drained to 21 incompatible launches. It successfully bounded the
-     campaign, yet cheap compatibility preflight and cancellation of queued
-     members should happen before more worker slots are consumed.
-   Follow-up evidence from the 2026-07-23.31 thirty-minute Huge run:
-   - Landmark Bridges 4-7 all started from checkpoint 0011dc3e. Each consumed
-     60,000 states and generated about 1.35-1.42 million successors, reported
-     deceptively low h=29-32/projected=117-133, and produced no connection or
-     incumbent. Compatible is not equivalent to promising: deduplicate campaigns
-     by source, target region, and failed connection boundary, and require
-     measured bridge-distance reduction before scheduling another sibling.
-   - The first macro lane took 214 seconds for only 4,000 retained expansions. Its
-     low-h checkpoint was g=305, h=33, f=338, while the useful bound checkpoint
-     remained g=53, h=157, f=210. The subsequent packing handoff spent another
-     212 seconds and returned only f=272-286 checkpoints. Reject a handoff that
-     worsens both the source bound and structural milestone state; low h alone
-     must not supersede the source or reserve solution-discovery capacity.
-   - At user stop, three guided lanes occupied three of four slots despite all
-     reporting zero useful strategic samples. Worker replacement must use
-     marginal solution evidence, not the fact that a profile continues emitting
-     progress events.
-   Resolution in builds 2026-07-23.32 through 2026-07-23.33:
-   - Ultimate now schedules one structural plan lane before the redundant guided
-     opening work. The released limits solved Huge in 138.2 seconds with 3,752
-     visited structural states, versus the .31 run's unsolved 30-minute campaign
-     and 2,175,135-state exact contour.
-   - The result confirms that projected cost and raw throughput were the wrong
-     first-solution signals for this board. Doorway phase completion, packing
-     feasibility, and continued goal access now provide the decisive discovery
-     evidence; exact contours remain the proof fallback.
-   - Build .33 removed orientation-sensitive bounded-search variance. Before
-     canonicalization, mirrored Huge exhausted after 3,063 states and rotated
-     Huge exhausted after 5,792 states; afterward both solved with the canonical
-     3,752-state trace and their paths replayed in the original orientation.
-   - Separating discovery assignment distance from proof-only interaction tables
-     reduced the canonical solve from 130.8 to 85.4 seconds while retaining the
-     same 330-push solution. A 256 MB heap-capped run completed in 86.8 seconds.
-
-44. Prevent superseded opening work from delaying handoffs and exact search.
-    Current status: Strong, bounded in build 2026-07-22.23.
-    Existing foundation:
-    - Evacuation reserves direct capacity, pending opening work retires, and active
-      opening work becomes opportunistic with idempotent required accounting.
-   Finish gate:
-   - Exercise supersession, watchdog recovery, packing launch, portfolio completion,
-     and exact transition in deterministic browser campaigns.
-   - Add resource-aware cancellation/demotion criteria for active opportunistic
-     work while preserving productive solution discovery.
-   Evidence from the 2026-07-23.29 twenty-one-minute Huge run:
-   - The first persistent exact contour did not start until 394 seconds into the
-     run, after opening, reverse, macro, packing, exact-handoff, and restart work
-     had produced no incumbent. Measure time-to-first-exact-progress as a campaign
-     outcome and reserve earlier proof capacity when opening work's marginal yield
-     falls below the exact lane.
-   Follow-up evidence from the 2026-07-23.31 thirty-minute Huge run:
-   - Persistent exact search did not start until 455 seconds. Before that point,
-     the director spent two 212-214 second macro/packing searches, four completed
-     60,000-state bridge searches, two 100,000-state exact handoffs, and several
-     reverse/opening campaigns without producing an incumbent. Enforce a wall-time
-     deadline for the opening-to-proof transition and allow structurally stronger
-     work to replace a scheduled phase instead of completing the fixed ceremony.
-
-Sprint completion gate:
-All four items are Done, browser campaigns prove checkpoint-to-exact progress, and
-resource gates show no starvation or unbounded recovery.
-
-
-Sprint 23 - Python parity, accessibility, presentation, and release readiness
-----------------------------------------------------------------------------
-
-Priority reason:
-Finish the local solver and user-facing project after the authoritative browser
-capabilities and interfaces stabilize, avoiding repeated parity and UI rewrites.
-
-12. Bring the Python/local solver to intentional parity with JavaScript.
-    Current status: Partial.
-    Existing foundation:
-    - Exact matching, bounded caches, compact reachability, forced macros, bounded
-      push beam, local Ultimate fallback, freeze detection, and differential tests.
-   Finish gate:
-   - Port the stable topology, sequence, deadlock, IDA*, commitment, dependency,
-     room/corral, doorway, interaction-bound, feature-queue, and telemetry subsets
-     selected by prior sprints.
-   - Document intentional browser-only capabilities and remove redundant local
-     priority/heuristic machinery.
-
-26. Improve screen-reader and reduced-motion support.
-    Current status: Backlog.
-   Finish gate:
-   - Provide an accessible board/live description of robot, boxes, goals, moves,
-     solve state, and solver status.
-   - Add correctly scoped live announcements, keyboard focus behavior, and a
-     reduced-motion mode for transitions and playback.
-   - Cover these behaviors in the browser integration suite.
-
-28. Complete desktop and mobile interaction/layout review.
-    Current status: Backlog.
-   Finish gate:
-   - Improve hierarchy, controls, responsive board sizing, navigation, logs, and
-     touch interaction while preserving the established palette and theme.
-   - Validate supported breakpoints, overflow, focus, and touch targets in browser
-     tests and visual review.
-
-32. Complete project and release hygiene.
-    Current status: Partial.
-    Existing foundation:
-    - Architecture documentation defines the general-purpose rule, modular runtime,
-      and diagnostic role of saved solutions.
-   Finish gate:
-   - Add LICENSE, CONTRIBUTING.md, changelog/release-note convention, support
-     matrix, and explicit browser/Python capability table.
-   - Ensure setup, testing, benchmarking, deployment, and versioning instructions
-     match the final repository.
-   - Version and test the exported search-log schema. Preserve identifier fields
-     as strings even when an eight-character state hash contains only digits;
-     build .27 emitted one checkpoint ID as a number while peer IDs were strings.
-   - Emit a compact terminal summary on solved, failed, cutoff, and user-stopped
-     runs containing the best replayable checkpoint/incumbent, exact contour,
-     per-strategy states and wall time, lifecycle totals, and memory support. The
-     eight-minute Huge log ended with only active-worker count and required manual
-     reconstruction of the run outcome.
-     Build .29 repeated this after 1,264,357 ms: the final event only reported
-     `activeWorkers: 4`, `status: cancelled`, and `reason: user-stop`, despite a
-     1.8 MB log whose useful final state again had to be reconstructed manually.
-     Build .31 repeated it after 1,801,281 ms and 1,947 records: the terminal
-     event again contained only the user-stop status/reason. It omitted the
-     2,175,135-state exact contour, the three stagnant guided lanes, the best
-     replayable checkpoint, and the failed bridge/handoff totals.
-
-48. Consolidate public search modes and remove redundant compatibility bloat.
-    Current status: Backlog.
-    Audit finding:
-    - Python exposes both Ultimate Search and Fast Portfolio even though
-      `portfolio_search` directly calls `ultimate_search`; `fast`, `portfolio`,
-      `ultimate`, `a*`, and `push-a*` add further aliases.
-    - The browser likewise treats `ultimate`, `portfolio`, and `fast` identically,
-      while DFS, BFS, Greedy, A*, Push Greedy, Push A*, weighted Push A*, Push Beam,
-      regular Ultimate, and Ultimate Bidirectional all appear as peer user choices.
-      Most are engine strategies, teaching baselines, or compatibility names rather
-      than distinct product modes.
-   Finish gate:
-   - Define a small user-facing contract such as Recommended, Quick/anytime, and
-     Exact/proof, with honest optimality, completeness, and resource descriptions.
-   - Keep genuinely useful internal strategies available to the director,
-     benchmarks, and an explicitly advanced/developer interface instead of the
-     primary selector.
-   - Deprecate and then remove duplicate aliases, the Fast Portfolio GUI entry,
-     obsolete one-file compatibility launchers, and duplicated dispatch branches;
-     retain a documented migration path where external CLI compatibility matters.
-   - Use ablation and deterministic benchmark evidence before removing a genuinely
-     distinct strategy from the portfolio, and simplify tests/docs after removal.
-
-Sprint completion gate:
-All five items are Done, supported interfaces are documented and accessible, both
-runtimes have intentional capability parity, redundant public modes are gone, and
-the project is release-ready.
-
-
-Sprint 24 - User-authored puzzle workflow
------------------------------------------
-
-Priority reason:
-Puzzle creation is intentionally last. It should build on the final shared rule
-contract and solver statuses rather than introduce a third parser or imply that a
-budget cutoff means a user puzzle is impossible.
-
-49. Add a browser puzzle editor.
-    Current status: Backlog.
-   Finish gate:
-   - Support create, resize, paint/erase, typed box/goal labels, robot placement,
-     undo/redo, clear, and test-play using the existing game-state rules.
-   - Make mouse, touch, and keyboard editing accessible, preserve work locally, and
-     warn before destructive changes.
-   - Reuse the canonical parser and renderer; do not create editor-only Sokoban
-     semantics.
-
-50. Define canonical puzzle import, export, and sharing.
-    Current status: Partial.
-    Existing foundation:
-    - Python can load UTF-8 text boards and shared conformance JSON defines the
-      current symbol rules.
-   Finish gate:
-   - Specify a versioned interchange format plus lossless plain-text import/export
-     for board rows, typed labels, optional title/author, and future-safe metadata.
-   - Use one validation fixture set across browser, Python, editor, benchmarks, and
-     documentation; reject unsupported versions and malformed metadata clearly.
-   - Add copy/download/upload flows and stable board-content hashes without
-     requiring a hosted backend.
-
-51. Add creator validation and solver-assisted publishing checks.
-    Current status: Backlog.
-   Finish gate:
-   - Report structural errors immediately: robot count, box/goal label counts,
-     disconnected or unreachable floor where relevant, invalid symbols, and
-     obvious static dead starts.
-   - Let authors test-play, request a solution, and attach a replay-validated
-     solution certificate. Distinguish proven-unsolvable, cutoff, cancelled, and
-     failed exactly as item 46 defines.
-   - Never require the bounded guided solver to certify a puzzle before it can be
-     saved; make unverified status explicit and test editor round trips with
-     generated boards.
-
-Sprint completion gate:
-All three items are Done; a user can author, validate, test, save, exchange, and
-reopen a typed Sokomind puzzle without creating a parser or rule fork.
-
-
-Campaign completion definition
-------------------------------
-
-The improvement campaign is complete when:
-
-- all 51 numbered improvements are Done or have a narrowly justified permanent
-  Strong, bounded boundary;
-- every future sprint completion gate has passed;
-- exact search completeness and every hard-pruning proof are independently tested;
-- production search contains no puzzle-specific knowledge;
-- browser and Python capability differences are intentional and documented;
-- deterministic performance gates prevent state or memory regressions;
-- real-browser campaigns cover the complete checkpoint-to-exact lifecycle; and
-- the authoritative version, documentation, CI, benchmark baselines, and release
-  artifacts agree.
+Make Sokomind produce a good solution quickly, improve it for as long as the user
+allows, and retain a complete exact path toward an optimality or unsolvability
+proof. Every decision must be derived from the supplied puzzle. Built-in names,
+coordinates, saved routes, and the diagnostic Huge solution are forbidden inputs
+to production search.
+
+Current reference point
+-----------------------
+
+Build 2026-07-23.33 solves Huge with the released structural planner in 3,752
+visited states, 19,689 generated candidates, 330 pushes, and 1,306 player moves.
+The measured run takes about 85-87 seconds and succeeds with a 256 MB V8 heap
+ceiling. The diagnostic solution demonstrates that at least 250 pushes and 640
+moves are possible; it is benchmark evidence, not solver input and not proof of
+optimality.
+
+Roadmap rules
+-------------
+
+- The seven highest-priority improvements are Tasks 1-7.
+- Exact search must remain complete. A discovery rule may reject a branch only
+  inside an explicitly incomplete lane; production hard pruning requires a proof
+  and independent differential tests.
+- Deliver the first replay-valid solution immediately. Later optimization must
+  never delay or invalidate it.
+- Prefer generated, transformed, and independently certified puzzles over
+  assertions tied only to Huge.
+- Measure deterministic states, generated candidates, retained records, cache
+  occupancy, and solution quality separately from machine-sensitive elapsed time.
+- A task is finished only when its acceptance gate is satisfied. Partial
+  foundations are noted solely to prevent duplicated work.
+
+
+Sprint 1 - Faster structural first solutions
+============================================
+
+Goal: preserve the reliable structural route while eliminating work before it
+becomes a full macro candidate and reducing contention around the most productive
+worker.
+
+1. Apply structural rejection during macro expansion
+   Status: Partial; the current guards primarily evaluate macro endpoints.
+
+   Plan:
+   - Build an incremental macro context containing the active assignment,
+     doorway phase, staging obligations, packing dependencies, exporter egress,
+     box mobility, and unsolved-goal access.
+   - Evaluate the context after every intermediate push and stop a macro as soon
+     as it creates a discovery-lane contradiction that cannot be repaired within
+     that macro.
+   - Keep proven deadlocks separate from discovery-only rejection reasons.
+     Record each category independently in telemetry.
+   - Reuse parent analysis where one pushed box is the only changed element;
+     avoid recomputing whole-board maps at every intermediate state.
+   - Add unrelated doorway, temporary-displacement, and packing-order fixtures
+     that require both early rejection and deliberate temporary worsening.
+
+   Acceptance gate:
+   - Base and transformed Huge still solve with replay-valid paths under released
+     limits.
+   - Exact-search outcomes remain identical to the independent oracle.
+   - Macro intermediate states and dense-layout derivations fall materially
+     without increasing retained structural states or peak memory.
+
+2. Make macro effort adaptive
+   Status: Planned; current exploration limits are fixed.
+
+   Plan:
+   - Estimate local ambiguity from legal push directions, competing targets,
+     blocker routes, doorway conflicts, and structural score dispersion.
+   - Use small lookahead for forced or low-ambiguity motion and reserve the full
+     search budget for doorway crossings, staging decisions, and packing order.
+   - Widen a macro only after its cheaper pass fails to produce a structurally
+     distinct endpoint; contract it again after decisive progress.
+   - Preserve multiple destinations when scores are tied instead of allowing
+     direction iteration order to choose the only survivor.
+   - Report budget tier, widening reason, endpoints retained, and useful-result
+     rate so thresholds can be tuned from evidence.
+
+   Acceptance gate:
+   - The adaptive policy solves every case solved by the fixed 96-state policy in
+     the reviewed structural suite.
+   - Easy and forced macro families perform less work, while ambiguous families
+     retain the required alternatives.
+   - Huge improves in wall time or generated intermediate work without regressing
+     its deterministic top-level search counters.
+
+3. Give the structural worker resource priority
+   Status: Partial; it is scheduled first but still competes with the full
+   Ultimate portfolio.
+
+   Plan:
+   - Give structural discovery a short head start or exclusive high-priority slot
+     on puzzles where analysis predicts a strong doorway/packing plan.
+   - Scale concurrent discovery and reverse workers from hardware concurrency,
+     supported memory, structural progress, and measured marginal yield.
+   - Start proof work by a fixed deadline, but cancel or defer redundant guided
+     lanes while the structural worker is making milestone progress.
+   - Replace fixed profile counts with explicit first-solution, improvement, and
+     proof capacity reservations.
+   - Add deterministic browser campaigns for head-start success, structural
+     plateau, worker failure, low-memory devices, and exact fallback.
+
+   Acceptance gate:
+   - Real-browser campaigns show lower time to first solution and lower aggregate
+     worker memory on complex puzzles.
+   - Structural work cannot starve exact proof, and opportunistic work cannot
+     delay a required handoff.
+   - Stop, reset, worker failure, and watchdog recovery remain bounded and tested.
+
+Sprint 1 completion gate:
+Huge and transformed variants retain their reliable solution, first-solution wall
+time improves on the reviewed machine, and the reduction is explained by lower
+intermediate work and/or lower worker contention rather than weaker validation.
+
+
+Sprint 2 - Anytime solution quality and proof acceleration
+===========================================================
+
+Goal: turn the first structural solution into an incumbent that immediately helps
+find better solutions and constrains complete search.
+
+4. Continue structural search after the first solution
+   Status: Planned.
+
+   Plan:
+   - Publish and animate the first replay-valid solution immediately, then move
+     the run into an explicit improving state.
+   - Continue from retained structural elites with the incumbent push count as an
+     upper bound.
+   - Explore alternative compatible assignments, doorway waves, packing orders,
+     and deterministic diversity seeds instead of repeating the winning plan.
+   - Maintain a Pareto set ordered by pushes first, then player moves, memory,
+     and discovery time; emit only replay-validated improvements.
+   - Persist the incumbent and enough bounded planner state to resume improvement
+     after a worker restart or page reload.
+
+   Acceptance gate:
+   - First-solution latency is unchanged or better.
+   - Reviewed multi-plan puzzles receive monotonically improving incumbents.
+   - Huge produces a solution below 330 pushes within a reviewed improvement
+     budget, with every incumbent independently replayed.
+
+5. Rewrite completed solutions with exact local windows
+   Status: Planned.
+
+   Plan:
+   - Partition a solution at stable structural milestones such as completed
+     exports, imports, room packing, and goal commitments.
+   - Re-solve bounded windows between fixed boundary states using exact push
+     search, expanding a window only when its state-space estimate is safe.
+   - Optimize pushes first and player moves second; reconstruct shortest walking
+     paths between the retained push actions.
+   - Iterate over overlapping windows until a full pass produces no improvement,
+     while preventing oscillation with canonical boundary identities.
+   - Reject a replacement unless the entire stitched path replays to the same or
+     a solved final state.
+
+   Acceptance gate:
+   - Rewriting never worsens pushes or moves and never changes puzzle semantics.
+   - Authored detour fixtures are reduced to independently verified local optima.
+   - Huge improves measurably beyond the raw structural solution within a bounded
+     post-processing time and memory budget.
+
+6. Feed every incumbent into exact search
+   Status: Partial; exact algorithms accept bounds, but the full anytime director
+   does not yet exploit a live improving incumbent end to end.
+
+   Plan:
+   - Start or tighten exact IDA*/A* with the best replay-valid push bound as soon
+     as an incumbent is available.
+   - Propagate bound reductions safely to active shards and persisted checkpoints;
+     restart only work whose proof contract is invalidated by the tighter bound.
+   - Separate “best known solution,” admissible lower bound, and proven optimum
+     in the UI, logs, and terminal result.
+   - Prioritize contours and shards by expected bound-closing value while
+     preserving complete partition coverage.
+   - Continue exact proof after discovery workers retire, subject to explicit
+     user stop and platform failure.
+
+   Acceptance gate:
+   - Differential tests prove that live bound tightening cannot remove an optimal
+     solution or create a false unsolvability/optimality claim.
+   - Exact search visits fewer states on reviewed incumbent-sensitive families.
+   - A completed proof reports an independently verified optimum; an incomplete
+     run reports an honest remaining gap.
+
+Sprint 2 completion gate:
+Sokomind returns the first solution promptly, improves it monotonically, and uses
+each improvement to reduce exact proof work without overstating optimality.
+
+
+Sprint 3 - Compact and nonredundant search
+==========================================
+
+Goal: reduce memory and equivalent work after the first-solution and improvement
+flows are stable.
+
+7. Compact macro-state and path storage
+   Status: Partial; dense identities exist, but macro candidates still retain
+   repeated arrays, objects, and path segments.
+
+   Plan:
+   - Store box layouts as packed immutable tokens with one moved-box delta where
+     practical.
+   - Replace object parent chains with arena indices and shared encoded move
+     segments.
+   - Retain full robot paths only for surviving candidates and reconstruct
+     discarded walking detail on demand.
+   - Give discovery, goal-access, assignment, and macro caches explicit phase
+     lifetimes and independent caps.
+   - Report live versus cumulative allocations, arena occupancy, cache occupancy,
+     and compaction cost.
+
+   Acceptance gate:
+   - Search identities, replay paths, and deterministic outcomes are unchanged.
+   - Huge remains below the 256 MB ceiling and demonstrates a reviewed reduction
+     from the approximately 218 MB measured peak.
+   - Compaction does not increase first-solution time or hide retained memory.
+
+8. Finish adaptive feature-space queues
+   Status: Partial; beams preserve structural and heuristic elites, but quotas
+   and identities are mostly fixed.
+
+   Plan:
+   - Track the yield of room-flow, doorway, access, packing, mobility, and
+     assignment feature cells across depths and restarts.
+   - Adapt cell boundaries and quotas only from prior-window evidence.
+   - Preserve productive elites while retiring duplicate identities and stagnant
+     cells.
+   - Add generated feature-conflict families where the best heuristic state and
+     the necessary structural state differ.
+   - Port the stable, useful subset to Python or document why it remains
+     browser-only.
+
+   Acceptance gate:
+   - Feature-conflict families retain required detours with fewer states than the
+     fixed policy.
+   - Adaptive queues do not regress small exact outcomes or Huge reliability.
+
+9. Add proof-backed partial-order reduction
+   Status: Planned.
+
+   Plan:
+   - Define push independence using affected boxes, support squares, robot access,
+     doorway phases, commitments, and macro side effects.
+   - Canonicalize only interleavings whose actions commute and whose intermediate
+     states preserve the same legal continuation set.
+   - Disable reduction whenever the certificate is incomplete.
+   - Exhaustively compare reduced and unreduced search on small multi-box boards.
+   - Measure eliminated interleavings separately from ordinary transposition hits.
+
+   Acceptance gate:
+   - Solvability and optimal push counts match the independent oracle.
+   - Reviewed independent-action families show a deterministic state reduction.
+
+10. Complete symmetry reduction
+    Status: Partial; structural discovery canonicalizes board orientation, but
+    state-space symmetries and interchangeable boxes are not fully reduced.
+
+    Plan:
+    - Detect automorphisms that preserve walls, goals, labels, and movement rules.
+    - Canonicalize symmetric box layouts without merging distinct typed boxes or
+      robot-reachability classes.
+    - Combine symmetry keys with transposition and partial-order keys in one
+      documented identity contract.
+    - Retain the current rotation/reflection path and checkpoint restoration.
+    - Validate mirrored, rotated, relabeled, and asymmetric counterexamples.
+
+    Acceptance gate:
+    - Symmetric searches retain exact outcomes and show fewer unique states.
+    - Asymmetric or typed puzzles are never merged under an invalid symmetry.
+
+Sprint 3 completion gate:
+Memory and unique-state work decrease under deterministic gates, and every
+reduction has a tested fallback that preserves exact completeness.
+
+
+Sprint 4 - Exact runtime resilience and observability
+=====================================================
+
+Goal: make long proof runs efficient, diagnosable, and resumable after structural
+discovery has supplied a useful incumbent.
+
+11. Improve exact transposition retention
+    Status: Partial; capacity is bounded, but eviction is insertion-ordered and
+    checkpoint retention value is not measured.
+
+    Plan:
+    - Separate live table occupancy, cumulative retained entries, checkpoint tail,
+      and eviction counts.
+    - Compare contour-aware, depth-aware, and recency policies under the same total
+      memory budget.
+    - Preserve entries that prevent repeated work after checkpoint resume.
+    - Adapt capacity only from supported memory pressure signals and retain a
+      conservative fixed fallback.
+    - Test shard unions and resumed proofs with tiny forced-eviction capacities.
+
+    Acceptance gate:
+    - Exact outcomes and shard coverage remain unchanged.
+    - Reviewed long contours repeat less work without increasing the memory cap.
+
+12. Add cooperative proof slices and complete lifecycle accounting
+    Status: Partial; resumable slices and watchdogs exist, but expensive
+    expansions and cancellation summaries remain incomplete.
+
+    Plan:
+    - Bound work between cooperative yields even when one expansion performs
+      expensive local reasoning.
+    - Split worker-ready, checkpoint-load, first-expansion, first-progress, and
+      shutdown timings.
+    - Emit a release record for every solved, failed, cutoff, cancelled, replaced,
+      or watchdog-terminated worker.
+    - Include terminal visited/generated counts rather than the previous progress
+      sample.
+    - Exercise stop and recovery paths in real Chromium and WebKit campaigns.
+
+    Acceptance gate:
+    - No productive worker is falsely declared silent.
+    - Every started worker has exactly one terminal lifecycle record.
+    - Recovery is bounded and cannot loop indefinitely.
+
+13. Produce one compact terminal campaign summary
+    Status: Partial; detailed events exist, but user-stopped runs still require
+    manual reconstruction.
+
+    Plan:
+    - Version the exported search-log schema and normalize all identifiers as
+      strings.
+    - Summarize the incumbent, best replayable checkpoint, exact contour and gap,
+      per-strategy states/time, lifecycle totals, and supported memory.
+    - Emit the same summary for solved, proven-unsolvable, cutoff, cancelled, and
+      failed runs.
+    - Keep the summary bounded regardless of campaign duration.
+    - Add fixture-based compatibility tests for old and new log readers.
+
+    Acceptance gate:
+    - One terminal record is sufficient to determine what the campaign achieved,
+      what remains, and why it ended.
+
+Sprint 4 completion gate:
+Long exact campaigns resume efficiently, yield predictably, and explain their
+final proof state without reconstructing thousands of log records.
+
+
+Sprint 5 - Runtime consolidation and intentional parity
+=======================================================
+
+Goal: remove implementation and product duplication after the new search contract
+is stable.
+
+14. Finish browser runtime modularization
+    Status: Partial.
+
+    Plan:
+    - Split topology, assignment/heuristic, deadlock proof, structural planning,
+      and local exact analysis behind explicit interfaces.
+    - Centralize shared rule primitives and remove test-loader duplication.
+    - Keep classic-script/Web Worker deployment compatible with GitHub Pages and
+      avoid adding a bundler solely for organization.
+    - Add dependency-boundary tests that prevent UI, director, and proof logic
+      from merging again.
+
+    Acceptance gate:
+    - Module ownership is documented and cyclic dependencies are absent.
+    - Build, worker loading, browser tests, and deployment remain unchanged.
+
+15. Consolidate public search modes
+    Status: Planned.
+
+    Plan:
+    - Present a small product contract: Recommended, Quick/anytime, and
+      Exact/proof, each with honest guarantees.
+    - Keep useful internal algorithms available to the director, benchmarks, and
+      an advanced developer interface.
+    - Remove duplicate Fast/Portfolio/Ultimate aliases and obsolete compatibility
+      launchers after a documented migration period.
+    - Use ablations before removing any strategy that contributes unique value.
+    - Simplify dispatch, tests, documentation, and telemetry names together.
+
+    Acceptance gate:
+    - Every public mode has distinct behavior and accurate guarantees.
+    - No removed alias is still referenced by UI, CLI, tests, or documentation.
+
+16. Bring Python to intentional parity
+    Status: Partial.
+
+    Plan:
+    - Define a browser/Python capability table rather than blindly porting every
+      worker-specific feature.
+    - Port the stable structural planner, solution validation, compact state,
+      anytime incumbent, and selected exact improvements needed by local users.
+    - Share conformance and benchmark fixtures wherever language boundaries allow.
+    - Remove redundant Python heuristics and aliases superseded by the agreed
+      architecture.
+    - Document intentionally browser-only orchestration and UI features.
+
+    Acceptance gate:
+    - Shared capabilities produce compatible statuses and replay-valid solutions.
+    - Intentional differences are explicit, tested, and documented.
+
+Sprint 5 completion gate:
+The codebase and public search choices are smaller, each runtime has a deliberate
+scope, and no compatibility bloat remains without a documented consumer.
+
+
+Sprint 6 - Accessible, polished, release-ready product
+======================================================
+
+Goal: finish the user-facing solver and repository before adding puzzle creation.
+
+17. Complete screen-reader and reduced-motion support
+    Status: Planned.
+
+    Plan:
+    - Provide an accessible board description covering robot, boxes, goals, move
+      count, completion, and solver state.
+    - Scope live announcements so progress does not flood assistive technology.
+    - Preserve keyboard focus during search, playback, undo, reset, and dialogs.
+    - Honor reduced-motion preferences for transitions and solution playback.
+    - Test semantic state and focus behavior in browser integration tests.
+
+    Acceptance gate:
+    - The full play/search workflow is usable without visual board inspection or
+      animation.
+
+18. Complete desktop and mobile interaction review
+    Status: Planned.
+
+    Plan:
+    - Refine hierarchy, controls, board sizing, logs, touch input, and long-status
+      overflow while preserving the current visual identity.
+    - Validate supported breakpoints, orientation changes, zoom, focus visibility,
+      and minimum touch targets.
+    - Ensure long searches and solution playback do not destabilize layout.
+    - Add automated breakpoint coverage and perform a documented visual review.
+
+    Acceptance gate:
+    - Supported desktop and mobile layouts have no clipped controls, inaccessible
+      actions, or board overflow regressions.
+
+19. Complete release and repository hygiene
+    Status: Partial.
+
+    Plan:
+    - Add or finalize LICENSE, CONTRIBUTING, support matrix, release notes, and
+      browser/Python capability documentation.
+    - Verify setup, testing, benchmarking, deployment, build versioning, and
+      troubleshooting instructions from a clean checkout.
+    - Define a changelog and compatibility policy for puzzles, logs, checkpoints,
+      and CLI modes.
+    - Ensure all required checks run before deployment with least-privilege
+      permissions.
+
+    Acceptance gate:
+    - A new contributor can build, test, benchmark, and deploy using only the
+      documented steps.
+
+Sprint 6 completion gate:
+The solver is accessible, responsive, documented, and releasable on every
+supported platform.
+
+
+Sprint 7 - User-authored puzzles
+================================
+
+Goal: add puzzle creation last, using the final parser, solver statuses, and
+accessibility contract rather than creating parallel semantics.
+
+20. Define canonical puzzle import, export, and sharing
+    Status: Partial; plain-text parsing and shared symbol fixtures already exist.
+
+    Plan:
+    - Specify a versioned interchange format containing rows, typed labels,
+      optional title/author, and future-safe metadata.
+    - Guarantee lossless plain-text import/export and stable board-content hashes.
+    - Use one validation fixture set across browser, Python, editor, benchmarks,
+      and documentation.
+    - Add copy, download, and upload flows without requiring a hosted backend.
+    - Reject unsupported versions and malformed metadata with actionable errors.
+
+    Acceptance gate:
+    - Round trips are lossless across browser and Python, including ragged boards
+      and typed labels.
+
+21. Add an accessible browser puzzle editor
+    Status: Planned.
+
+    Plan:
+    - Support create, resize, paint/erase, typed boxes/goals, robot placement,
+      undo/redo, clear, and test-play.
+    - Reuse the canonical parser, game state, renderer, and movement rules.
+    - Support mouse, touch, and keyboard editing with accessible tool state.
+    - Preserve drafts locally and warn before destructive changes.
+    - Keep editing state isolated from active solver workers and saved proofs.
+
+    Acceptance gate:
+    - Authored puzzles round-trip through the canonical format and play with the
+      same semantics as built-in puzzles.
+
+22. Add creator validation and solver-assisted publishing checks
+    Status: Planned.
+
+    Plan:
+    - Report robot count, box/goal label mismatch, invalid symbols, disconnected
+      floor, unreachable elements, and obvious static dead starts immediately.
+    - Let authors test-play, request a solution, and attach a replay-validated
+      solution certificate.
+    - Distinguish proven-unsolvable, cutoff, cancelled, and failed; never describe
+      a budget cutoff as impossible.
+    - Provide difficulty and quality estimates only with their evidence and
+      uncertainty.
+    - Add generated malformed and valid-puzzle authoring fixtures.
+
+    Acceptance gate:
+    - Published puzzles pass canonical validation and, when claimed solvable,
+      include a replay-valid certificate.
+
+Sprint 7 completion gate:
+Users can author, validate, solve, import, export, and share puzzles without
+forking Sokomind's rules or overstating solver evidence.
