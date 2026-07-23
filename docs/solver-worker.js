@@ -186,6 +186,9 @@ function createPerformanceMetrics() {
     pairConflictCandidates: 0,
     pairConflictHits: 0,
     pairConflictBoost: 0,
+    beamFeatureCells: 0,
+    beamFeatureSelections: 0,
+    beamBandSelections: 0,
     localRoomMs: 0,
     localCorralCalls: 0,
     localCorralCacheHits: 0,
@@ -2983,7 +2986,37 @@ function takeDiverse(candidates, count, selected, scoreKey, groupKey = "pushClas
   return result;
 }
 
-function selectBeamLayer(candidates, width, profile = "balanced") {
+function thresholdBucket(value, thresholds) {
+  for (let index = 0; index < thresholds.length; index++) {
+    if (value <= thresholds[index]) return index;
+  }
+  return thresholds.length;
+}
+
+function centeredFeatureBucket(value) {
+  if (value <= -1) return 0;
+  if (value < -0.1) return 1;
+  if (value <= 0.1) return 2;
+  if (value < 1) return 3;
+  return 4;
+}
+
+function beamFeatureClass(candidate, bestEstimate = candidate.estimate) {
+  const slack = candidate.estimate - bestEstimate;
+  const mobility = candidate.reachable?.size ?? 0;
+  return [
+    `h${thresholdBucket(slack, [2, 5, 9])}`,
+    `r${thresholdBucket(candidate.topology ?? 0, [0, 1, 3])}`,
+    `e${thresholdBucket(candidate.evacuation ?? 0, [0, 1, 3])}`,
+    `p${thresholdBucket(candidate.packing ?? 0, [0, 1, 3])}`,
+    `g${thresholdBucket(candidate.doorway ?? 0, [0, 1, 3])}${centeredFeatureBucket(candidate.doorwayDelta ?? 0)}`,
+    `d${centeredFeatureBucket(candidate.dependencyDelta ?? 0)}${centeredFeatureBucket(candidate.localRoomDelta ?? 0)}`,
+    `m${thresholdBucket(mobility, [0, 8, 20])}`,
+  ].join("|");
+}
+
+function selectBeamLayer(candidates, width, profile = "balanced", metrics = null,
+  useFeatureSpace = true) {
   if (candidates.length <= width) return candidates;
   let bestEstimate = Infinity;
   for (const candidate of candidates) bestEstimate = Math.min(bestEstimate, candidate.estimate);
@@ -2999,10 +3032,32 @@ function selectBeamLayer(candidates, width, profile = "balanced") {
     : [0.50, 0.25, 0.15, 0.10];
   const groupKey = profile === "milestone" ? "strategicClass" : "pushClass";
   const selected = new Set(), result = [];
+  let featureSelectedCount = 0;
+  if (useFeatureSpace) {
+    const featureRatio = profile === "milestone" ? 0.55 : profile === "detour" ? 0.45 : 0.35;
+    for (const candidate of candidates) {
+      candidate.featureClass = beamFeatureClass(candidate, bestEstimate);
+      candidate.featureArchiveScore = Number.isFinite(candidate.exploreScore)
+        ? candidate.exploreScore
+        : candidate.score;
+    }
+    const cells = new Set(candidates.map(candidate => candidate.featureClass));
+    const featureQuota = Math.max(1, Math.floor(width * featureRatio));
+    const featureSelected = takeDiverse(
+      candidates, featureQuota, selected, "featureArchiveScore", "featureClass");
+    result.push(...featureSelected);
+    featureSelectedCount = featureSelected.length;
+    if (metrics) {
+      metrics.beamFeatureCells += cells.size;
+      metrics.beamFeatureSelections += featureSelected.length;
+    }
+  }
+  const bandWidth = width - result.length;
   bands.forEach((band, index) => {
     const quota = index === bands.length - 1
-      ? width - ratios.slice(0, index).reduce((total, ratio) => total + Math.floor(width * ratio), 0)
-      : Math.floor(width * ratios[index]);
+      ? bandWidth - ratios.slice(0, index)
+        .reduce((total, ratio) => total + Math.floor(bandWidth * ratio), 0)
+      : Math.floor(bandWidth * ratios[index]);
     const scoreKey = index === bands.length - 1 ? "exploreScore" : "score";
     result.push(...takeDiverse(band, quota, selected, scoreKey, groupKey));
   });
@@ -3010,6 +3065,7 @@ function selectBeamLayer(candidates, width, profile = "balanced") {
     const ranked = [...candidates].sort((left, right) => left.score - right.score);
     result.push(...takeDiverse(ranked, width - result.length, selected, "score", groupKey));
   }
+  if (metrics) metrics.beamBandSelections += result.length - featureSelectedCount;
   return result;
 }
 
@@ -3178,6 +3234,7 @@ function beamSearch(payload) {
             estimate,
             topology,
             evacuation,
+            packing,
             dependencyDelta,
             localRoomDelta,
             doorway: doorway.penalty,
@@ -3247,7 +3304,13 @@ function beamSearch(payload) {
         reported = visited;
       }
     }
-    const shortlist = selectBeamLayer([...candidates.values()], width * 3, beamProfile);
+    const shortlist = selectBeamLayer(
+      [...candidates.values()],
+      width * 3,
+      beamProfile,
+      board.metrics,
+      payload.featureSpaceQueues !== false,
+    );
     beam = [];
     for (const child of shortlist) {
       child.reachable = reachablePaths(child, board);
@@ -3283,7 +3346,13 @@ function beamSearch(payload) {
         phaseHandoff = child;
       }
     }
-    beam = selectBeamLayer(beam, width, beamProfile);
+    beam = selectBeamLayer(
+      beam,
+      width,
+      beamProfile,
+      board.metrics,
+      payload.featureSpaceQueues !== false,
+    );
     if (payload.trackedSignatures) {
       for (const child of beam) {
         if (payload.trackedSignatures[child.cost] === child.signature) {

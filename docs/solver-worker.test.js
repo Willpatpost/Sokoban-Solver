@@ -881,6 +881,9 @@ test("search results expose bounded hot-path performance telemetry", () => {
   assert.equal(typeof result.performance.pairConflictCandidates, "number");
   assert.equal(typeof result.performance.pairConflictHits, "number");
   assert.equal(typeof result.performance.pairConflictBoost, "number");
+  assert.equal(typeof result.performance.beamFeatureCells, "number");
+  assert.equal(typeof result.performance.beamFeatureSelections, "number");
+  assert.equal(typeof result.performance.beamBandSelections, "number");
   assert.ok(result.performance.localCorralMs >= 0);
   assert.ok(result.performance.doorwayFlowMs >= 0);
   assert.ok(result.performance.reachabilityCalls > 0);
@@ -1165,7 +1168,7 @@ test("beam selection reserves room for heuristic detours and push diversity", ()
     });
   }
 
-  const selected = worker.selectBeamLayer(candidates, 20, "detour");
+  const selected = worker.selectBeamLayer(candidates, 20, "detour", null, false);
   const counts = [0, 0, 0, 0];
   selected.forEach(candidate => {
     const slack = candidate.estimate - 10;
@@ -1173,6 +1176,56 @@ test("beam selection reserves room for heuristic detours and push diversity", ()
   });
   assert.deepEqual(counts, [6, 5, 5, 4]);
   assert.equal(new Set(selected.map(candidate => candidate.pushClass)).size, 5);
+});
+
+test("beam feature archives retain strategically distinct cells beyond score bands", () => {
+  const worker = loadWorker();
+  const candidates = [];
+  for (let index = 0; index < 30; index++) {
+    candidates.push({
+      exactSignature: `direct-${index}`,
+      pushClass: "same-push",
+      estimate: 10,
+      score: index,
+      exploreScore: index,
+      topology: 0,
+      evacuation: 0,
+      packing: 0,
+      doorway: 0,
+      doorwayDelta: 0,
+      dependencyDelta: 0,
+      localRoomDelta: 0,
+    });
+  }
+  const rareFeatures = [
+    {topology: 4},
+    {evacuation: 2},
+    {packing: 2},
+    {doorway: 2, doorwayDelta: 1},
+    {dependencyDelta: -2},
+    {localRoomDelta: 2},
+  ];
+  rareFeatures.forEach((features, index) => candidates.push({
+    exactSignature: `feature-${index}`,
+    pushClass: "same-push",
+    estimate: 10,
+    score: 100 + index,
+    exploreScore: 100 + index,
+    ...features,
+  }));
+
+  const legacy = worker.selectBeamLayer(candidates.map(candidate => ({...candidate})),
+    10, "balanced", null, false);
+  const metrics = worker.createPerformanceMetrics();
+  const selected = worker.selectBeamLayer(candidates, 10, "balanced", metrics, true);
+  const classes = entries => new Set(entries.map(candidate =>
+    worker.beamFeatureClass(candidate, 10))).size;
+  assert.equal(classes(legacy), 1);
+  assert.ok(classes(selected) >= 3);
+  assert.ok(selected.some(candidate => candidate.exactSignature.startsWith("feature-")));
+  assert.ok(metrics.beamFeatureCells >= rareFeatures.length + 1);
+  assert.equal(metrics.beamFeatureSelections, 3);
+  assert.equal(metrics.beamBandSelections, 7);
 });
 
 test("bounded transposition maps evict old entries", () => {

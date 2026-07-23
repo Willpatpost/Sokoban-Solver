@@ -12,7 +12,8 @@ with dynamic support dependencies and cached exact searches of small rooms and
 corrals. Typed doorway-flow analysis also tracks required room imports, exports,
 lane direction, and staging capacity. Bounded relaxed multi-box room and
 chokepoint-pair tables strengthen the admissible assignment heuristic when they
-prove unavoidable box interaction cost.
+prove unavoidable box interaction cost. Guided beams reserve bounded feature-space
+cells for distinct room, gate, packing, dependency, detour, and mobility states.
 
 - [Desktop application setup and usage](README-desktop.md)
 - [Web application documentation](docs/README.md)

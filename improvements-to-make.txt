@@ -1,8 +1,8 @@
 Sokomind improvements and implementation status
 ===============================================
 
-Status reviewed against the repository after Improvement Sprint 7: admissible
-pairwise chokepoint-conflict tightening with bounded exact relaxed tables.
+Status reviewed against the repository after Improvement Sprint 8: bounded
+feature-space archives for guided beam retention.
 
 Standing maintenance rules
 --------------------------
@@ -396,6 +396,42 @@ PARTIALLY DELIVERED
       state reductions on multiple conflict shapes and distances.
     - Port the stable bounded conflict subset to Python.
 
+22. Introduce true feature-space search queues rather than relying only on fixed
+    heuristic beam bands. Preserve candidates across dimensions such as room
+    progress, gate state, packing commitments, evacuation progress, mobility, and
+    controlled heuristic detours.
+    Delivered so far:
+    - Oversized browser beam layers compile coarse joint feature cells from
+      heuristic slack, topology/room pressure, evacuation pressure, packing
+      evidence, doorway state and transition, support dependency, local-room
+      guidance, and robot mobility.
+    - Balanced, detour, and milestone profiles reserve 35%, 45%, and 55% of their
+      bounded layer respectively for round-robin feature-cell selection. Remaining
+      capacity retains the established heuristic bands and push/strategic classes.
+    - Selection runs before expensive canonical reachability filtering and again
+      afterward, when robot-region mobility is available. Both stages remain under
+      the existing beam width and transposition limits.
+    - A diagnostic switch restores legacy score-band selection. Push A*, IDA*,
+      discrepancy search, and other exact engines are unchanged and complete
+      within their existing bounds.
+    - A synthetic dominance fixture proves that rare room/gate/packing/dependency
+      cells survive when scalar-score selection would retain only one feature
+      class. Telemetry reports observed cells, feature selections, and remaining
+      band selections.
+    - Build 2026-07-22.19 keeps smoke at 3/3 valid solutions and validation at
+      16/16 while exposing the archive counters in worker performance reports.
+      Under the same validation budget, generated rotated Medium improves from
+      20 pushes to 18; total suite visitation changes only from 7,283 to 7,284.
+    Remaining:
+    - Preserve productive feature elites across depths/restarts rather than
+      rebuilding a layer-local archive every selection pass.
+    - Adapt cell boundaries and profile quotas from observed occupancy, progress,
+      and yield instead of using fixed coarse thresholds.
+    - Represent individual room, gate, commitment, and enabling-action identities
+      where aggregate values currently merge strategically different situations.
+    - Add generated feature-conflict benchmarks that measure solution discovery
+      and state efficiency, then port the stable policy to Python's push beam.
+
 32. Complete project and release hygiene.
     Delivered so far:
     - Added concise architecture documentation defining the general-purpose search
@@ -410,7 +446,7 @@ PARTIALLY DELIVERED
     Delivered so far:
     - The homepage now displays a compact solver-build badge populated directly
       from the same SOLVER_BUILD constant used to version the worker URL and
-      search-log events. Build 2026-07-22.18 is visible without opening developer
+      search-log events. Build 2026-07-22.19 is visible without opening developer
       tools, making a stale cached application immediately recognizable.
     - A policy test requires the badge, binding, and app.js cache-busting query to
       agree with the loaded solver build.
@@ -444,11 +480,6 @@ PARTIALLY DELIVERED
 
 YET TO BE IMPLEMENTED AS BACKLOG CAPABILITIES
 ----------------------------------------------
-
-22. Introduce true feature-space search queues rather than relying only on fixed
-    heuristic beam bands. Preserve candidates across dimensions such as room
-    progress, gate state, packing commitments, evacuation progress, mobility, and
-    controlled heuristic detours.
 
 23. Add comprehensive relevance-based move ordering connected to the current
     bottleneck, unresolved goal, dependency chain, or recent enabling action while

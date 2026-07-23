@@ -102,6 +102,15 @@ frontier. Separate beam quotas preserve promising direct states and strategic
 temporary detours. Search priorities count pushes; walking paths are preserved
 for replay but do not distract the solver from strategic progress.
 
+Each oversized beam layer also reserves a profile-dependent feature archive.
+Coarse joint cells distinguish heuristic slack, room and evacuation pressure,
+packing progress, doorway state, support dependencies, local-room guidance, and
+robot mobility. Candidates are drawn round-robin from those cells before the
+remaining slots use the established heuristic bands and push-class diversity.
+This keeps strategically different states alive even when their scalar scores are
+worse. The archive is bounded by the existing beam width and can be disabled for
+diagnostic comparisons; exact searches are unchanged.
+
 On very large boards, direct search uses a sequential memory-bounded restart
 portfolio instead of retaining one ever-growing frontier. Restarts alternate
 focused, detour, and room-milestone profiles with independent deterministic
