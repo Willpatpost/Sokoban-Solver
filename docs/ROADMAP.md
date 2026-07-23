@@ -37,6 +37,36 @@ Roadmap rules
   foundations are noted solely to prevent duplicated work.
 
 
+Sprint 0 - Cleaning, organizing, and refactoring
+================================================
+
+Status: Complete in build 2026-07-23.33.
+
+This repository-hygiene sprint precedes the numbered solver campaign without
+changing its priorities.
+
+Delivered:
+
+- Moved the desktop guide and forward roadmap out of the repository root and
+  linked them from the primary README.
+- Standardized the Python package directory as lowercase `searches/` and updated
+  imports, commands, static checks, coverage configuration, CI, and architecture
+  documentation.
+- Documented the repository layout and kept only conventional entry points,
+  manifests, and tool-discovery configuration at the root.
+- Consolidated ignored Python, browser-test, coverage, virtual-environment, and
+  log artifacts; removed generated local artifacts from the working tree.
+- Preserved the GitHub Pages layout, Python script entry points, cross-runtime
+  fixtures, and all existing test and benchmark contracts.
+
+Completion gate:
+
+- No tracked code or documentation refers to the former paths.
+- A clean test run creates only explicitly ignored artifacts.
+- JavaScript, Python, browser, formatting, typing, coverage, build, and benchmark
+  gates pass after the case-sensitive rename.
+
+
 Sprint 1 - Faster structural first solutions
 ============================================
 

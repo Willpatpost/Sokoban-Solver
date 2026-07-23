@@ -20,9 +20,20 @@ chokepoint-pair tables strengthen the admissible assignment heuristic when they
 prove unavoidable box interaction cost. Guided beams reserve bounded feature-space
 cells for distinct room, gate, packing, dependency, detour, and mobility states.
 
-- [Desktop application setup and usage](README-desktop.md)
+- [Desktop application setup and usage](docs/DESKTOP.md)
 - [Web application documentation](docs/README.md)
 - [Solver architecture and puzzle-independence rules](docs/ARCHITECTURE.md)
+- [Forward development roadmap](docs/ROADMAP.md)
+
+## Repository layout
+
+- `searches/`: Python solver, desktop application, and compatibility CLIs
+- `docs/`: browser application and project documentation
+- `tests/`: Python and real-browser integration tests
+- `bench/`: deterministic benchmarks, profilers, and solution verification
+- `shared/`: cross-runtime puzzle and rule fixtures
+- `scripts/`: repository quality and build checks
+- `data/`: documentation and benchmark media
 
 Run the automated solver tests with:
 

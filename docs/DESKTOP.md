@@ -43,7 +43,7 @@ On macOS or Linux, activate it with `source .venv/bin/activate`.
 ## Run the application
 
 ```powershell
-python Searches/gui.py
+python searches/gui.py
 ```
 
 Controls:
@@ -61,12 +61,12 @@ The timer begins only after the first legal move.
 ## Command-line solver
 
 ```powershell
-python Searches/Sokomind.py --puzzle medium --algorithm ultimate
-python Searches/Sokomind.py --puzzle large --algorithm push-greedy
-python Searches/Sokomind.py --puzzle medium --algorithm push-beam
-python Searches/Sokomind.py --puzzle medium --algorithm astar
-python Searches/Sokomind.py --file path/to/puzzle.txt --show-steps
-python Searches/Sokomind.py --help
+python searches/Sokomind.py --puzzle medium --algorithm ultimate
+python searches/Sokomind.py --puzzle large --algorithm push-greedy
+python searches/Sokomind.py --puzzle medium --algorithm push-beam
+python searches/Sokomind.py --puzzle medium --algorithm astar
+python searches/Sokomind.py --file path/to/puzzle.txt --show-steps
+python searches/Sokomind.py --help
 ```
 
 Recommended algorithms:

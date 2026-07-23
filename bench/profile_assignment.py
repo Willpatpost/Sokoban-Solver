@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from Searches.Sokomind import _minimum_assignment, _repair_minimum_assignment
+from searches.Sokomind import _minimum_assignment, _repair_minimum_assignment
 
 
 def matrix(size: int, offset: int) -> list[list[float]]:

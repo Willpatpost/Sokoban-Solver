@@ -10,7 +10,7 @@ const PRODUCTION_SOLVER_FILES = [
   "docs/solver-worker.js",
   "docs/solver-engine.js",
   "docs/solver-search.js",
-  "Searches/Sokomind.py",
+  "searches/Sokomind.py",
 ];
 const BUILTIN_LEVEL_NAMES = ["ultra-tiny", "tiny", "medium", "large", "huge"];
 

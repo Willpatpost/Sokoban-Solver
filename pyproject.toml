@@ -8,15 +8,15 @@ ignore = ["E731", "F405"]
 
 [tool.mypy]
 python_version = "3.10"
-files = ["Searches"]
+files = ["searches"]
 ignore_missing_imports = true
 allow_untyped_defs = true
 check_untyped_defs = true
 
 [tool.coverage.run]
 branch = true
-source = ["Searches"]
-omit = ["Searches/gui.py"]
+source = ["searches"]
+omit = ["searches/gui.py"]
 
 [tool.coverage.report]
 fail_under = 85

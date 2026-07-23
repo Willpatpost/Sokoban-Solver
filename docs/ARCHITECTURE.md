@@ -15,7 +15,7 @@ route and must remain correct when it is absent.
 
 ## Runtime components
 
-- `Searches/Sokomind.py` contains the Python parser and search implementations.
+- `searches/Sokomind.py` contains the Python parser and search implementations.
 - `docs/app.js` owns browser UI state, rendering, controls, timing, and animation.
 - `docs/game-state.js` is the independently testable browser gameplay/rules core.
 - `docs/search-log.js` provides pure readable and structured telemetry formatting.

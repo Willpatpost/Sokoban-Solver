@@ -10,7 +10,7 @@ from itertools import combinations
 from pathlib import Path
 from threading import Event
 
-from Searches.Sokomind import (
+from searches.Sokomind import (
     BUILTIN_PUZZLES,
     CONFORMANCE_PATH,
     HEURISTIC_CACHE_SIZE,
@@ -694,7 +694,7 @@ class SokomindTests(unittest.TestCase):
 
     def test_solution_validation_rejects_corrupt_public_result(self):
         initial = parse_puzzle(["OOOOO", "O R O", "O X O", "O S O", "OOOOO"])
-        from Searches.Sokomind import _validated_solution_result
+        from searches.Sokomind import _validated_solution_result
 
         result = _validated_solution_result(
             initial,
