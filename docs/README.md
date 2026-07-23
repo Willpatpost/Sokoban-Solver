@@ -40,11 +40,23 @@ the simpler full calculation. Deterministic matrix tests compare
 the repair against full recomputation, and telemetry reports repairs, fallbacks,
 and reused rows.
 
+Bounded goal rooms can also compile relaxed multi-box pattern tables for groups
+of two to four labels whose complete goal sets belong to that room. The reverse
+table keeps walls, typed goals, box collisions, and required push support squares,
+while removing every unrelated box and granting the robot access everywhere.
+Its exact pattern distance is therefore admissible. The heuristic replaces the
+same labels' Hungarian contribution with the stronger value instead of adding
+both, and combines only label-disjoint room patterns. Tables stop after 12,000
+states; discovered distances remain exact, while missing cutoff entries leave the
+ordinary assignment bound unchanged.
+
 Ultimate Bidirectional's planning worker also returns a clone-safe prepared-board
 seed. Subsequent portfolio workers reuse its immutable geometry, topology,
 reverse-distance tables, dense indices, and compiled single-box graph while
 creating private heuristic, deadlock, and signature caches. Workers verify the
 exact board contents and schema before reuse and rebuild normally on a mismatch.
+Compiled room-pattern tables are included in that seed so portfolio workers do
+not repeat their bounded reverse enumeration.
 This uses standard structured cloning because shared memory requires
 cross-origin isolation headers that GitHub Pages does not reliably provide.
 The adjacent `{ }` control copies the complete run as newline-delimited JSON.

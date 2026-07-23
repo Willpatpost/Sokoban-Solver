@@ -576,6 +576,59 @@ test("reverse goal-room packing tables preserve typed labels and optimal doorway
   );
 });
 
+test("room pattern tables add only proven multi-box interaction cost", () => {
+  const worker = loadWorker();
+  const parsed = stateFromRows([
+    "OOOOOOOOOOOOO", "O R AB      O", "OOOOOO OOOOOO", "OOOOa b OOOOO",
+    "OOOO    OOOOO", "OOOO    OOOOO", "OOOOOOOOOOOOO",
+  ]);
+  const board = worker.parse(parsed);
+  const room = board.topology.rooms.find(candidate => candidate.goals.length === 2);
+  const boxes = [[3, 5, "A"], [3, 6, "B"]];
+  const table = worker.reverseRoomPatternTable(board, room);
+  assert.equal(table.status, "ready");
+  assert.equal(table.states.get("3,5,A;3,6,B"), 3);
+
+  const independent = boxes.reduce((total, [y, x, label]) => {
+    const goal = board.goalsByLabel.get(label)[0];
+    return total + worker.playerAwarePushDistances(board, `${y},${x}`).get(goal);
+  }, 0);
+  assert.equal(independent, 1);
+  assert.equal(worker.heuristic(boxes, board), 3);
+  assert.equal(board.metrics.roomPatternBoost, 2);
+
+  const exact = worker.exactLocalPushSearch({
+    domain: board.floor,
+    boxes: boxes.map(([y, x, label]) => [`${y},${x}`, label]),
+    robot: "1,2",
+    gate: room.gate,
+    isGoal: occupied => room.goals.every(goal =>
+      occupied.get(goal)?.label === board.goals.get(goal)),
+  });
+  assert.equal(exact.pushes, 3);
+
+  const preparedBoard = structuredClone(worker.createPreparedBoardSeed(board));
+  const hydrated = worker.parse({...parsed, preparedBoard});
+  const hydratedRoom = hydrated.topology.rooms.find(candidate => candidate.goals.length === 2);
+  assert.equal(
+    worker.reverseRoomPatternTable(hydrated, hydratedRoom).states.get("3,5,A;3,6,B"),
+    3,
+  );
+  assert.equal(hydrated.metrics.roomPatternBuilds, 0);
+});
+
+test("room pattern bounds skip labels whose candidate boxes can serve outside goals", () => {
+  const worker = loadWorker();
+  const board = worker.parse(stateFromRows([
+    "OOOOOOOOOOOOO", "OaR AAB     O", "OOOOOO OOOOOO", "OOOOa b OOOOO",
+    "OOOO    OOOOO", "OOOO    OOOOO", "OOOOOOOOOOOOO",
+  ]));
+  const room = board.topology.rooms.find(candidate => candidate.goals.length === 2);
+  const table = worker.reverseRoomPatternTable(board, room);
+  assert.equal(table.status, "ineligible");
+  assert.equal(table.states.size, 0);
+});
+
 test("exact local room search reports exhausted and import-dependent abstractions safely", () => {
   const worker = loadWorker();
   const blockedParsed = stateFromRows([
@@ -688,6 +741,7 @@ test("prepared board seeds are clone-safe and preserve search results", () => {
   assert.notEqual(firstBoard.stateCommitmentMemo, secondBoard.stateCommitmentMemo);
   assert.notEqual(firstBoard.supportDependencyMemo, secondBoard.supportDependencyMemo);
   assert.notEqual(firstBoard.localRoomMemo, secondBoard.localRoomMemo);
+  assert.notEqual(firstBoard.roomPatternTables, secondBoard.roomPatternTables);
   assert.notEqual(firstBoard.localCorralMemo, secondBoard.localCorralMemo);
   assert.notEqual(firstBoard.doorwayFlowMemo, secondBoard.doorwayFlowMemo);
   assert.notEqual(firstBoard.boxSignatureMemo, secondBoard.boxSignatureMemo);
@@ -752,6 +806,10 @@ test("search results expose bounded hot-path performance telemetry", () => {
   assert.ok(result.performance.supportDependencyCalls > 0);
   assert.ok(result.performance.supportDependencyMs >= 0);
   assert.ok(result.performance.localRoomMs >= 0);
+  assert.equal(typeof result.performance.roomPatternBuilds, "number");
+  assert.equal(typeof result.performance.roomPatternStates, "number");
+  assert.equal(typeof result.performance.roomPatternHits, "number");
+  assert.equal(typeof result.performance.roomPatternBoost, "number");
   assert.ok(result.performance.localCorralMs >= 0);
   assert.ok(result.performance.doorwayFlowMs >= 0);
   assert.ok(result.performance.reachabilityCalls > 0);

@@ -10,7 +10,9 @@ packed goal placements using state-complete room, doorway, matching, and support
 evidence. Guided searches keep proven boxes fixed while ordering strategic pushes
 with dynamic support dependencies and cached exact searches of small rooms and
 corrals. Typed doorway-flow analysis also tracks required room imports, exports,
-lane direction, and staging capacity.
+lane direction, and staging capacity. Bounded relaxed multi-box room tables
+strengthen the admissible assignment heuristic when they prove unavoidable box
+interaction cost.
 
 - [Desktop application setup and usage](README-desktop.md)
 - [Web application documentation](docs/README.md)

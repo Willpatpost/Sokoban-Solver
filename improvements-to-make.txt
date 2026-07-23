@@ -1,8 +1,8 @@
 Sokomind improvements and implementation status
 ===============================================
 
-Status reviewed against the repository after Improvement Sprint 5: bounded
-relaxed local deadlock pattern tables for typed corridor conflicts.
+Status reviewed against the repository after Improvement Sprint 6: admissible
+relaxed multi-box cost pattern tables for bounded goal rooms.
 
 Standing maintenance rules
 --------------------------
@@ -160,12 +160,14 @@ STRONG IMPLEMENTATION, WITH BOUNDED LIMITATIONS
     Implemented:
     - Prepared board seeds share topology, push distances, compiled graphs, dense
       board data, and other immutable analysis through structured cloning.
+    - Completed bounded room-pattern tables are included in the planning seed so
+      subsequent portfolio workers do not repeat their reverse enumeration.
     - Mutable caches remain worker-private.
     Bounded limitations:
     - Structured cloning still duplicates data in worker memory.
     - SharedArrayBuffer is intentionally avoided because the current GitHub Pages
       deployment is not cross-origin isolated.
-    - Future pattern and deadlock tables cannot be shared until they exist.
+    - Dynamic deadlock, heuristic, and local-search caches remain worker-private.
 
 13. Add a goal-commitment safety oracle.
     Implemented:
@@ -326,6 +328,39 @@ PARTIALLY DELIVERED
     - Consider offline canonical pattern generation and symmetry reduction for
       larger tables after deterministic performance gates exist.
 
+20. Build pattern databases for the lower chamber and other small, strategically
+    important rooms. Use exact local costs or dependency-aware conflict bounds to
+    capture interaction and ordering costs missing from assignment distance.
+    Delivered so far:
+    - One-entrance goal rooms compile reverse multi-box push tables for two to four
+      boxes whose complete typed goal sets belong to that room. A room may select
+      an exclusive typed subset even when shared generic goals are also present.
+    - The abstraction retains the full board's walls, labels, box collisions, and
+      required support squares while removing unrelated boxes and granting the
+      robot access everywhere. Its discovered distances are therefore admissible
+      lower bounds on pushes by those labels.
+    - The heuristic replaces the selected labels' Hungarian contribution with the
+      stronger pattern value. It does not add both costs, and a maximum disjoint
+      combination prevents overlapping room/label patterns from being counted
+      twice.
+    - Tables are capped at 12,000 states. Distances discovered by reverse BFS stay
+      exact after a cutoff; a missing entry simply retains ordinary assignment.
+    - A typed interaction fixture independently proves the exact cost increase
+      from Hungarian 1 to pattern 3. The 250-push Huge replay checks admissibility
+      at every push; its lower chamber automatically selects C/D and rejects no
+      valid state. No level name, saved route, or fixed coordinate enters search.
+    - Build 2026-07-22.17 reports table builds, states, hits, and cumulative bound
+      improvement. Prepared-board seeds reuse completed tables across workers.
+    Remaining:
+    - Support shared-label/generic goal subsets by minimizing over every valid
+      candidate-box selection before using a cost in the lower bound.
+    - Extend beyond four boxes with dense encodings, symmetry reduction, selective
+      partitions, or offline generation without making worker startup excessive.
+    - Add generated interacting-room benchmark families that measure bound gains
+      and state reductions rather than only correctness and replay admissibility.
+    - Port the proven bounded subset to Python after the browser representation and
+      selection policy stabilize.
+
 32. Complete project and release hygiene.
     Delivered so far:
     - Added concise architecture documentation defining the general-purpose search
@@ -340,7 +375,7 @@ PARTIALLY DELIVERED
     Delivered so far:
     - The homepage now displays a compact solver-build badge populated directly
       from the same SOLVER_BUILD constant used to version the worker URL and
-      search-log events. Build 2026-07-22.16 is visible without opening developer
+      search-log events. Build 2026-07-22.17 is visible without opening developer
       tools, making a stale cached application immediately recognizable.
     - A policy test requires the badge, binding, and app.js cache-busting query to
       agree with the loaded solver build.
@@ -374,10 +409,6 @@ PARTIALLY DELIVERED
 
 YET TO BE IMPLEMENTED AS BACKLOG CAPABILITIES
 ----------------------------------------------
-
-20. Build pattern databases for the lower chamber and other small, strategically
-    important rooms. Use exact local costs or dependency-aware conflict bounds to
-    capture interaction and ordering costs missing from assignment distance.
 
 21. Add admissible lower-bound terms where they can be proven, and otherwise
     ordering penalties, for boxes competing over corridors, gates, staging cells,

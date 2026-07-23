@@ -94,6 +94,7 @@ function exactPushKey(state, board = null) {
 const HEURISTIC_MEMO_LIMIT = 20000;
 const DEADLOCK_MEMO_LIMIT = 10000;
 const PATTERN_DEADLOCK_MEMO_LIMIT = 10000;
+const ROOM_PATTERN_MAX_STATES = 12000;
 const COMMITMENT_MEMO_LIMIT = 10000;
 const SUPPORT_DEPENDENCY_MEMO_LIMIT = 10000;
 const LOCAL_ROOM_MEMO_LIMIT = 5000;
@@ -174,6 +175,10 @@ function createPerformanceMetrics() {
     reversePackingBuilds: 0,
     reversePackingStates: 0,
     reversePackingHits: 0,
+    roomPatternBuilds: 0,
+    roomPatternStates: 0,
+    roomPatternHits: 0,
+    roomPatternBoost: 0,
     localRoomMs: 0,
     localCorralCalls: 0,
     localCorralCacheHits: 0,
@@ -461,6 +466,7 @@ function createPreparedBoardSeed(board) {
     topology: board.topology,
     singleBoxGraph: board.singleBoxGraph,
     dense: board.dense,
+    roomPatternTables: board.roomPatternTables,
     graphNodes: board.metrics.graphNodes,
     graphEdges: board.metrics.graphEdges,
   };
@@ -503,6 +509,7 @@ function hydratePreparedBoard(data, seed, metrics) {
     supportDependencyMemo: new Map(),
     localRoomMemo: new Map(),
     goalRoomPackingTables: new Map(),
+    roomPatternTables: new Map(seed.roomPatternTables || []),
     localCorralMemo: new Map(),
     doorwayFlowMemo: new Map(),
     boxSignatureMemo: new WeakMap(),
@@ -594,6 +601,7 @@ function parse(data) {
     supportDependencyMemo: new Map(),
     localRoomMemo: new Map(),
     goalRoomPackingTables: new Map(),
+    roomPatternTables: new Map(),
     localCorralMemo: new Map(),
     doorwayFlowMemo: new Map(),
     boxSignatureMemo: new WeakMap(),
@@ -924,6 +932,11 @@ function cacheFullAssignmentDetail(boxes, board) {
     labels.set(label, {boxIndices: entries.map(entry => entry.index), costs, assignment});
     total += assignment.cost;
   }
+  total += roomPatternHeuristicBoost(
+    boxes,
+    board,
+    new Map([...labels].map(([label, detail]) => [label, detail.assignment.cost])),
+  );
   const detail = {labels, cost: total};
   board.assignmentMemo.set(boxes, detail);
   return detail;
@@ -951,6 +964,7 @@ function heuristic(boxes, board) {
     ? cacheFullAssignmentDetail(parentHint.parentBoxes, board)
     : null;
   let total = 0;
+  const assignmentCosts = new Map();
   for (const [label, entries] of grouped) {
     const targets = board.goalsByLabel.get(label) || [];
     const previous = parentDetail?.labels.get(label);
@@ -981,7 +995,9 @@ function heuristic(boxes, board) {
       assignment = minimumAssignment(costs);
     }
     total += assignment.cost;
+    assignmentCosts.set(label, assignment.cost);
   }
+  total += roomPatternHeuristicBoost(boxes, board, assignmentCosts);
   metrics.heuristicMs += now() - started;
   return memoizeBounded(board.heuristicMemo, signature, total);
 }
@@ -1968,6 +1984,95 @@ function canonicalLocalState(domain, boxes, robot) {
   if (!reached.size) return null;
   const region = [...reached].sort()[0];
   return {region, signature: `${region}|${localBoxSignature(boxes)}`, reached};
+}
+
+function reverseRoomPatternTable(board, room, maxStates = ROOM_PATTERN_MAX_STATES) {
+  const roomIndex = board.topology.rooms.indexOf(room);
+  if (board.roomPatternTables.has(roomIndex)) return board.roomPatternTables.get(roomIndex);
+  const roomLabels = new Set(room.goals.map(goal => board.goals.get(goal)));
+  const labels = new Set([...roomLabels].filter(label =>
+    (board.goalsByLabel.get(label) || []).every(goal => room.cells.has(goal))));
+  const targetBoxes = room.goals
+    .filter(goal => labels.has(board.goals.get(goal)))
+    .map(goal => [goal, board.goals.get(goal)]);
+  if (roomIndex < 0 || targetBoxes.length < 2 || targetBoxes.length > 4) {
+    const skipped = {status: "ineligible", complete: false, labels, states: new Map(), visited: 0};
+    board.roomPatternTables.set(roomIndex, skipped);
+    return skipped;
+  }
+
+  // This is a true relaxed pattern database: non-pattern boxes and robot
+  // connectivity are removed, but walls, box collisions, labels, and support
+  // squares remain. Its exact push distances can therefore replace the weaker
+  // assignment contribution for the same disjoint labels without overestimating.
+  const states = new Map([[localBoxSignature(targetBoxes), 0]]);
+  const queue = [targetBoxes], floor = board.floor;
+  let head = 0, cutoff = false;
+  for (; head < queue.length && head < maxStates; head++) {
+    const current = queue[head], pushes = states.get(localBoxSignature(current));
+    const occupied = new Set(current.map(([position]) => position));
+    current.forEach(([destination, label], boxIndex) => {
+      const [y, x] = destination.split(",").map(Number);
+      for (const [, [dy, dx]] of DIRECTION_ENTRIES) {
+        const previous = pkey(y - dy, x - dx);
+        const support = pkey(y - 2 * dy, x - 2 * dx);
+        if (!floor.has(previous) || !floor.has(support) ||
+            occupied.has(previous) || occupied.has(support)) continue;
+        const predecessor = current.map((box, index) =>
+          index === boxIndex ? [previous, label] : box);
+        const signature = localBoxSignature(predecessor);
+        if (states.has(signature)) continue;
+        if (states.size >= maxStates) {
+          cutoff = true;
+          continue;
+        }
+        states.set(signature, pushes + 1);
+        queue.push(predecessor);
+      }
+    });
+  }
+  const complete = !cutoff && head >= queue.length;
+  const result = {
+    status: complete ? "ready" : "cutoff", complete, labels, states, visited: head,
+  };
+  board.metrics.roomPatternBuilds++;
+  board.metrics.roomPatternStates += head;
+  board.roomPatternTables.set(roomIndex, result);
+  return result;
+}
+
+function roomPatternHeuristicBoost(boxes, board, assignmentCosts) {
+  const candidates = [];
+  for (const room of board.topology.rooms) {
+    const table = reverseRoomPatternTable(board, room);
+    if (!table.states.size) continue;
+    const patternBoxes = boxes
+      .filter(([, , label]) => table.labels.has(label))
+      .map(([y, x, label]) => [pkey(y, x), label]);
+    const distance = table.states.get(localBoxSignature(patternBoxes));
+    if (distance === undefined) continue;
+    board.metrics.roomPatternHits++;
+    const assignment = [...table.labels]
+      .reduce((total, label) => total + (assignmentCosts.get(label) ?? Infinity), 0);
+    const boost = distance - assignment;
+    if (boost > 0 && Number.isFinite(boost)) candidates.push({labels: table.labels, boost});
+  }
+  let best = 0;
+  const choose = (index, used, total) => {
+    if (index >= candidates.length) {
+      best = Math.max(best, total);
+      return;
+    }
+    choose(index + 1, used, total);
+    const candidate = candidates[index];
+    if ([...candidate.labels].some(label => used.has(label))) return;
+    const nextUsed = new Set(used);
+    candidate.labels.forEach(label => nextUsed.add(label));
+    choose(index + 1, nextUsed, total + candidate.boost);
+  };
+  choose(0, new Set(), 0);
+  board.metrics.roomPatternBoost += best;
+  return best;
 }
 
 function reverseGoalRoomPackingTable(board, room, maxStates = 20000) {
