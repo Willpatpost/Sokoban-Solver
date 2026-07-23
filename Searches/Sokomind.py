@@ -455,6 +455,9 @@ def _minimum_assignment_cost(costs: Sequence[Sequence[float]]) -> float:
 HEURISTIC_CACHE_SIZE = 20_000
 PYTHON_INCREMENTAL_ASSIGNMENT_CROSSOVER = 5
 PATTERN_EXACT_STATE_LIMIT = 512
+INTERACTION_PATTERN_MAX_STATES = 20_000
+INTERACTION_PATTERN_MAX_FLOOR = 32
+INTERACTION_PATTERN_MAX_BOXES = 3
 
 
 @dataclass(frozen=True)
@@ -595,14 +598,96 @@ def _heuristic_for_layout(
     dedicated_goals: tuple[tuple[str, frozenset[Position]], ...],
 ) -> float:
     """Cache the lower bound by immutable layout data without retaining State objects."""
-    return _full_assignment_detail(rows, boxes, generic_goals, dedicated_goals).cost
+    assignment = _full_assignment_detail(rows, boxes, generic_goals, dedicated_goals).cost
+    interaction = _interaction_pattern_bound(
+        rows,
+        boxes,
+        generic_goals,
+        dedicated_goals,
+    )
+    return max(assignment, interaction)
+
+
+def _local_box_signature(boxes: Iterable[Box]) -> tuple[Box, ...]:
+    return tuple(sorted(boxes))
+
+
+@lru_cache(maxsize=256)
+def _relaxed_interaction_pattern(
+    rows: tuple[str, ...],
+    target_boxes: tuple[Box, ...],
+) -> tuple[tuple[tuple[Box, ...], int], ...]:
+    floor = frozenset(
+        (y, x)
+        for y, row in enumerate(rows)
+        for x, cell in enumerate(row)
+        if cell != "O"
+    )
+    initial = _local_box_signature(target_boxes)
+    distances: dict[tuple[Box, ...], int] = {initial: 0}
+    queue = deque([initial])
+    while queue and len(distances) < INTERACTION_PATTERN_MAX_STATES:
+        current = queue.popleft()
+        pushes = distances[current]
+        occupied = {position for _label, position in current}
+        for box_index, (label, destination) in enumerate(current):
+            for dy, dx in DIRECTIONS.values():
+                previous = (destination[0] - dy, destination[1] - dx)
+                support = (destination[0] - 2 * dy, destination[1] - 2 * dx)
+                if (
+                    previous not in floor
+                    or support not in floor
+                    or previous in occupied
+                    or support in occupied
+                ):
+                    continue
+                predecessor = list(current)
+                predecessor[box_index] = (label, previous)
+                signature = _local_box_signature(predecessor)
+                if signature in distances:
+                    continue
+                distances[signature] = pushes + 1
+                queue.append(signature)
+                if len(distances) >= INTERACTION_PATTERN_MAX_STATES:
+                    break
+            if len(distances) >= INTERACTION_PATTERN_MAX_STATES:
+                break
+    return tuple(distances.items())
+
+
+def _interaction_pattern_bound(
+    rows: tuple[str, ...],
+    boxes: tuple[Box, ...],
+    generic_goals: frozenset[Position],
+    dedicated_goals: tuple[tuple[str, frozenset[Position]], ...],
+) -> float:
+    floor_size = sum(cell != "O" for row in rows for cell in row)
+    if (
+        len(boxes) < 2
+        or len(boxes) > INTERACTION_PATTERN_MAX_BOXES
+        or floor_size > INTERACTION_PATTERN_MAX_FLOOR
+    ):
+        return 0
+    targets: list[Box] = [("X", goal) for goal in generic_goals]
+    for label, goals in dedicated_goals:
+        targets.extend((label, goal) for goal in goals)
+    if len(targets) != len(boxes):
+        return 0
+    distances = dict(_relaxed_interaction_pattern(rows, _local_box_signature(targets)))
+    return distances.get(_local_box_signature(boxes), 0)
 
 
 def heuristic(state: State) -> float:
     """Admissible lower bound based on exact distinct box-to-goal assignment."""
     incremental = _incremental_assignment_detail(state)
     if incremental is not None:
-        return incremental.cost
+        interaction = _interaction_pattern_bound(
+            state.board.rows,
+            state.boxes,
+            state.board.generic_goals,
+            state.board.dedicated_goals,
+        )
+        return max(incremental.cost, interaction)
     return _heuristic_for_layout(
         state.board.rows,
         state.boxes,

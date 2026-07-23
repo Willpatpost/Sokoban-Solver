@@ -1510,6 +1510,59 @@ function bidirectionalSide(payload) {
     performance: performanceSnapshot(board.metrics)});
 }
 
+function goalCutComponentSolved(boxes, board, domain) {
+  const occupied = new Map(boxes.map(([y, x, label]) => [pkey(y, x), label]));
+  return [...domain].every(position => {
+    const goalLabel = board.goals.get(position);
+    const boxLabel = occupied.get(position);
+    return goalLabel ? boxLabel === goalLabel : !boxLabel;
+  });
+}
+
+function replaySearchPath(state, board, path) {
+  let replay = state;
+  for (const move of path) {
+    const next = neighbors(replay, board, false).find(candidate => candidate.move === move);
+    if (!next) return null;
+    replay = {robot: next.robot, boxes: next.boxes, cost: replay.cost + 1};
+  }
+  return replay;
+}
+
+function solveGoalCutComponents(payload, board, initial, certificate) {
+  let current = initial, visited = 0;
+  const path = [];
+  const robotPosition = pkey(initial.robot[0], initial.robot[1]);
+  const ordered = [...certificate.components].sort((left, right) =>
+    Number(right.has(robotPosition)) - Number(left.has(robotPosition)));
+  for (const domain of ordered) {
+    if (goalCutComponentSolved(current.boxes, board, domain)) continue;
+    const remainingBudget = payload.maxVisited
+      ? Math.max(1, payload.maxVisited - visited)
+      : undefined;
+    const result = searchCore({
+      ...payload,
+      state: {
+        rows: board.rows,
+        robot: current.robot,
+        boxes: current.boxes.map(([y, x, label]) => [pkey(y, x), label]),
+      },
+      maxVisited: remainingBudget,
+      _goalCutDomain: domain,
+      _skipGoalCut: true,
+    });
+    visited += result.visited || 0;
+    if (!result.path) return null;
+    current = replaySearchPath(current, board, result.path);
+    if (!current) return null;
+    path.push(...result.path);
+  }
+  return goal(current.boxes, board.goals)
+    ? {path, visited, decompositionComponents: ordered.length,
+      decompositionCut: certificate.cut}
+    : null;
+}
+
 function searchCore(payload) {
   if (payload.algorithm === "analyze-puzzle") {
     return {path: null, visited: 0, analysis: analyzePuzzleForSearch(payload.state)};
@@ -1535,6 +1588,14 @@ function searchCore(payload) {
     parent: null,
     segment: [],
   };
+  if (!payload._skipGoalCut && !payload.maxVisited &&
+      payload.algorithm === "push-astar") {
+    const certificate = goalCutDecomposition(initial.boxes, board);
+    if (certificate) {
+      const decomposed = solveGoalCutComponents(payload, board, initial, certificate);
+      if (decomposed) return decomposed;
+    }
+  }
   const algorithm = payload.algorithm, frontier = new Heap(), seen = new Map(), cameFrom = new Map();
   const bestCost = new Map(), closed = new Set();
   const pushMacro = ["push-astar", "push-greedy", "weighted-push-astar"].includes(algorithm);
@@ -1569,15 +1630,24 @@ function searchCore(payload) {
     if (current.parent !== null) {
       cameFrom.set(identity, {parent: current.parent, segment: current.segment});
     }
-    if (goal(current.boxes, board.goals)) return {path: reconstructPath(cameFrom, identity), visited};
+    if (payload._goalCutDomain
+      ? goalCutComponentSolved(current.boxes, board, payload._goalCutDomain)
+      : goal(current.boxes, board.goals)) {
+      return {path: reconstructPath(cameFrom, identity), visited};
+    }
     if (pushMacro && createsSealedCorralDeadlock(current, board, reachable)) continue;
     if (payload.maxVisited && visited >= payload.maxVisited) {
       return {path: null, visited, cutoff: true};
     }
-    const nextStates = pushMacro ? pushNeighbors(current, board, reachable)
+    let nextStates = pushMacro ? pushNeighbors(current, board, reachable)
       .map(next => expandPushMacro(next, board, payload.forcedMacros !== false))
       .filter(Boolean) :
       neighbors(current, board).map(n => ({robot: n.robot, boxes: n.boxes, path: [n.move]}));
+    if (payload._goalCutDomain && pushMacro) {
+      nextStates = nextStates.filter(next =>
+        payload._goalCutDomain.has(next.pushedFrom) &&
+        payload._goalCutDomain.has(next.pushedTo));
+    }
     for (const next of nextStates) {
       const child = {robot: next.robot, boxes: next.boxes,
         cost: current.cost + (pushMacro ? next.pushes : next.path.length),

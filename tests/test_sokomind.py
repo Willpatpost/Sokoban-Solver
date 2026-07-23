@@ -257,6 +257,30 @@ class SokomindTests(unittest.TestCase):
         self.assertEqual(1, info.hits)
         self.assertEqual(1, info.currsize)
 
+    def test_python_interaction_pattern_ports_the_proven_chokepoint_bound(self):
+        state = parse_puzzle(
+            [
+                "OOOOOOOOO",
+                "O   O   O",
+                "O R O   O",
+                "Ob A  BaO",
+                "O   O   O",
+                "O   O   O",
+                "OOOOOOOOO",
+            ]
+        )
+        assignment = sum(
+            _matching_cost(
+                tuple(position for box_label, position in state.boxes if box_label == label),
+                tuple(state.board.goals_for(label)),
+                state.board.rows,
+            )
+            for label in ("A", "B")
+        )
+        self.assertEqual(9, assignment)
+        self.assertEqual(11, state.heuristic)
+        self.assertEqual(11, self._reference_min_pushes(state))
+
     def test_reachability_reconstructs_paths_only_when_requested(self):
         state = parse_puzzle(
             [

@@ -58,23 +58,28 @@ unreachable-edge tests compare repair against full recomputation, and telemetry
 reports repairs, fallbacks, and reused rows.
 
 Bounded goal rooms can also compile relaxed multi-box pattern tables for groups
-of two to four labels whose complete goal sets belong to that room. The reverse
-table keeps walls, typed goals, box collisions, and required push support squares,
-while removing every unrelated box and granting the robot access everywhere.
-Its exact pattern distance is therefore admissible. The heuristic replaces the
-same labels' Hungarian contribution with the stronger value instead of adding
-both, and combines only label-disjoint room patterns. Tables stop after 12,000
-states; discovered distances remain exact, while missing cutoff entries leave the
-ordinary assignment bound unchanged.
+of two to four boxes. Shared labels and generic boxes are supported by minimizing
+over compatible room-box choices plus the remaining outside assignment. Rooms
+with more than four goals are split into label-disjoint partitions without
+splitting one shared-label group. Tables stop after 12,000 states and compatible
+selection after 512 combinations; either cutoff retains the ordinary assignment
+bound.
 
 Unique-label box pairs whose shortest push corridors overlap a tunnel or
-articulation receive a second bounded check. A reverse two-box table removes all
-other boxes and robot-connectivity constraints, so any interaction cost it proves
-is also admissible. Pair tables are limited to nearby conflicts with at most 18
-independent pushes and 4,000 reverse states. Room and pair improvements enter one
+articulation receive a second bounded check. Boards with at most three boxes and
+32 floor cells also compile an exact relaxed capacity table for shared, generic,
+gate, staging, and support conflicts. The same proven subset runs in Python.
+Room, pair, and capacity improvements enter one
 label-disjoint selection—an exact maximum for up to 20 involved labels—preventing
 a box's unavoidable detour from being counted twice. Cutoffs and shared-label
 assignments retain the Hungarian bound.
+
+Exact Push A* also recognizes a conservative goal-cut certificate. A non-goal
+articulation must be statically dead for every box label, and every resulting
+active component must contain exactly its own compatible boxes and goals. The
+solver then solves each component independently, restricts pushes to that
+component, stitches the paths, and replay-validates the global result. Near
+misses fall back to ordinary search unchanged.
 
 Ultimate Bidirectional's planning worker also returns a clone-safe prepared-board
 seed. Subsequent portfolio workers reuse its immutable geometry, topology,
@@ -82,7 +87,8 @@ typed-goal reverse-distance tables, seeded player-aware push distances, dense
 indices, compiled single-box graph, and goal-room packing tables while
 creating private heuristic, deadlock, and signature caches. Workers verify the
 exact board contents and schema before reuse and rebuild normally on a mismatch.
-Compiled room-pattern and pair-conflict tables are included in that seed so
+Compiled room-pattern, pair-conflict, and small capacity tables are included in
+that seed so
 portfolio workers do not repeat their bounded reverse enumeration.
 This uses standard structured cloning because shared memory requires
 cross-origin isolation headers that GitHub Pages does not reliably provide.

@@ -512,7 +512,7 @@ After local proof machinery is complete, use it to close the large assignment
 heuristic gap without sacrificing admissibility.
 
 17. Add reverse-proven goal-room packing tables.
-    Current status: Partial.
+    Current status: Done with explicit limits in build 2026-07-23.30.
     Existing foundation:
     - Typed one-entrance rooms up to four boxes compile reverse packing tables with
       exact distances and all optimal next pushes.
@@ -521,9 +521,17 @@ heuristic gap without sacrificing admissibility.
      help, making complete misses safe rejections.
    - Extend practical room coverage with dense storage or proven decomposition.
    - Reuse immutable tables across workers based on measured clone/build costs.
+   Completion notes:
+   - Complete tables now carry their finite state bound, compact canonical storage
+     contract, and a checked closed-domain flag. Only a complete miss in a domain
+     with no exterior floor edge can become a local or global rejection.
+   - The reviewed room/domain/five-box/250,000-state limits make every eligible
+     table conclusive; larger tables remain explicitly oversized.
+   - Packing tables remain part of the clone-safe prepared-board seed, and strict
+     static-dead goal cuts provide the safe larger-component path.
 
 20. Build strategic multi-box pattern databases.
-    Current status: Partial.
+    Current status: Done with explicit limits in build 2026-07-23.30.
     Existing foundation:
     - Label-disjoint room patterns replace Hungarian contributions with exact
       discovered costs and remain admissible after bounded cutoffs.
@@ -533,9 +541,16 @@ heuristic gap without sacrificing admissibility.
    - Extend useful coverage beyond four boxes through safe partitions or symmetry.
    - Add generated interacting-room efficiency benchmarks and port the stable
      subset to Python.
+   Completion notes:
+   - Shared and generic labels minimize over compatible room-box selections plus
+     the exact outside assignment, with a 512-combination fallback to Hungarian.
+   - Larger rooms are partitioned into label-disjoint two-to-four-box tables;
+     shared-label groups are never split or double counted.
+   - Browser tests cover shared-label and five-goal partitions. The stable global
+     two/three-box relaxed table is also used by Python.
 
 21. Add proven corridor, gate, staging, and support conflict bounds.
-    Current status: Partial.
+    Current status: Done with explicit limits in build 2026-07-23.30.
     Existing foundation:
     - Unique-label pair conflicts use exact relaxed two-box tables and a
       label-disjoint maximum without double counting.
@@ -543,15 +558,32 @@ heuristic gap without sacrificing admissibility.
    - Handle shared/generic labels by minimizing over compatible assignments.
    - Add proven three-or-more-box capacity conflicts where non-overlap is explicit.
    - Add generated chokepoint baselines and port the stable subset to Python.
+   Completion notes:
+   - Existing unique-label corridor pairs remain, while boards with at most three
+     boxes and 32 floor cells compile an exact relaxed capacity table.
+   - The capacity table removes robot connectivity and unrelated restrictions, so
+     its shared/generic, gate, staging, and support interaction cost is admissible.
+   - Room, pair, and capacity candidates share one exact label-disjoint selector.
+     JavaScript and Python both reproduce the independently checked chokepoint
+     bound; cutoff or ineligible cases retain ordinary assignment.
 
 37. Add proven goal-cut decomposition.
-    Current status: Backlog.
+    Current status: Done with a strict certificate in build 2026-07-23.30.
    Finish gate:
    - Detect label-compatible separators whose subproblems are independent under
      robot travel, box crossing, shared support/staging cells, and ordering.
    - Prove the independence conditions, solve components separately, combine
      replayable paths, and fall back unchanged whenever proof is incomplete.
    - Validate on generated positive and near-miss counterexample families.
+   Completion notes:
+   - A certificate requires a non-goal articulation that is statically dead for
+     every label plus exact per-component box/goal label balance. Boxes therefore
+     cannot cross the separator or satisfy another component's goals.
+   - Exact Push A* solves certified components separately, permits robot travel
+     between them, restricts pushes to the active component, stitches the paths,
+     and accepts only a globally replay-validated solution.
+   - Positive certification and replay tests are paired with unchanged fallback
+     for every board that lacks the complete certificate.
 
 Sprint completion gate:
 All four items are Done, every lower-bound combination remains admissible, and

@@ -155,7 +155,11 @@ const PATTERN_EXACT_STATE_LIMIT = 512;
 const PATTERN_FLOOR_LIMIT = 18;
 const PATTERN_BOX_LIMIT = 4;
 const ROOM_PATTERN_MAX_STATES = 12000;
+const ROOM_PATTERN_SELECTION_LIMIT = 512;
 const PAIR_CONFLICT_MAX_STATES = 4000;
+const CAPACITY_PATTERN_MAX_STATES = 20000;
+const CAPACITY_PATTERN_MAX_FLOOR = 32;
+const CAPACITY_PATTERN_MAX_BOXES = 3;
 const PAIR_CONFLICT_DISTANCE_LIMIT = 18;
 const INCREMENTAL_ASSIGNMENT_CROSSOVER = 3;
 function incrementalAssignmentCrossover() {
@@ -284,6 +288,13 @@ function createPerformanceMetrics() {
     pairConflictCandidates: 0,
     pairConflictHits: 0,
     pairConflictBoost: 0,
+    capacityPatternBuilds: 0,
+    capacityPatternStates: 0,
+    capacityPatternHits: 0,
+    capacityPatternBoost: 0,
+    patternSelectionCutoffs: 0,
+    goalCutCertificates: 0,
+    goalCutComponents: 0,
     beamFeatureCells: 0,
     beamFeatureSelections: 0,
     beamBandSelections: 0,
@@ -652,6 +663,7 @@ function createPreparedBoardSeed(board) {
     goalRoomPackingTables: board.goalRoomPackingTables,
     roomPatternTables: board.roomPatternTables,
     pairConflictTables: board.pairConflictTables,
+    capacityPatternTables: board.capacityPatternTables,
     graphNodes: board.metrics.graphNodes,
     graphEdges: board.metrics.graphEdges,
     estimatedBytes,
@@ -705,6 +717,7 @@ function hydratePreparedBoard(data, seed, metrics) {
     goalRoomPackingTables: new Map(seed.goalRoomPackingTables || []),
     roomPatternTables: new Map(seed.roomPatternTables || []),
     pairConflictTables: new Map(seed.pairConflictTables || []),
+    capacityPatternTables: new Map(seed.capacityPatternTables || []),
     shortestCorridorMemo: new Map(),
     localCorralMemo: new Map(),
     doorwayFlowMemo: new Map(),
@@ -803,6 +816,7 @@ function parse(data) {
     goalRoomPackingTables: new Map(),
     roomPatternTables: new Map(),
     pairConflictTables: new Map(),
+    capacityPatternTables: new Map(),
     shortestCorridorMemo: new Map(),
     localCorralMemo: new Map(),
     doorwayFlowMemo: new Map(),
@@ -2411,47 +2425,178 @@ function relaxedReversePushTable(board, targetBoxes, maxStates) {
   return {status: complete ? "ready" : "cutoff", complete, states, visited: head};
 }
 
-function reverseRoomPatternTable(board, room, maxStates = ROOM_PATTERN_MAX_STATES) {
+function combinationCount(size, selected) {
+  if (selected < 0 || selected > size) return 0;
+  selected = Math.min(selected, size - selected);
+  let count = 1;
+  for (let index = 1; index <= selected; index++) {
+    count = count * (size - selected + index) / index;
+    if (count > ROOM_PATTERN_SELECTION_LIMIT) return count;
+  }
+  return count;
+}
+
+function combinations(values, selected) {
+  if (selected === 0) return [[]];
+  const result = [];
+  const visit = (start, current) => {
+    if (current.length === selected) {
+      result.push([...current]);
+      return;
+    }
+    for (let index = start;
+      index <= values.length - (selected - current.length);
+      index++) {
+      current.push(values[index]);
+      visit(index + 1, current);
+      current.pop();
+    }
+  };
+  visit(0, []);
+  return result;
+}
+
+function buildRoomPatternTable(board, room, targetGoals,
+  maxStates = ROOM_PATTERN_MAX_STATES) {
   const roomIndex = board.topology.rooms.indexOf(room);
-  if (board.roomPatternTables.has(roomIndex)) return board.roomPatternTables.get(roomIndex);
-  const roomLabels = new Set(room.goals.map(goal => board.goals.get(goal)));
-  const labels = new Set([...roomLabels].filter(label =>
-    (board.goalsByLabel.get(label) || []).every(goal => room.cells.has(goal))));
-  const targetBoxes = room.goals
-    .filter(goal => labels.has(board.goals.get(goal)))
-    .map(goal => [goal, board.goals.get(goal)]);
+  const key = `${roomIndex}|${[...targetGoals].sort().join(".")}`;
+  if (board.roomPatternTables.has(key)) return board.roomPatternTables.get(key);
+  const targetBoxes = targetGoals.map(goal => [goal, board.goals.get(goal)]);
+  const labels = new Set(targetBoxes.map(([, label]) => label));
   if (roomIndex < 0 || targetBoxes.length < 2 || targetBoxes.length > 4) {
-    const skipped = {status: "ineligible", complete: false, labels, states: new Map(), visited: 0};
-    board.roomPatternTables.set(roomIndex, skipped);
+    const skipped = {status: "ineligible", complete: false, labels,
+      targetBoxes, states: new Map(), visited: 0};
+    board.roomPatternTables.set(key, skipped);
     return skipped;
   }
 
   // Non-pattern boxes and robot connectivity are removed, while walls, box
   // collisions, labels, and support squares remain. The resulting distance is
   // a lower bound on pushes by these labels in the full puzzle.
-  const result = {...relaxedReversePushTable(board, targetBoxes, maxStates), labels};
+  const result = {
+    ...relaxedReversePushTable(board, targetBoxes, maxStates),
+    labels,
+    targetBoxes,
+  };
   board.metrics.roomPatternBuilds++;
   board.metrics.roomPatternStates += result.visited;
-  board.roomPatternTables.set(roomIndex, result);
+  board.roomPatternTables.set(key, result);
   return result;
+}
+
+function roomPatternGoalPartitions(room, board) {
+  const byLabel = new Map();
+  for (const goal of room.goals) {
+    const label = board.goals.get(goal);
+    if (!byLabel.has(label)) byLabel.set(label, []);
+    byLabel.get(label).push(goal);
+  }
+  const groups = [...byLabel.values()]
+    .filter(goals => goals.length <= 4)
+    .sort((left, right) => right.length - left.length);
+  const totalGoals = groups.reduce((total, goals) => total + goals.length, 0);
+  const partitions = Array.from(
+    {length: Math.max(1, Math.ceil(totalGoals / 4))},
+    () => [],
+  );
+  for (const goals of groups) {
+    const partition = partitions
+      .filter(candidate => candidate.length + goals.length <= 4)
+      .sort((left, right) => left.length - right.length)[0];
+    if (!partition) continue;
+    partition.push(...goals);
+  }
+  return partitions.filter(goals => goals.length >= 2);
+}
+
+function reverseRoomPatternTables(board, room, maxStates = ROOM_PATTERN_MAX_STATES) {
+  return roomPatternGoalPartitions(room, board)
+    .map(goals => buildRoomPatternTable(board, room, goals, maxStates));
+}
+
+function reverseRoomPatternTable(board, room, maxStates = ROOM_PATTERN_MAX_STATES) {
+  const tables = reverseRoomPatternTables(board, room, maxStates);
+  if (tables.length === 1 && tables[0].targetBoxes.length === room.goals.length) {
+    return tables[0];
+  }
+  return {
+    status: tables.length ? "partitioned" : "ineligible",
+    complete: tables.length > 0 && tables.every(table => table.complete),
+    labels: new Set(tables.flatMap(table => [...table.labels])),
+    states: new Map(),
+    visited: tables.reduce((total, table) => total + table.visited, 0),
+    partitions: tables,
+  };
+}
+
+function compatiblePatternReplacementCost(boxes, board, table) {
+  const goalsByLabel = new Map();
+  for (const [goal, label] of table.targetBoxes) {
+    if (!goalsByLabel.has(label)) goalsByLabel.set(label, []);
+    goalsByLabel.get(label).push(goal);
+  }
+  const boxesByLabel = boxesByLabelWithIndices(boxes);
+  let selectionCount = 1;
+  const choices = [];
+  for (const [label, targetGoals] of goalsByLabel) {
+    const entries = boxesByLabel.get(label) || [];
+    const count = combinationCount(entries.length, targetGoals.length);
+    selectionCount *= count;
+    if (!count || selectionCount > ROOM_PATTERN_SELECTION_LIMIT) {
+      board.metrics.patternSelectionCutoffs++;
+      return null;
+    }
+    choices.push({label, targetGoals, entries,
+      selections: combinations(entries, targetGoals.length)});
+  }
+  let best = Infinity;
+  const visit = (choiceIndex, selectedByLabel) => {
+    if (choiceIndex < choices.length) {
+      const choice = choices[choiceIndex];
+      for (const selection of choice.selections) {
+        selectedByLabel.set(choice.label, selection);
+        visit(choiceIndex + 1, selectedByLabel);
+      }
+      selectedByLabel.delete(choice.label);
+      return;
+    }
+    const patternBoxes = [];
+    let outsideCost = 0;
+    for (const choice of choices) {
+      const selected = selectedByLabel.get(choice.label);
+      const selectedIndices = new Set(selected.map(entry => entry.index));
+      selected.forEach(({y, x}) => patternBoxes.push([pkey(y, x), choice.label]));
+      const outsideBoxes = choice.entries.filter(entry => !selectedIndices.has(entry.index));
+      const targetSet = new Set(choice.targetGoals);
+      const outsideGoals = (board.goalsByLabel.get(choice.label) || [])
+        .filter(goal => !targetSet.has(goal));
+      const costs = outsideBoxes.map(({y, x}) => outsideGoals.map(goal =>
+        compiledGoalPushDistance(board, pkey(y, x), goal)));
+      const assignment = minimumAssignment(costs).cost;
+      if (!Number.isFinite(assignment)) return;
+      outsideCost += assignment;
+    }
+    const distance = table.states.get(localBoxSignature(patternBoxes));
+    if (distance !== undefined) best = Math.min(best, distance + outsideCost);
+  };
+  visit(0, new Map());
+  return Number.isFinite(best) ? best : null;
 }
 
 function roomPatternHeuristicCandidates(boxes, board, assignmentCosts) {
   const candidates = [];
   for (const room of board.topology.rooms) {
-    const table = reverseRoomPatternTable(board, room);
-    if (!table.states.size) continue;
-    const patternBoxes = boxes
-      .filter(([, , label]) => table.labels.has(label))
-      .map(([y, x, label]) => [pkey(y, x), label]);
-    const distance = table.states.get(localBoxSignature(patternBoxes));
-    if (distance === undefined) continue;
-    board.metrics.roomPatternHits++;
-    const assignment = [...table.labels]
-      .reduce((total, label) => total + (assignmentCosts.get(label) ?? Infinity), 0);
-    const boost = distance - assignment;
-    if (boost > 0 && Number.isFinite(boost)) {
-      candidates.push({labels: table.labels, boost, kind: "room"});
+    for (const table of reverseRoomPatternTables(board, room)) {
+      if (!table.states.size) continue;
+      const replacement = compatiblePatternReplacementCost(boxes, board, table);
+      if (replacement === null) continue;
+      board.metrics.roomPatternHits++;
+      const assignment = [...table.labels]
+        .reduce((total, label) => total + (assignmentCosts.get(label) ?? Infinity), 0);
+      const boost = replacement - assignment;
+      if (boost > 0 && Number.isFinite(boost)) {
+        candidates.push({labels: table.labels, boost, kind: "room"});
+      }
     }
   }
   return candidates;
@@ -2548,6 +2693,47 @@ function pairConflictHeuristicCandidates(boxes, board, assignmentCosts) {
   return candidates;
 }
 
+function reverseCapacityPatternTable(board, maxStates = CAPACITY_PATTERN_MAX_STATES) {
+  const targetBoxes = [...board.goals]
+    .map(([goal, label]) => [goal, label])
+    .sort((left, right) => left.join(",").localeCompare(right.join(",")));
+  const cacheKey = `all|${targetBoxes.map(box => box.join(",")).join(";")}`;
+  if (board.capacityPatternTables.has(cacheKey)) {
+    return board.capacityPatternTables.get(cacheKey);
+  }
+  const labels = new Set(targetBoxes.map(([, label]) => label));
+  if (targetBoxes.length < 2 || targetBoxes.length > CAPACITY_PATTERN_MAX_BOXES ||
+      board.floor.size > CAPACITY_PATTERN_MAX_FLOOR) {
+    const skipped = {status: "ineligible", complete: false, labels,
+      targetBoxes, states: new Map(), visited: 0};
+    board.capacityPatternTables.set(cacheKey, skipped);
+    return skipped;
+  }
+  const result = {
+    ...relaxedReversePushTable(board, targetBoxes, maxStates),
+    labels,
+    targetBoxes,
+  };
+  board.metrics.capacityPatternBuilds++;
+  board.metrics.capacityPatternStates += result.visited;
+  board.capacityPatternTables.set(cacheKey, result);
+  return result;
+}
+
+function capacityPatternHeuristicCandidates(boxes, board, assignmentCosts) {
+  const table = reverseCapacityPatternTable(board);
+  if (!table.states.size) return [];
+  const replacement = compatiblePatternReplacementCost(boxes, board, table);
+  if (replacement === null) return [];
+  board.metrics.capacityPatternHits++;
+  const assignment = [...table.labels]
+    .reduce((total, label) => total + (assignmentCosts.get(label) ?? Infinity), 0);
+  const boost = replacement - assignment;
+  return boost > 0 && Number.isFinite(boost)
+    ? [{labels: table.labels, boost, kind: "capacity"}]
+    : [];
+}
+
 function maximumDisjointPatternSelection(candidates) {
   if (!candidates.length) return [];
   const labels = [...new Set(candidates.flatMap(candidate => [...candidate.labels]))];
@@ -2583,17 +2769,21 @@ function interactionHeuristicBoost(boxes, board, assignmentCosts) {
   const selected = maximumDisjointPatternSelection([
     ...roomPatternHeuristicCandidates(boxes, board, assignmentCosts),
     ...pairConflictHeuristicCandidates(boxes, board, assignmentCosts),
+    ...capacityPatternHeuristicCandidates(boxes, board, assignmentCosts),
   ]);
   const roomBoost = selected.filter(candidate => candidate.kind === "room")
     .reduce((total, candidate) => total + candidate.boost, 0);
   const pairBoost = selected.filter(candidate => candidate.kind === "pair")
     .reduce((total, candidate) => total + candidate.boost, 0);
+  const capacityBoost = selected.filter(candidate => candidate.kind === "capacity")
+    .reduce((total, candidate) => total + candidate.boost, 0);
   board.metrics.roomPatternBoost += roomBoost;
   board.metrics.pairConflictBoost += pairBoost;
-  return roomBoost + pairBoost;
+  board.metrics.capacityPatternBoost += capacityBoost;
+  return roomBoost + pairBoost + capacityBoost;
 }
 
-function reverseGoalRoomPackingTable(board, room, maxStates = 20000) {
+function reverseGoalRoomPackingTable(board, room, maxStates = null) {
   const roomIndex = board.topology.rooms.indexOf(room);
   if (board.goalRoomPackingTables.has(roomIndex)) {
     return board.goalRoomPackingTables.get(roomIndex);
@@ -2601,8 +2791,16 @@ function reverseGoalRoomPackingTable(board, room, maxStates = 20000) {
   const domain = new Set([...room.cells, room.gate]);
   for (const [position, distance] of room.approach) if (distance <= 2) domain.add(position);
   const targetBoxes = room.goals.map(position => [position, board.goals.get(position)]);
-  if (roomIndex < 0 || room.cells.size > 16 || domain.size > 24 || targetBoxes.length > 4) {
-    const skipped = {status: "oversized", complete: false, domain, states: new Map(), visited: 0};
+  const stateUpperBound = localExactStateUpperBound(domain.size, targetBoxes);
+  const reviewedLimit = maxStates ?? Math.min(
+    LOCAL_EXACT_STATE_LIMIT + 1,
+    Number.isFinite(stateUpperBound) ? stateUpperBound + 1 : LOCAL_EXACT_STATE_LIMIT + 1,
+  );
+  if (roomIndex < 0 || room.cells.size > LOCAL_ROOM_CELL_LIMIT ||
+      domain.size > LOCAL_DOMAIN_CELL_LIMIT || targetBoxes.length > LOCAL_BOX_LIMIT ||
+      stateUpperBound > LOCAL_EXACT_STATE_LIMIT) {
+    const skipped = {status: "oversized", complete: false, domain,
+      states: new Map(), visited: 0, stateUpperBound, storage: "compact-canonical"};
     board.goalRoomPackingTables.set(roomIndex, skipped);
     return skipped;
   }
@@ -2619,7 +2817,7 @@ function reverseGoalRoomPackingTable(board, room, maxStates = 20000) {
   }
 
   let visited = 0, head = 0;
-  for (; head < queue.length && visited < maxStates; head++) {
+  for (; head < queue.length && visited < reviewedLimit; head++) {
     const current = queue[head];
     const canonical = canonicalLocalState(domain, current.boxes, current.robot);
     if (!canonical) continue;
@@ -2650,7 +2848,16 @@ function reverseGoalRoomPackingTable(board, room, maxStates = 20000) {
     });
   }
   const complete = head >= queue.length;
-  const result = {status: complete ? "ready" : "cutoff", complete, domain, states, visited};
+  const result = {
+    status: complete ? "ready" : "cutoff",
+    complete,
+    domain,
+    states,
+    visited,
+    stateUpperBound,
+    storage: "compact-canonical",
+    closedDomain: localDomainGloballyClosed(domain, board),
+  };
   board.metrics.reversePackingBuilds++;
   board.metrics.reversePackingStates += visited;
   board.metrics.localRoomMs += now() - started;
@@ -2688,6 +2895,49 @@ function localDomainComponents(domain) {
     components.push(component);
   }
   return components;
+}
+
+function goalCutDecomposition(boxes, board) {
+  const occupied = new Map(boxes.map(([y, x, label]) => [pkey(y, x), label]));
+  const labels = [...board.goalsByLabel.keys()];
+  for (const cut of board.topology.articulations) {
+    if (board.goals.has(cut) || occupied.has(cut)) continue;
+    const [cutY, cutX] = cut.split(",").map(Number);
+    if (!labels.every(label => staticDead(cutY, cutX, board, label))) continue;
+    const remaining = new Set(board.floor);
+    remaining.delete(cut);
+    const components = localDomainComponents(remaining);
+    const active = components.filter(component =>
+      [...component].some(position => board.goals.has(position) || occupied.has(position)));
+    if (active.length < 2) continue;
+    let balanced = true;
+    for (const component of active) {
+      const boxCounts = new Map(), goalCounts = new Map();
+      for (const position of component) {
+        const boxLabel = occupied.get(position), goalLabel = board.goals.get(position);
+        if (boxLabel) boxCounts.set(boxLabel, (boxCounts.get(boxLabel) || 0) + 1);
+        if (goalLabel) goalCounts.set(goalLabel, (goalCounts.get(goalLabel) || 0) + 1);
+      }
+      for (const label of new Set([...boxCounts.keys(), ...goalCounts.keys()])) {
+        if ((boxCounts.get(label) || 0) !== (goalCounts.get(label) || 0)) {
+          balanced = false;
+          break;
+        }
+      }
+      if (!balanced) break;
+    }
+    if (!balanced) continue;
+    const certificate = {
+      cut,
+      components: active,
+      reason: "static-dead label-balanced articulation",
+      labels: new Set(labels),
+    };
+    board.metrics.goalCutCertificates++;
+    board.metrics.goalCutComponents += active.length;
+    return certificate;
+  }
+  return null;
 }
 
 function localExactStatePlan(domain, boxes, robot) {
@@ -2975,6 +3225,34 @@ function exactLocalRoomSearch(state, board, room, reachable = reachablePaths(sta
       decompositionComponents: localPlan.components,
       storage: "dense-bitset",
       globalDeadlockProven: false,
+    };
+    metrics.localRoomMs += now() - started;
+    recordLocalAnalysis(metrics, result);
+    return cacheCompleteLocalAnalysis(
+      board.localRoomMemo, cacheKey, result, LOCAL_ROOM_MEMO_LIMIT);
+  }
+  if (packingTable.complete && packingTable.closedDomain &&
+      localBoxes.length === room.goals.length && exportsRequired === 0 &&
+      hasSingleLocalEntryRegion) {
+    const result = {
+      status: "exhausted",
+      pushes: null,
+      firstPushes: new Set(),
+      visited: 0,
+      viableBoundaries: 0,
+      importsRequired,
+      exportsRequired,
+      doorwayOccupied: localBoxes.some(([position]) => position === room.gate),
+      entrySide,
+      domain,
+      roomIndex,
+      source: "reverse-packing-table-miss",
+      reverseTableComplete: true,
+      proofComplete: true,
+      stateUpperBound,
+      decompositionComponents: localPlan.components,
+      storage: "compact-canonical",
+      globalDeadlockProven: localBoxes.length === state.boxes.length,
     };
     metrics.localRoomMs += now() - started;
     recordLocalAnalysis(metrics, result);

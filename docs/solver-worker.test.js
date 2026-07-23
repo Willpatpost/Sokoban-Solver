@@ -788,7 +788,7 @@ test("room pattern tables add only proven multi-box interaction cost", () => {
   assert.equal(hydrated.metrics.roomPatternBuilds, 0);
 });
 
-test("room pattern bounds skip labels whose candidate boxes can serve outside goals", () => {
+test("room pattern bounds minimize shared-label boxes across inside and outside goals", () => {
   const worker = loadWorker();
   const board = worker.parse(stateFromRows([
     "OOOOOOOOOOOOO", "OaR AAB     O", "OOOOOO OOOOOO", "OOOOa b OOOOO",
@@ -796,8 +796,46 @@ test("room pattern bounds skip labels whose candidate boxes can serve outside go
   ]));
   const room = board.topology.rooms.find(candidate => candidate.goals.length === 2);
   const table = worker.reverseRoomPatternTable(board, room);
-  assert.equal(table.status, "ineligible");
-  assert.equal(table.states.size, 0);
+  assert.equal(table.status, "ready");
+  assert.equal(table.targetBoxes.length, 2);
+  const boxes = [[1, 4, "A"], [1, 5, "A"], [1, 6, "B"]];
+  const assignmentCosts = new Map([
+    ["A", worker.minimumAssignment([
+      [...board.goalsByLabel.get("A")].map(goal =>
+        worker.compiledGoalPushDistance(board, "1,4", goal)),
+      [...board.goalsByLabel.get("A")].map(goal =>
+        worker.compiledGoalPushDistance(board, "1,5", goal)),
+    ]).cost],
+    ["B", worker.compiledGoalPushDistance(
+      board, "1,6", board.goalsByLabel.get("B")[0])],
+  ]);
+  const candidates = worker.roomPatternHeuristicCandidates(
+    boxes, board, assignmentCosts);
+  assert.ok(candidates.every(candidate => Number.isFinite(candidate.boost)));
+  assert.equal(board.metrics.patternSelectionCutoffs, 0);
+});
+
+test("large rooms partition interaction tables without splitting shared labels", () => {
+  const worker = loadWorker();
+  const board = worker.parse(stateFromRows([
+    "OOOOOOOOOOOOOOOOO",
+    "O R             O",
+    "OOOOOOOO OOOOOOOO",
+    "OOOOOabcde OOOOOO",
+    "OOOOOABCDE OOOOOO",
+    "OOOOO      OOOOOO",
+    "OOOOOOOOOOOOOOOOO",
+  ]));
+  const room = board.topology.rooms.find(candidate => candidate.goals.length === 5);
+  const table = worker.reverseRoomPatternTable(board, room);
+  assert.equal(table.status, "partitioned");
+  assert.deepEqual(
+    Array.from(table.partitions, partition => partition.targetBoxes.length).sort(),
+    [2, 3],
+  );
+  assert.ok(table.partitions.every(partition => partition.status === "ready"));
+  const usedLabels = table.partitions.flatMap(partition => [...partition.labels]);
+  assert.equal(new Set(usedLabels).size, usedLabels.length);
 });
 
 test("pair conflict tables prove extra pushes through a shared chokepoint", () => {
@@ -851,7 +889,7 @@ test("overlapping heuristic conflicts use the maximum label-disjoint combination
   );
 });
 
-test("pair conflict table cutoffs retain the ordinary assignment bound", () => {
+test("pair conflict cutoffs fall back while the independent global capacity table remains usable", () => {
   const worker = loadWorker();
   const board = worker.parse(stateFromRows([
     "OOOOOOOOO", "O   O   O", "O R O   O", "Ob A  BaO",
@@ -860,8 +898,89 @@ test("pair conflict table cutoffs retain the ordinary assignment bound", () => {
   const table = worker.reversePairConflictTable(board, "A", "B", 10);
   assert.equal(table.status, "cutoff");
   assert.equal(table.states.size, 10);
-  assert.equal(worker.heuristic([[3, 3, "A"], [3, 6, "B"]], board), 9);
+  assert.equal(worker.heuristic([[3, 3, "A"], [3, 6, "B"]], board), 11);
   assert.equal(board.metrics.pairConflictBoost, 0);
+  assert.equal(board.metrics.capacityPatternBoost, 2);
+});
+
+test("three-box capacity patterns strengthen shared generic assignments safely", () => {
+  const worker = loadWorker();
+  const parsed = stateFromRows([
+    "OOOOOOOOO", "O S S S O", "O       O", "O XXX R O", "O       O",
+    "OOOOOOOOO",
+  ]);
+  const board = worker.parse(parsed);
+  const boxes = parsed.boxes.map(([position, label]) => [
+    ...position.split(",").map(Number), label,
+  ]);
+  const assignment = boxes.reduce((total, [y, x]) => {
+    const distances = board.goalsByLabel.get("X")
+      .map(goal => worker.compiledGoalPushDistance(board, `${y},${x}`, goal));
+    return total + Math.min(...distances);
+  }, 0);
+  const estimate = worker.heuristic(boxes, board);
+  const table = worker.reverseCapacityPatternTable(board);
+  const relaxed = table.states.get(worker.localBoxSignature(
+    boxes.map(([y, x, label]) => [`${y},${x}`, label])));
+  assert.equal(table.status, "ready");
+  assert.equal(estimate, relaxed);
+  assert.ok(estimate >= assignment);
+  assert.equal(board.metrics.capacityPatternHits, 1);
+  const exact = worker.exactLocalPushSearch({
+    domain: board.floor,
+    boxes: boxes.map(([y, x, label]) => [`${y},${x}`, label]),
+    robot: parsed.robot.join(","),
+    gate: parsed.robot.join(","),
+    maxStates: 50000,
+    isGoal: occupied => [...board.goals].every(([position, label]) =>
+      occupied.get(position)?.label === label),
+  });
+  assert.ok(Number.isFinite(exact.pushes));
+  assert.ok(estimate <= exact.pushes);
+});
+
+test("goal-cut certificates solve independent components and return a replayable path", () => {
+  const worker = loadWorker();
+  const rows = [
+    "OOOOOOOOOOO",
+    "O R A aOOOO",
+    "O     OOOOO",
+    "OOOOO     O",
+    "OOOOOOb B O",
+    "OOOOOO    O",
+    "OOOOOOOOOOO",
+  ];
+  for (const transformed of [rows, mirrorRows(rows), rotateRows(rows)]) {
+    const state = stateFromRows(transformed);
+    const board = worker.parse(state);
+    const boxes = state.boxes.map(([position, label]) => [
+      ...position.split(",").map(Number), label,
+    ]);
+    const certificate = worker.goalCutDecomposition(boxes, board);
+    assert.ok(certificate);
+    assert.equal(certificate.components.length, 2);
+    const result = worker.search({algorithm: "push-astar", state});
+    assert.equal(result.status, "solved");
+    assert.equal(result.decompositionComponents, 2);
+    assert.ok(result.path.length > 0);
+  }
+  const incompatible = stateFromRows([
+    "OOOOOOOOOOO",
+    "O R A bOOOO",
+    "O     OOOOO",
+    "OOOOO     O",
+    "OOOOOOa B O",
+    "OOOOOO    O",
+    "OOOOOOOOOOO",
+  ]);
+  const incompatibleBoard = worker.parse(incompatible);
+  const incompatibleBoxes = incompatible.boxes.map(([position, label]) => [
+    ...position.split(",").map(Number), label,
+  ]);
+  assert.equal(
+    worker.goalCutDecomposition(incompatibleBoxes, incompatibleBoard),
+    null,
+  );
 });
 
 test("exact local room search reports exhausted and import-dependent abstractions safely", () => {
