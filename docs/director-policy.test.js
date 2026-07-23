@@ -7,6 +7,7 @@ const {
   evaluateBridgeContinuation,
   selectAnytimeCheckpoints,
   exactTranspositionLimit,
+  directWorkerCapacity,
 } = require("./director-policy.js");
 
 test("anytime checkpoint selection minimizes projected cost and preserves phase diversity", () => {
@@ -32,6 +33,13 @@ test("exact transposition capacity grows for a lone shard without unbounded mult
   assert.equal(exactTranspositionLimit(4, 3), 160000);
   assert.equal(exactTranspositionLimit(2, 1), 240000);
   assert.equal(exactTranspositionLimit(undefined, 1), 320000);
+});
+
+test("evacuation reserves direct capacity while later phases can fill every free lane", () => {
+  assert.equal(directWorkerCapacity(4, 1, true), 2);
+  assert.equal(directWorkerCapacity(4, 3, true), 1);
+  assert.equal(directWorkerCapacity(4, 1, false), 3);
+  assert.equal(directWorkerCapacity(2, 3, false), 0);
 });
 
 test("opportunistic bridge churn cannot delay completion of required work", () => {

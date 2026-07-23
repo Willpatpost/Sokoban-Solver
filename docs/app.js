@@ -1,7 +1,7 @@
 const LEVELS = SokomindLevels.LEVELS;
 const DIRS = {Up: [-1, 0], Down: [1, 0], Left: [0, -1], Right: [0, 1]};
 const CODE_MOVE = {U: "Up", D: "Down", L: "Left", R: "Right"};
-const SOLVER_BUILD = "2026-07-22.22";
+const SOLVER_BUILD = "2026-07-22.23";
 const SOLVER_WORKER_URL = `solver-worker.js?build=${SOLVER_BUILD}`;
 const PUSH_BOUNDS_KEY = "sokomind-push-bounds-v1";
 const KEYS = {ArrowUp: "Up", ArrowDown: "Down", ArrowLeft: "Left", ArrowRight: "Right",
@@ -595,7 +595,14 @@ function runBidirectionalSolver(purpose, analysis) {
   const completedPhases = [];
 
   const isRequiredPlan = plan => plan.handoffStage !== "bridge" &&
-    !plan.persistentExact && !plan.anytimeGuided;
+    !plan.persistentExact && !plan.anytimeGuided && !plan.requiredWorkReleased;
+
+  const finishRequiredPlan = plan => {
+    if (!isRequiredPlan(plan)) return false;
+    plan.requiredWorkReleased = true;
+    requiredWork.finish();
+    return true;
+  };
 
   const enqueueDirectPlans = (plans, {priority = 10} = {}) => {
     if (!plans.length) return;
@@ -638,6 +645,18 @@ function runBidirectionalSolver(purpose, analysis) {
       reason,
       labels: targets.map(([, plan]) => plan.label).join(", "),
     });
+  };
+
+  const releaseActiveRequiredPlans = (predicate, reason) => {
+    const released = [...workerPlans]
+      .filter(([, plan]) => predicate(plan) && finishRequiredPlan(plan));
+    if (released.length) appendSearchLog(
+      "director", "Released active workers from required portfolio", {
+        count: released.length,
+        reason,
+        labels: released.map(([, plan]) => plan.label).join(", "),
+      },
+    );
   };
 
   const queueBridgePlans = () => {
@@ -745,6 +764,14 @@ function runBidirectionalSolver(purpose, analysis) {
       const consumed = prefixCost + checkpoint.cost;
       const remaining = totalBound - consumed;
       if (remaining <= 0) return;
+      retirePendingPlans(
+        pendingPlan => pendingPlan.phaseScope === "opening",
+        "evacuation checkpoint superseded pending opening exploration",
+      );
+      releaseActiveRequiredPlans(
+        activePlan => activePlan.phaseScope === "opening",
+        "evacuation checkpoint made active opening search opportunistic",
+      );
       if (!targetedReverseQueued) {
         targetedReverseQueued = true;
         expectedWorkers++;
@@ -810,6 +837,10 @@ function runBidirectionalSolver(purpose, analysis) {
       if (checkpoints.length) retireActiveWorkers(
         activePlan => activePlan.handoffStage === "bridge",
         "packing checkpoint reserved capacity for solution discovery",
+      );
+      if (checkpoints.length) releaseActiveRequiredPlans(
+        activePlan => activePlan.phaseScope === "opening",
+        "packing checkpoint made active opening search opportunistic",
       );
       if (recommendations.useMilestoneReverse && !targetedReverseQueued && checkpoints.length) {
         const checkpoint = checkpoints[0];
@@ -1098,7 +1129,9 @@ function runBidirectionalSolver(purpose, analysis) {
 
   function pumpDirectPlans() {
     if (settled) return;
-    const directCapacity = Math.max(0, maxWorkerConcurrency - activeSideWorkers);
+    const directCapacity = SokomindDirectorPolicy.directWorkerCapacity(
+      maxWorkerConcurrency, activeSideWorkers, activeEvacuationWorkers > 0,
+    );
     while (directQueue.length && activeDirectWorkers < directCapacity) {
       const bestPriority = directQueue[0].queuePriority;
       const eligible = directQueue
@@ -1204,7 +1237,7 @@ function runBidirectionalSolver(purpose, analysis) {
       if (workerFinished || settled) return;
       workerFinished = true;
       doneWorkers++;
-      if (isRequiredPlan(plan)) requiredWork.finish();
+      const requiredAtTermination = finishRequiredPlan(plan);
       appendSearchLog(reason === "watchdog" ? "warning" : "error",
         `${plan.label} terminated`, {
           reason,
@@ -1256,6 +1289,7 @@ function runBidirectionalSolver(purpose, analysis) {
           sequenceMacros: false,
           continuationVisited: 0,
           endgameVisited: 0,
+          requiredWorkReleased: !requiredAtTermination,
         };
         if (isRequiredPlan(recovery)) requiredWork.schedule();
         appendSearchLog("director", "Recovering silent discovery worker", {
@@ -1273,7 +1307,7 @@ function runBidirectionalSolver(purpose, analysis) {
       if (workerFinished || settled) return;
       workerFinished = true;
       doneWorkers++;
-      if (isRequiredPlan(plan)) requiredWork.finish();
+      finishRequiredPlan(plan);
       appendSearchLog("worker", `Retired ${plan.label}`, {
         reason,
         visited: workerProgress.get(worker) || 0,
@@ -1575,7 +1609,7 @@ function runBidirectionalSolver(purpose, analysis) {
           });
         }
         doneWorkers++;
-        if (isRequiredPlan(plan)) requiredWork.finish();
+        finishRequiredPlan(plan);
         releaseWorker();
         if (provedUnsolvable) {
           settled = true;

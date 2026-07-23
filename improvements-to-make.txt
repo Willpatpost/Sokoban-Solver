@@ -1,8 +1,8 @@
 Sokomind improvements and implementation status
 ===============================================
 
-Status reviewed against the repository after Improvement Sprint 11: productivity-
-aware strategic child ordering in persistent exact search.
+Status reviewed against the repository after Improvement Sprint 12: phase-aware
+Ultimate capacity reservation and required-work supersession.
 
 Standing maintenance rules
 --------------------------
@@ -260,6 +260,31 @@ STRONG IMPLEMENTATION, WITH BOUNDED LIMITATIONS
       per-worker search budgets.
     - The current browser tests validate policy and wiring but do not yet provide
       the real-browser campaign coverage tracked by item 42.
+
+44. Prevent superseded opening work from delaying checkpoint handoffs and exact
+    search.
+    Strong, bounded implementation in solver build 2026-07-22.23:
+    - While evacuation is active, the director caps direct-search occupancy at two
+      lanes. This preserves useful parallel opening exploration without allowing
+      it to consume every lane and delay the phase-defining checkpoint.
+    - A successful evacuation checkpoint immediately retires queued opening plans.
+      Already-running opening workers are not discarded; they continue as
+      opportunistic solution discovery but no longer count against completion of
+      the required heuristic portfolio.
+    - Packing checkpoints repeat the active-plan release defensively, while bridge
+      retirement and exact handoff behavior remain unchanged.
+    - Required-plan release is idempotent across normal completion, cancellation,
+      watchdog termination, and recovery. A watchdog replacement is required only
+      when the terminated source still had a required obligation.
+    - Deterministic policy tests cover evacuation capacity with one and three side
+      workers, unrestricted post-evacuation capacity, phase-supersession wiring,
+      and synchronized browser build identifiers.
+    Bounded limitations:
+    - An active opportunistic opening worker still consumes real CPU and memory;
+      it is retained because the July 22 build 21 trace showed productive progress.
+    - Browser policy tests do not measure operating-system scheduling or contention.
+      The next Huge trace should confirm earlier packing launch, a completed required
+      portfolio, and transition into persistent exact search.
 
 41. Make expensive strategic ordering analyses productivity-aware.
     Strong, bounded implementation in solver build 2026-07-22.22:

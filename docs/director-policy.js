@@ -141,6 +141,13 @@
     return Math.max(120000, Math.min(320000, Math.floor(totalBudget / shards)));
   }
 
+  function directWorkerCapacity(maxWorkers, activeSideWorkers, evacuationActive) {
+    const capacity = Math.max(0, Math.floor(maxWorkers) || 0);
+    const sideWorkers = Math.max(0, Math.floor(activeSideWorkers) || 0);
+    const available = Math.max(0, capacity - sideWorkers);
+    return evacuationActive ? Math.min(2, available) : available;
+  }
+
   return {
     DEFAULT_BRIDGE_LIMITS,
     createBridgeCampaignTracker,
@@ -148,5 +155,6 @@
     evaluateBridgeContinuation,
     selectAnytimeCheckpoints,
     exactTranspositionLimit,
+    directWorkerCapacity,
   };
 });

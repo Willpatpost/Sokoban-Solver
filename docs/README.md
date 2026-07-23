@@ -156,9 +156,10 @@ for up to two bounded continuations. Continuations must demonstrate efficient ta
 progress or reach a credible near-target layout. Each checkpoint and landmark
 generation has circuit breakers for incompatible probes, productive workers, visited
 states, and cumulative worker time. Bridge exploration uses one execution lane and
-cannot replenish indefinitely. The director also retires opening workers once
-a packing checkpoint makes their phase stale, while bounded exact handoffs run only
-a small contour around each checkpoint.
+cannot replenish indefinitely. A successful evacuation retires pending opening work
+and releases active opening workers from the required portfolio; packing repeats the
+release defensively. Bounded exact handoffs run only a small contour around each
+checkpoint.
 
 The board analysis is puzzle-independent. It detects articulation gates and
 one-entrance rooms, derives farthest-first packing pressure and goal dependencies,
@@ -271,9 +272,13 @@ Very large puzzles can still hit browser memory limits before the search space
 is exhausted. Ultimate Bidirectional uses compact parent records, caps each
 bidirectional side on complex boards, bounds worker transposition and memo
 tables, and automatically reduces its reverse-worker count. A priority work queue
-uses the capacity released by completed forward and reverse workers, including while
-evacuation continues, while still allowing only one active landmark bridge. During
-the exact phase, finished bridge and anytime workers are replaced with distinct
+uses capacity released by completed forward and reverse workers. While evacuation
+remains active, direct searches occupy at most two lanes, preserving parallel
+discovery without letting opening work crowd out the checkpoint producer. Once
+evacuation succeeds, queued opening plans are retired and active opening workers
+become opportunistic: they may still find a solution, but they no longer delay
+required handoffs or persistent exact search. Only one landmark bridge may be
+active. During the exact phase, finished bridge and anytime workers are replaced with distinct
 checkpoint-guided profiles whenever eligible checkpoints remain. Each checkpoint is
 attempted at most twice with rotating profiles and seeds; the persistent exact shard
 is never displaced, and a slot remains idle rather than running an unbounded duplicate.
