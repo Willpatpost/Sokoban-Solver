@@ -663,6 +663,13 @@ test("dynamic support dependencies identify blocker routes and enabling pushes",
   assert.equal(graph.assignmentComplete, true);
   assert.ok(graph.prerequisiteEdges.get("2,3").has("3,3"));
   assert.ok(graph.prerequisiteClosure.get("2,3").has("3,3"));
+  assert.equal(graph.assignedTargets.size, 2);
+  assert.ok(graph.enablingActions.get("3,3").some(action =>
+    action.unlocks === "2,3"));
+  assert.ok(graph.stagingSides.get("2,3").some(side => side.support === "3,3"));
+  assert.equal(graph.minimumBlockerDisplacement, 2);
+  assert.equal(upperBox.minimumBlockerDisplacement, 1);
+  assert.equal(graph.exactContradictions.length, 0);
   assert.ok(graph.cycles.has("2,3"));
   assert.ok(graph.cycles.has("3,3"));
   assert.ok(worker.supportDependencyDelta(
@@ -671,6 +678,23 @@ test("dynamic support dependencies identify blocker routes and enabling pushes",
   assert.ok(worker.supportDependencyDelta(
     graph, {pushedFrom: "4,4", pushedTo: "3,3"},
   ) > 0);
+  const relevance = worker.relevanceOrderingScore(state, board, {
+    pushedFrom: "3,3", pushedTo: "3,4",
+  }, {
+    supportDependency: graph,
+    doorway: worker.typedDoorwayFlow(state.boxes, board),
+  });
+  assert.ok(relevance.signals.dependency < 0);
+  assert.ok(worker.recordRelevanceOrdering(board.metrics, relevance) < 0);
+  assert.equal(board.metrics.relevanceDependencyUses, 1);
+  const recentRelevance = worker.relevanceOrderingScore(state, board, {
+    pushedFrom: "2,3", pushedTo: "1,3",
+  }, {
+    supportDependency: graph,
+    doorway: worker.typedDoorwayFlow(state.boxes, board),
+    recentPush: {pushedFrom: "3,3", pushedTo: "3,4"},
+  });
+  assert.ok(recentRelevance.signals.recentEnablement < 0);
 
   const cached = worker.supportDependencyGraph(state, board, reachable);
   assert.equal(cached, graph);
@@ -1283,6 +1307,11 @@ test("typed doorway flow tracks label direction, lane geometry, and staging capa
   assert.equal(flow.exports.get("A"), 1);
   assert.ok(flow.interiorCapacity > 0);
   assert.ok(flow.exteriorCapacity > 0);
+  assert.equal(flow.crossingTasks.length, 2);
+  assert.equal(analysis.tasks.length, 2);
+  assert.ok(analysis.orderedTasks[0].direction === "export");
+  assert.ok(analysis.waves.length >= 1);
+  assert.equal(analysis.exactContradictions.length, 0);
   assert.ok(worker.doorwayFlowDelta(analysis, {boxes}, {
     pushedFrom: "2,3", pushedTo: "3,3", pushClass: "B:2,3:Down",
   }) < 0);
@@ -1306,6 +1335,31 @@ test("typed doorway flow tracks label direction, lane geometry, and staging capa
 
   assert.equal(worker.typedDoorwayFlow(boxes, board), analysis);
   assert.equal(board.metrics.doorwayFlowCacheHits, 1);
+});
+
+test("doorway schedules order particular boxes across shared multi-room corridors", () => {
+  const worker = loadWorker();
+  const parsed = stateFromRows([
+    "OOOOOOOOOOOOO", "O R         O", "OOO OOOOO OOO",
+    "O a OOOOO b O", "O B OOOOO A O", "O   OOOOO   O",
+    "OOOOOOOOOOOOO",
+  ]);
+  const board = worker.parse(parsed);
+  const boxes = parsed.boxes.map(([position, label]) => [
+    ...position.split(",").map(Number), label,
+  ]);
+  const analysis = worker.typedDoorwayFlow(boxes, board);
+  assert.equal(analysis.rooms.length, 2);
+  assert.equal(analysis.tasks.length, 4);
+  assert.equal(analysis.waves.length, 2);
+  const imports = analysis.tasks.filter(task => task.direction === "import");
+  assert.ok(imports.every(task => analysis.scheduleDependencies.get(task.id).size === 1));
+  assert.ok(imports.every(task => {
+    const predecessor = [...analysis.scheduleDependencies.get(task.id)][0];
+    return analysis.tasks.find(candidate => candidate.id === predecessor).box === task.box;
+  }));
+  assert.ok(analysis.waves[0].every(task => task.direction === "export"));
+  assert.ok(analysis.waves[1].every(task => task.direction === "import"));
 });
 
 test("puzzle analysis builds a board-derived worker plan", () => {
@@ -1599,6 +1653,31 @@ test("beam feature archives retain strategically distinct cells beyond score ban
   assert.equal(metrics.beamBandSelections, 7);
 });
 
+test("relevance ordering ablation improves a reviewed chokepoint beam", () => {
+  const worker = loadWorker();
+  const state = stateFromRows([
+    "OOOOOOOOO", "O   O   O", "O R O   O", "Ob A  BaO",
+    "O   O   O", "O   O   O", "OOOOOOOOO",
+  ]);
+  const options = {
+    algorithm: "push-beam",
+    state,
+    beamWidth: 2,
+    maxDepth: 80,
+    maxVisited: 20000,
+    strategicSignalWarmup: 8,
+    strategicSignalCooldown: 32,
+  };
+  const baseline = worker.search({...options, relevanceWeight: 0});
+  const relevant = worker.search({...options, relevanceWeight: 1.5});
+  assert.equal(baseline.status, "solved");
+  assert.equal(relevant.status, "solved");
+  assert.ok(relevant.visited < baseline.visited);
+  assert.ok(relevant.performance.relevanceOrderingChanges > 0);
+  assert.ok(relevant.performance.relevanceDependencyUses > 0);
+  assert.ok(relevant.performance.strategicSignalSkips > 0);
+});
+
 test("bounded transposition maps evict old entries", () => {
   const worker = loadWorker();
   const memo = vm.runInContext("new BoundedDepthMap(2)", worker);
@@ -1619,11 +1698,30 @@ test("ordering productivity gate periodically resamples an unproductive signal",
   gate.observe(false);
   assert.equal(gate.shouldEvaluate(), true);
   gate.observe(false);
-  assert.deepEqual({...gate.snapshot()}, {evaluated: 0, productive: 0, cooldownRemaining: 3});
+  assert.deepEqual({...gate.snapshot()}, {
+    evaluated: 0,
+    productive: 0,
+    changed: 0,
+    useful: 0,
+    cooldownRemaining: 3,
+  });
   assert.equal(gate.shouldEvaluate(), false);
   assert.equal(gate.shouldEvaluate(), false);
   assert.equal(gate.shouldEvaluate(), false);
   assert.equal(gate.shouldEvaluate(), true);
+});
+
+test("ordering productivity measures useful progress rather than order changes", () => {
+  const worker = loadWorker();
+  const gate = worker.createOrderingProductivityGate(2, 2);
+  gate.observe({changed: true, useful: false});
+  gate.observe({changed: true, useful: false});
+  assert.equal(gate.snapshot().changed, 0);
+  assert.equal(gate.snapshot().cooldownRemaining, 2);
+  assert.equal(gate.shouldEvaluate(), false);
+  assert.equal(gate.shouldEvaluate(), false);
+  gate.observe({changed: true, useful: true});
+  assert.equal(gate.snapshot().useful, 1);
 });
 
 test("beam restarts honor incumbent push bounds", () => {

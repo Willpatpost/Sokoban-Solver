@@ -598,43 +598,44 @@ Use the stronger assignments and local proofs from Sprint 19 to guide discovery
 through setup moves without making exact search incomplete.
 
 14. Build dynamic support-square dependency graphs.
-    Current status: Partial.
-    Existing foundation:
-    - Standing squares, routes, blockers, support demand, and access loss influence
-      ordering and are cached by state.
-   Finish gate:
-   - Tie dependencies to the current compatible assignment, represent recursive
-     prerequisites and cycles, track enabling actions and staging sides, and
-     estimate minimum blocker displacement without double counting.
-   - Prune only contradictions confirmed by exact local proof.
+    Current status: Done in build 2026-07-23.31.
+    Completion:
+    - Dependencies use the current compatible box-to-goal assignment and expose
+      recursive prerequisite closures, cycles, concrete blocker-vacating actions,
+      target staging sides, and unique-box minimum displacement.
+    - The graph remains ordering evidence and exposes no pruning contradiction.
+      Pruning consumers must obtain a separate exact local certificate, so this
+      model cannot make exact search incomplete.
 
 16. Model typed doorway flow and staging capacity.
-    Current status: Partial.
-    Existing foundation:
-    - Label imports/exports, staging capacity, lane readiness, penalties, deltas,
-      and diagnostics exist per room.
-   Finish gate:
-   - Model ordered crossing schedules for particular boxes across multiple rooms,
-     shared corridors, simultaneous transfers, and required restoration.
-   - Confirm every pruning contradiction with exact reasoning.
+    Current status: Done in build 2026-07-23.31.
+    Completion:
+    - Doorway analysis emits particular-box import/export tasks, shared-corridor
+      and same-box dependencies, compatible simultaneous waves, and restoration
+      obligations for blocked gates and full staging areas.
+    - Multi-room tests exercise dependent and simultaneous transfers. The model
+      is ordering-only unless an exact local proof confirms a contradiction.
 
 23. Add comprehensive relevance-based move ordering.
-    Current status: Backlog with incidental support/doorway foundations.
-   Finish gate:
-   - Connect successor ordering to the current bottleneck, unresolved assignment,
-     dependency chain, recent enabling action, and restoration obligation.
-   - Preserve completeness in exact searches and add ablation telemetry showing
-     when each signal changes order and improves reviewed cases.
+    Current status: Done in build 2026-07-23.31.
+    Completion:
+    - Beam, bounded DFS, and exact Push IDA* successor ordering combine unresolved
+      assignment progress, the active bottleneck and dependency chain, recent
+      enabling actions, typed doorway tasks, and restoration obligations.
+    - Exact search changes order only, preserving completeness. Signal-specific
+      telemetry and a deterministic chokepoint ablation show when relevance
+      changes order and reduces visited states.
 
 41. Make expensive strategic ordering analyses productivity-aware.
-    Current status: Strong, bounded in build 2026-07-22.22.
-    Existing foundation:
-    - Exact search evaluates child strategic signals only inside the contour and
-      gates them using observed ordering changes.
-   Finish gate:
-   - Measure downstream search yield rather than order changes alone.
-   - Apply per-signal and per-phase gates, retain always-required proof evidence,
-     and validate state/time improvements on generated and Huge probes.
+    Current status: Done in build 2026-07-23.31.
+    Completion:
+    - Per-worker and per-profile child doorway and packing gates measure useful
+      best-estimate or solution progress, not merely a changed ordering. Exact
+      ordering probes likewise attribute later subtree progress to the signal.
+    - Required proof evidence is never gated. Evaluations, skips, useful samples,
+      changed orderings, and cooldowns are reported separately.
+    - Reviewed generated and Huge performance probes remain inside deterministic
+      state and memory envelopes; strategic memo caps are bounded at 5,000 entries.
    Evidence from the 2026-07-23.27 eight-minute Huge run:
    - The three exact-phase guided workers ended near 23, 24, and 69 states/second.
      Their projected costs worsened from 214/214/208 to 234/226/216 while
@@ -657,6 +658,11 @@ through setup moves without making exact search incomplete.
 Sprint completion gate:
 All four items are Done; ordering is assignment-aware, measurable, and complete,
 while pruning uses only exact contradictions.
+
+Completed in build 2026-07-23.31. All four items are Done; assignment-aware
+dependency actions and typed crossing schedules feed a unified relevance order,
+while useful-progress gates bound optional strategic work without suppressing
+proof evidence.
 
 
 Sprint 21 - Search-space redundancy and adaptive diversity

@@ -207,6 +207,14 @@ function beamSearch(payload) {
   let phaseHandoff = null;
   const endgameCheckpoints = [];
   let trackedThrough = payload.trackedSignatures ? 0 : undefined;
+  const childDoorwayGate = createOrderingProductivityGate(
+    payload.strategicSignalWarmup || 64,
+    payload.strategicSignalCooldown || 512,
+  );
+  const childPackingGate = createOrderingProductivityGate(
+    payload.strategicSignalWarmup || 64,
+    payload.strategicSignalCooldown || 512,
+  );
 
   initial.reachable = reachablePaths(initial, board);
   if (createsSealedCorralDeadlock(initial, board, initial.reachable)) {
@@ -298,6 +306,7 @@ function beamSearch(payload) {
         const estimate = heuristic(child.boxes, board);
         if (!Number.isFinite(estimate)) continue;
         if (payload.upperBound && child.cost + estimate > payload.upperBound) continue;
+        const previousBestEstimate = bestEstimate;
         if (estimate < bestEstimate) {
           bestEstimate = estimate;
           bestPushes = child.cost;
@@ -305,14 +314,38 @@ function beamSearch(payload) {
         const topology = topologyPenalty(child.boxes, board);
         const dependencyDelta = supportDependencyDelta(dependencyGraph, next);
         const localRoomDelta = localRoomOrderingDelta(localRooms, next);
-        const doorway = typedDoorwayFlow(child.boxes, board);
-        const packing = goalPackingBonus(child.boxes, board, {
+        const evaluateDoorway = childDoorwayGate.shouldEvaluate();
+        const evaluatePacking = childPackingGate.shouldEvaluate();
+        const doorway = evaluateDoorway || evaluatePacking
+          ? typedDoorwayFlow(child.boxes, board)
+          : doorwayBefore;
+        const packing = evaluatePacking ? goalPackingBonus(child.boxes, board, {
           doorway,
           supportDependency: dependencyGraph,
           localAnalyses: localRooms,
           transition: next,
-        });
+        }) : 0;
+        const usefulSignal = estimate < previousBestEstimate ||
+          goal(child.boxes, board.goals);
+        for (const [gate, evaluated] of [
+          [childDoorwayGate, evaluateDoorway],
+          [childPackingGate, evaluatePacking],
+        ]) {
+          if (evaluated) {
+            board.metrics.strategicSignalEvaluations++;
+            gate.observe({changed: true, useful: usefulSignal});
+            if (usefulSignal) board.metrics.strategicSignalUseful++;
+          } else {
+            board.metrics.strategicSignalSkips++;
+          }
+        }
         const doorwayDelta = doorwayFlowDelta(doorwayBefore, current, next);
+        const relevance = relevanceOrderingScore(current, board, next, {
+          supportDependency: dependencyGraph,
+          doorway: doorwayBefore,
+          recentPush: current.recentPush,
+        });
+        const relevanceScore = recordRelevanceOrdering(board.metrics, relevance);
         const evacuation = evacuationWeight
           ? roomEvacuationPenalty(child.boxes, board)
           : 0;
@@ -331,13 +364,19 @@ function beamSearch(payload) {
           goalPackingWeight * packing +
           supportDependencyWeight * dependencyDelta +
           localRoomWeight * localRoomDelta +
-          doorwayFlowWeight * (0.2 * doorway.penalty + doorwayDelta) +
+          doorwayFlowWeight *
+            (0.2 * (evaluateDoorway ? doorway.penalty : doorwayBefore.penalty) +
+              doorwayDelta) +
+          (payload.relevanceWeight ?? 0.6) * relevanceScore +
           diversity * signatureNoise(child.exactIdentity, seed);
         const exploreScore = topologyWeight * topology + evacuationWeight * evacuation -
           goalPackingWeight * packing +
           supportDependencyWeight * dependencyDelta +
           localRoomWeight * localRoomDelta +
-          doorwayFlowWeight * (0.2 * doorway.penalty + doorwayDelta) +
+          doorwayFlowWeight *
+            (0.2 * (evaluateDoorway ? doorway.penalty : doorwayBefore.penalty) +
+              doorwayDelta) +
+          (payload.relevanceWeight ?? 0.6) * relevanceScore +
           diversity * signatureNoise(child.exactIdentity, seed + 7919);
         const existing = candidates.get(child.exactIdentity);
         if (!existing || score < existing.score) {
@@ -349,6 +388,7 @@ function beamSearch(payload) {
             evacuation,
             packing,
             dependencyDelta,
+            relevance: relevance.signals,
             localRoomDelta,
             doorway: doorway.penalty,
             doorwayDelta,
@@ -360,6 +400,7 @@ function beamSearch(payload) {
               : null,
             strategicHistory: child.strategicHistory,
             openingHistory: child.openingHistory,
+            recentPush: {pushedFrom: next.pushedFrom, pushedTo: next.pushedTo},
           };
           candidates.set(child.exactIdentity, candidate);
           if (!bestCheckpoint || estimate < bestCheckpoint.estimate ||
@@ -766,6 +807,12 @@ function boundedPushDepthFirstSearch(payload) {
         transition: next,
       });
       const doorwayDelta = doorwayFlowDelta(doorwayBefore, state, next);
+      const relevance = relevanceOrderingScore(state, board, next, {
+        supportDependency: dependencyGraph,
+        doorway: doorwayBefore,
+        recentPush: state.recentPush,
+      });
+      const relevanceScore = recordRelevanceOrdering(board.metrics, relevance);
       let score = 2.5 * estimate + topology - 0.8 * packing;
       if (profile === "detour") score = 1.5 * estimate + 1.4 * topology - packing;
       if (profile === "setup" && childCost <= 12) score = -estimate + topology - packing;
@@ -775,9 +822,10 @@ function boundedPushDepthFirstSearch(payload) {
       score += (payload.localRoomWeight ?? 0.6) * localRoomDelta;
       score += (payload.doorwayFlowWeight ?? 0.35) *
         (0.2 * doorway.penalty + doorwayDelta);
+      score += (payload.relevanceWeight ?? 0.6) * relevanceScore;
       score += (payload.diversity ?? 1.5) *
         signatureNoise(exactPushIdentity(next, board), seed + childCost);
-      candidates.push({next, cost: childCost, score});
+      candidates.push({next, cost: childCost, score, relevance: relevance.signals});
     }
     candidates.sort((left, right) => left.score - right.score);
     for (let index = 0; index < candidates.length; index++) {
@@ -786,7 +834,14 @@ function boundedPushDepthFirstSearch(payload) {
       if (discrepancy > discrepancyRemaining) continue;
       segments.push(candidate.next.path);
       visit(
-        {robot: candidate.next.robot, boxes: candidate.next.boxes},
+        {
+          robot: candidate.next.robot,
+          boxes: candidate.next.boxes,
+          recentPush: {
+            pushedFrom: candidate.next.pushedFrom,
+            pushedTo: candidate.next.pushedTo,
+          },
+        },
         candidate.cost,
         discrepancyRemaining - discrepancy,
       );
@@ -953,12 +1008,15 @@ function pushIterativeDeepeningAStar(payload) {
       state: {
         robot: [...frame.state.robot],
         boxes: frame.state.boxes.map(box => [...box]),
+        recentPush: frame.state.recentPush ? {...frame.state.recentPush} : undefined,
       },
       candidates: frame.candidates?.map(candidate => ({
         ...candidate,
         state: {
           robot: [...candidate.state.robot],
           boxes: candidate.state.boxes.map(box => [...box]),
+          recentPush: candidate.state.recentPush
+            ? {...candidate.state.recentPush} : undefined,
         },
         path: [...candidate.path],
       })) || null,
@@ -1079,20 +1137,32 @@ function pushIterativeDeepeningAStar(payload) {
             bestPushes = childCost;
           }
           const doorwayDelta = doorwayFlowDelta(doorwayBefore, state, next);
+          const relevance = relevanceOrderingScore(state, board, next, {
+            supportDependency: dependencyGraph,
+            doorway: doorwayBefore,
+            recentPush: state.recentPush,
+          });
+          const relevanceScore = recordRelevanceOrdering(board.metrics, relevance);
           const baseScore = orderingScore(next, childCost) +
             (payload.supportDependencyWeight ?? 0.5) *
               supportDependencyDelta(dependencyGraph, next) +
             (payload.localRoomWeight ?? 0.4) * localRoomOrderingDelta(localRooms, next) +
             (payload.doorwayFlowWeight ?? 0.25) * doorwayDelta +
+            (payload.relevanceWeight ?? 0.6) * relevanceScore +
             (payload.diversity ?? 0.2) *
               signatureNoise(exactPushIdentity(next, board), seed + childCost);
           candidates.push({
-            state: {robot: next.robot, boxes: next.boxes},
+            state: {
+              robot: next.robot,
+              boxes: next.boxes,
+              recentPush: {pushedFrom: next.pushedFrom, pushedTo: next.pushedTo},
+            },
             path: next.path,
             cost: childCost,
             total: childCost + childEstimate,
             baseScore,
             score: baseScore,
+            relevance: relevance.signals,
           });
         }
         const orderable = candidates.filter(candidate => candidate.total <= threshold);
@@ -1116,8 +1186,14 @@ function pushIterativeDeepeningAStar(payload) {
           const enriched = [...orderable].sort((left, right) =>
             left.total - right.total || left.score - right.score);
           const changed = baseline.some((candidate, index) => candidate !== enriched[index]);
-          if (changed) board.metrics.strategicOrderingChanges++;
-          strategicOrderingGate.observe(changed);
+          if (changed) {
+            board.metrics.strategicOrderingChanges++;
+            const changedIndex = enriched.findIndex(
+              (candidate, index) => candidate !== baseline[index]);
+            enriched[changedIndex].orderingProbe = {baselineBest: bestEstimate};
+          } else {
+            strategicOrderingGate.observe({changed: false, useful: false});
+          }
         } else if (orderable.length > 1) {
           board.metrics.strategicOrderingSkips++;
         }
@@ -1146,11 +1222,20 @@ function pushIterativeDeepeningAStar(payload) {
           candidates: null,
           nextIndex: 0,
           pathFromParent: candidate.path,
+          orderingProbe: candidate.orderingProbe || null,
         });
         descended = true;
         break;
       }
       if (descended) continue;
+      if (frame.orderingProbe) {
+        const useful = bestEstimate < frame.orderingProbe.baselineBest;
+        strategicOrderingGate.observe({changed: true, useful});
+        if (useful) board.metrics.strategicOrderingUseful++;
+        if (strategicOrderingGate.snapshot().cooldownRemaining) {
+          board.metrics.strategicOrderingCooldowns++;
+        }
+      }
       activePath.delete(frame.identity);
       stack.pop();
     }

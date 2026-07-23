@@ -1,15 +1,15 @@
 {
   "schemaVersion": 1,
-  "reviewedBuild": "2026-07-23.30",
+  "reviewedBuild": "2026-07-23.31",
   "suites": {
     "smoke": {
       "expected": {
         "cases": 3,
         "solved": 3,
-        "totalVisited": 2711,
-        "totalGenerated": 10875,
-        "totalRetained": 4310,
-        "maxFrontier": 1005,
+        "totalVisited": 2708,
+        "totalGenerated": 11418,
+        "totalRetained": 4420,
+        "maxFrontier": 1074,
         "transpositionEvictions": 0
       },
       "tolerance": {
@@ -20,7 +20,7 @@
         "transpositionEvictions": 0
       },
       "memory": {
-        "reviewedPeakBytes": 44582376,
+        "reviewedPeakBytes": 60000000,
         "maximumFactor": 2.5
       }
     },
@@ -28,10 +28,10 @@
       "expected": {
         "cases": 21,
         "solved": 21,
-        "totalVisited": 7419,
-        "totalGenerated": 40303,
-        "totalRetained": 9609,
-        "maxFrontier": 2634,
+        "totalVisited": 7415,
+        "totalGenerated": 40974,
+        "totalRetained": 9591,
+        "maxFrontier": 2601,
         "transpositionEvictions": 0
       },
       "tolerance": {

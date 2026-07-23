@@ -166,7 +166,7 @@ function incrementalAssignmentCrossover() {
   return INCREMENTAL_ASSIGNMENT_CROSSOVER;
 }
 const COMMITMENT_MEMO_LIMIT = 10000;
-const SUPPORT_DEPENDENCY_MEMO_LIMIT = 10000;
+const SUPPORT_DEPENDENCY_MEMO_LIMIT = 5000;
 const LOCAL_ROOM_MEMO_LIMIT = 5000;
 const LOCAL_CORRAL_MEMO_LIMIT = 5000;
 const LOCAL_EXACT_STATE_LIMIT = 250000;
@@ -184,7 +184,7 @@ function localReasoningLimits() {
     localMaxBoxes: LOCAL_BOX_LIMIT,
   };
 }
-const DOORWAY_FLOW_MEMO_LIMIT = 10000;
+const DOORWAY_FLOW_MEMO_LIMIT = 5000;
 const GOAL_COMMITMENT = Object.freeze({
   TEMPORARY: "temporary",
   CONDITIONAL: "conditional",
@@ -268,6 +268,19 @@ function createPerformanceMetrics() {
     strategicOrderingEvaluations: 0,
     strategicOrderingSkips: 0,
     strategicOrderingChanges: 0,
+    strategicOrderingUseful: 0,
+    strategicOrderingCooldowns: 0,
+    relevanceOrderingEvaluations: 0,
+    relevanceOrderingChanges: 0,
+    relevanceAssignmentUses: 0,
+    relevanceDependencyUses: 0,
+    relevanceBottleneckUses: 0,
+    relevanceRecentUses: 0,
+    relevanceDoorwayUses: 0,
+    relevanceRestorationUses: 0,
+    strategicSignalEvaluations: 0,
+    strategicSignalSkips: 0,
+    strategicSignalUseful: 0,
     supportDependencyCalls: 0,
     supportDependencyCacheHits: 0,
     supportDependencyOptions: 0,
@@ -398,22 +411,36 @@ class BoundedDepthMap {
 function createOrderingProductivityGate(warmup = 64, cooldown = 512) {
   const sampleSize = Math.max(1, Math.floor(warmup) || 1);
   const cooldownSize = Math.max(1, Math.floor(cooldown) || 1);
-  let evaluated = 0, productive = 0, cooldownRemaining = 0;
+  let evaluated = 0, changed = 0, useful = 0, cooldownRemaining = 0;
   return {
     shouldEvaluate() {
       if (cooldownRemaining <= 0) return true;
       cooldownRemaining--;
       return false;
     },
-    observe(changedOrdering) {
+    observe(observation) {
+      const changedOrdering = typeof observation === "object"
+        ? Boolean(observation.changed)
+        : Boolean(observation);
+      const usefulProgress = typeof observation === "object"
+        ? Boolean(observation.useful)
+        : changedOrdering;
       evaluated++;
-      if (changedOrdering) productive++;
+      if (changedOrdering) changed++;
+      if (usefulProgress) useful++;
       if (evaluated < sampleSize) return;
-      if (!productive) cooldownRemaining = cooldownSize;
+      if (!useful) cooldownRemaining = cooldownSize;
       evaluated = 0;
-      productive = 0;
+      changed = 0;
+      useful = 0;
     },
-    snapshot: () => ({evaluated, productive, cooldownRemaining}),
+    snapshot: () => ({
+      evaluated,
+      productive: useful,
+      changed,
+      useful,
+      cooldownRemaining,
+    }),
   };
 }
 
@@ -1387,6 +1414,49 @@ function typedDoorwayFlow(boxes, board) {
       (exportTotal && !readyExportLanes.length ? 2 : 0) +
       2 * contradictions.length;
     penalty += roomPenalty;
+    const crossingTasks = [];
+    const distanceToGate = ([y, x]) => {
+      const [gateY, gateX] = room.gate.split(",").map(Number);
+      return Math.abs(y - gateY) + Math.abs(x - gateX);
+    };
+    for (const [label, count] of exports) {
+      boxes.filter(([y, x, boxLabel]) =>
+        boxLabel === label && room.cells.has(pkey(y, x)))
+        .sort((left, right) => distanceToGate(left) - distanceToGate(right))
+        .slice(0, count)
+        .forEach(([y, x], order) => crossingTasks.push({
+          id: `${pkey(y, x)}|${index}|export`,
+          box: pkey(y, x),
+          label,
+          direction: "export",
+          roomIndex: index,
+          order,
+          gate: room.gate,
+        }));
+    }
+    for (const [label, count] of imports) {
+      boxes.filter(([y, x, boxLabel]) =>
+        boxLabel === label && !room.cells.has(pkey(y, x)))
+        .sort((left, right) => distanceToGate(left) - distanceToGate(right))
+        .slice(0, count)
+        .forEach(([y, x], order) => crossingTasks.push({
+          id: `${pkey(y, x)}|${index}|import`,
+          box: pkey(y, x),
+          label,
+          direction: "import",
+          roomIndex: index,
+          order,
+          gate: room.gate,
+        }));
+    }
+    const restoration = [];
+    if (gateLabel && crossings) restoration.push(room.gate);
+    if (importTotal && !exteriorCapacity) {
+      restoration.push(...[...room.exteriorStaging].filter(cell => occupied.has(cell)));
+    }
+    if (exportTotal && !interiorCapacity) {
+      restoration.push(...[...room.interiorStaging].filter(cell => occupied.has(cell)));
+    }
     return {
       index,
       room,
@@ -1400,10 +1470,67 @@ function typedDoorwayFlow(boxes, board) {
       readyExportLanes: readyExportLanes.length,
       gateLabel,
       contradictions,
+      crossingTasks,
+      restoration: [...new Set(restoration)],
       penalty: roomPenalty,
     };
   });
-  const result = {rooms, penalty};
+  const tasks = rooms.flatMap(flow => flow.crossingTasks);
+  const scheduleDependencies = new Map(tasks.map(task => [task.id, new Set()]));
+  const sharesCorridor = (leftIndex, rightIndex) => {
+    if (leftIndex === rightIndex) return true;
+    const left = rooms[leftIndex].room;
+    const right = rooms[rightIndex].room;
+    return left.gate === right.gate ||
+      [...left.approach].some(([cell]) => right.approach.has(cell));
+  };
+  for (const task of tasks) {
+    for (const predecessor of tasks) {
+      if (task === predecessor) continue;
+      if (task.roomIndex === predecessor.roomIndex &&
+          task.direction === predecessor.direction &&
+          predecessor.order < task.order) {
+        scheduleDependencies.get(task.id).add(predecessor.id);
+      }
+      if (task.box === predecessor.box &&
+          predecessor.direction === "export" && task.direction === "import") {
+        scheduleDependencies.get(task.id).add(predecessor.id);
+      }
+      if (task.roomIndex !== predecessor.roomIndex &&
+          sharesCorridor(task.roomIndex, predecessor.roomIndex) &&
+          predecessor.direction === "export" &&
+          task.direction === "import") {
+        scheduleDependencies.get(task.id).add(predecessor.id);
+      }
+    }
+  }
+  const orderedTasks = [...tasks].sort((left, right) =>
+    Number(left.direction === "import") - Number(right.direction === "import") ||
+    left.roomIndex - right.roomIndex || left.order - right.order ||
+    left.id.localeCompare(right.id));
+  const waves = [];
+  for (const task of orderedTasks) {
+    const dependencies = scheduleDependencies.get(task.id);
+    let wave = waves.find(candidate => candidate.every(other =>
+      !dependencies.has(other.id) &&
+      !scheduleDependencies.get(other.id).has(task.id) &&
+      !sharesCorridor(task.roomIndex, other.roomIndex)));
+    if (!wave) {
+      wave = [];
+      waves.push(wave);
+    }
+    wave.push(task);
+  }
+  const result = {
+    rooms,
+    penalty,
+    tasks,
+    orderedTasks,
+    waves,
+    scheduleDependencies,
+    restoration: new Set(rooms.flatMap(flow => flow.restoration)),
+    exactContradictions: [],
+  };
   metrics.doorwayFlowMs += now() - started;
   return memoizeBounded(board.doorwayFlowMemo, signature, result, DOORWAY_FLOW_MEMO_LIMIT);
 }
@@ -1433,7 +1560,72 @@ function doorwayFlowDelta(analysis, state, next) {
       if (room.interiorStaging.has(from) && flow.exports.has(label)) delta -= 0.25;
     }
   }
+  if (analysis.restoration.has(from)) delta -= 0.75;
+  if (analysis.restoration.has(to)) delta += 0.75;
+  for (const task of analysis.tasks) {
+    if (task.box !== from || task.label !== label) continue;
+    const flow = analysis.rooms[task.roomIndex];
+    const fromInside = flow.room.cells.has(from);
+    const toInside = flow.room.cells.has(to);
+    if (task.direction === "import" && !fromInside && toInside) delta -= 1;
+    if (task.direction === "export" && fromInside && !toInside) delta -= 1;
+  }
   return delta;
+}
+
+function relevanceOrderingScore(state, board, next, evidence = {}) {
+  const dependency = evidence.supportDependency;
+  const doorway = evidence.doorway;
+  const recent = evidence.recentPush;
+  const movedIndex = state.boxes.findIndex(([y, x]) => pkey(y, x) === next.pushedFrom);
+  const target = dependency?.assignedTargets.get(movedIndex);
+  const beforeDistance = target
+    ? compiledGoalPushDistance(board, next.pushedFrom, target) : Infinity;
+  const afterDistance = target
+    ? compiledGoalPushDistance(board, next.pushedTo, target) : Infinity;
+  const assignmentProgress = Number.isFinite(beforeDistance) && Number.isFinite(afterDistance)
+    ? afterDistance - beforeDistance : 0;
+  const dependencyDelta = dependency ? supportDependencyDelta(dependency, next) : 0;
+  const doorwayDelta = doorway ? doorwayFlowDelta(doorway, state, next) : 0;
+  const bottleneck = dependency?.nodes.reduce((best, node) =>
+    node.minimumBlockerDisplacement > (best?.minimumBlockerDisplacement || -1)
+      ? node : best, null);
+  const bottleneckDelta = bottleneck?.box === next.pushedFrom ? -0.5 :
+    bottleneck?.prerequisites.has(next.pushedFrom) ? -1 : 0;
+  const recentEnablement = recent && dependency?.stagingSides
+    .get(next.pushedFrom)?.some(side => side.support === recent.pushedFrom)
+    ? -0.75 : 0;
+  const restorationDelta = doorway?.restoration.has(next.pushedFrom) ? -0.5 :
+    doorway?.restoration.has(next.pushedTo) ? 0.5 : 0;
+  const signals = {
+    assignment: assignmentProgress,
+    dependency: dependencyDelta,
+    bottleneck: bottleneckDelta,
+    recentEnablement,
+    doorway: doorwayDelta,
+    restoration: restorationDelta,
+  };
+  return {
+    score: Object.values(signals).reduce((total, value) => total + value, 0),
+    signals,
+  };
+}
+
+function recordRelevanceOrdering(metrics, relevance) {
+  metrics.relevanceOrderingEvaluations++;
+  if (relevance.score) metrics.relevanceOrderingChanges++;
+  const mapping = {
+    assignment: "relevanceAssignmentUses",
+    dependency: "relevanceDependencyUses",
+    bottleneck: "relevanceBottleneckUses",
+    recentEnablement: "relevanceRecentUses",
+    doorway: "relevanceDoorwayUses",
+    restoration: "relevanceRestorationUses",
+  };
+  for (const [signal, metric] of Object.entries(mapping)) {
+    if (relevance.signals[signal]) metrics[metric]++;
+  }
+  return relevance.score;
 }
 
 function roomFlowSignature(boxes, board) {
@@ -2256,7 +2448,8 @@ function supportDependencyGraph(state, board, reachable = reachablePaths(state, 
     }
   }
   const nodes = [], supportDemand = new Map(), prerequisiteDemand = new Map();
-  const prerequisiteEdges = new Map();
+  const prerequisiteEdges = new Map(), enablingActions = new Map();
+  const stagingSides = new Map();
   let penalty = 0, optionCount = 0;
   for (let boxIndex = 0; boxIndex < state.boxes.length; boxIndex++) {
     const [y, x, label] = state.boxes[boxIndex];
@@ -2308,11 +2501,27 @@ function supportDependencyGraph(state, board, reachable = reachablePaths(state, 
     const share = 1 / Math.max(1, preferred.length);
     for (const option of preferred) {
       supportDemand.set(option.support, (supportDemand.get(option.support) || 0) + share);
+      if (!stagingSides.has(box)) stagingSides.set(box, []);
+      stagingSides.get(box).push({
+        support: option.support,
+        destination: option.destination,
+        target: option.target,
+        move: option.move,
+      });
       for (const blocker of option.blockers || []) {
         prerequisiteDemand.set(blocker, (prerequisiteDemand.get(blocker) || 0) + share);
         if (blocker !== box) {
           if (!prerequisiteEdges.has(box)) prerequisiteEdges.set(box, new Set());
           prerequisiteEdges.get(box).add(blocker);
+          if (!enablingActions.has(blocker)) enablingActions.set(blocker, []);
+          enablingActions.get(blocker).push({
+            action: "vacate",
+            blocker,
+            unlocks: box,
+            support: option.support,
+            destination: option.destination,
+            target: option.target,
+          });
         }
       }
     }
@@ -2342,6 +2551,15 @@ function supportDependencyGraph(state, board, reachable = reachablePaths(state, 
       );
     }
   }
+  const displacementBoxes = new Set();
+  for (const prerequisites of prerequisiteClosure.values()) {
+    prerequisites.forEach(position => displacementBoxes.add(position));
+  }
+  for (const node of nodes) {
+    node.prerequisites = prerequisiteClosure.get(node.box) || new Set();
+    node.minimumBlockerDisplacement = node.prerequisites.size;
+    node.stagingSides = stagingSides.get(node.box) || [];
+  }
   const graph = {
     nodes,
     supportDemand,
@@ -2349,6 +2567,12 @@ function supportDependencyGraph(state, board, reachable = reachablePaths(state, 
     prerequisiteEdges,
     prerequisiteClosure,
     cycles,
+    assignedTargets,
+    enablingActions,
+    stagingSides,
+    minimumBlockerDisplacement: displacementBoxes.size,
+    displacementBoxes,
+    exactContradictions: [],
     assignmentComplete,
     penalty,
   };
@@ -2366,7 +2590,11 @@ function supportDependencyGraph(state, board, reachable = reachablePaths(state, 
 function supportDependencyDelta(graph, next) {
   const destroysAccess = graph.supportDemand.get(next.pushedTo) || 0;
   const enablesAccess = graph.prerequisiteDemand.get(next.pushedFrom) || 0;
-  return 1.25 * destroysAccess - enablesAccess;
+  const enablingActions = graph.enablingActions.get(next.pushedFrom)?.length || 0;
+  const restoresStaging = [...graph.stagingSides.values()].some(options =>
+    options.some(option => option.support === next.pushedFrom));
+  return 1.25 * destroysAccess - enablesAccess - 0.5 * enablingActions -
+    (restoresStaging ? 0.25 : 0);
 }
 
 function localBoxSignature(boxes) {

@@ -57,6 +57,15 @@ finding its augmenting path, so O(n) is not generally possible. Randomized and
 unreachable-edge tests compare repair against full recomputation, and telemetry
 reports repairs, fallbacks, and reused rows.
 
+The selected compatible assignment also drives a dynamic support dependency
+graph. It records recursive blocker prerequisites and cycles, concrete vacating
+actions, required staging sides, and a minimum displacement count over unique
+blocking boxes. Typed doorway analysis turns room imports and exports into
+particular-box crossing tasks, orders same-box and shared-corridor transfers,
+groups non-conflicting transfers into simultaneous waves, and records gate or
+staging restoration obligations. These bounded models guide ordering; they do
+not prune a state without a separate exact local contradiction certificate.
+
 Bounded goal rooms can also compile relaxed multi-box pattern tables for groups
 of two to four boxes. Shared labels and generic boxes are supported by minimizing
 over compatible room-box choices plus the remaining outside assignment. Rooms
@@ -319,10 +328,14 @@ bounded recovery count rather than looping forever.
 Exact search separates commitment checks used for proven box locking from richer
 child-state signals used only to order equal-bound successors. Proven locking remains
 active on every expanded state. Child commitment and doorway scoring is evaluated
-only for successors inside the current contour; a productivity gate samples whether
-those signals actually change successor order, pauses them after an unproductive
-64-state window, and samples again after 512 eligible states. Progress telemetry
-reports strategic ordering evaluations, skips, and ordering changes.
+only for successors inside the current contour. Beam, bounded DFS, and exact IDA*
+order successors using assignment progress, bottleneck prerequisites, recent
+enabling pushes, doorway tasks, and restoration obligations. Per-worker and
+per-profile productivity gates measure later best-estimate or solution progress,
+pause optional child doorway and packing work after an unproductive window, and
+periodically resample it. Exact search changes only traversal order and never gates
+required proof evidence. Progress telemetry separates evaluations, skips, order
+changes, useful samples, cooldowns, and each relevance signal.
 
 Very large puzzles can still hit browser memory or storage limits before the search
 space is exhausted; such a platform failure is not an unsolvability proof. Ultimate
