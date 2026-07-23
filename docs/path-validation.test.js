@@ -100,8 +100,9 @@ test("Ultimate scheduling retires stale phases and reclaims silent workers", () 
   assert.match(app, /requiredWorkReleased/);
   assert.match(app, /finishRequiredPlan\(plan\)/);
   assert.match(app, /exactRoundShardCount = anytimeWorkers[\s\S]*?\? 1/);
-  assert.match(app, /provedUnsolvable = exactRoundComplete && !Number\.isFinite/);
-  assert.match(app, /discardedExactIncumbent \? Infinity/);
+  assert.match(app, /provedOptimal = exactRoundComplete && bestIncumbent/);
+  assert.match(app, /provedUnsolvable = exactRoundComplete &&[\s\S]*!bestIncumbent/);
+  assert.match(app, /discardedExactIncumbent \? Infinity : currentUpperBound/);
   assert.doesNotMatch(app, /searchLog\.splice\(0/);
   assert.match(app, /searchLog\.slice\(-1500\)/);
 });

@@ -2322,6 +2322,34 @@ test("bridge A star identifies an incompatible landmark before searching", () =>
   assert.equal(result.terminationReason, "target-incompatible");
 });
 
+test("exact solution windows remove a replay-valid walking detour", () => {
+  const worker = loadWorker();
+  const state = stateFromRows([
+    "OOOOOO",
+    "O    O",
+    "O R  O",
+    "O A  O",
+    "O a  O",
+    "OOOOOO",
+  ]);
+  const result = worker.search({
+    algorithm: "solution-window-rewrite",
+    state,
+    solutionPath: ["Left", "Up", "Right", "Down", "Down"],
+    windowPushes: [1],
+    windowVisited: 1000,
+    maxVisited: 1000,
+  });
+
+  assert.equal(result.status, "solved");
+  assert.deepEqual(Array.from(result.path), ["Down"]);
+  assert.equal(result.initialPushes, 1);
+  assert.equal(result.initialMoves, 5);
+  assert.equal(result.bestPushes, 1);
+  assert.equal(result.bestMoves, 1);
+  assert.equal(result.improvements, 1);
+});
+
 test("bounded bridge search returns a replayable continuation checkpoint", () => {
   const worker = loadWorker();
   const state = stateFromRows([
@@ -2444,4 +2472,28 @@ test("the improved Huge replay establishes a 250-push incumbent", () => {
   assert.equal(pushes, 250);
   assert.equal(maximumBound, 250);
   assert.equal(worker.goal(state.boxes, board.goals), true);
+});
+
+test("exact solution windows improve the diagnostic Huge incumbent below 250 pushes", () => {
+  const worker = loadWorker();
+  const solution = fs.readFileSync(
+    path.join(__dirname, "optimalForHuge.txt"),
+    "utf8",
+  ).split(/\r?\n/)
+    .map(line => /^\s*\d+\.\s+(Up|Down|Left|Right)/.exec(line)?.[1])
+    .filter(Boolean);
+  const result = worker.search({
+    algorithm: "solution-window-rewrite",
+    state: stateFromRows(HUGE_ROWS),
+    solutionPath: solution,
+    windowPushes: [8, 16],
+    windowVisited: 8000,
+    maxVisited: 120000,
+    frontierLimit: 6000,
+  });
+
+  assert.equal(result.status, "solved");
+  assert.ok(result.bestPushes <= 240);
+  assert.ok(result.bestPushes < result.initialPushes);
+  assert.ok(result.visited <= 5000);
 });

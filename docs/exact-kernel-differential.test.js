@@ -199,6 +199,8 @@ test("finite invalid incumbents cannot become false proofs", () => {
     maxVisited: 100000,
   });
   assert.equal(bounded.status, "cutoff");
+  assert.equal(bounded.cutoff, false);
+  assert.equal(bounded.terminationReason, "bound-exhausted");
   assert.notEqual(bounded.status, "proven-unsolvable");
   const unbounded = worker.search({
     algorithm: "push-ida-star",

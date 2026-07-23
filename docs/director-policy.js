@@ -161,6 +161,25 @@
     return memory <= 4 ? 900 : 600;
   }
 
+  function compareSolutionQuality(left, right) {
+    if (!left && !right) return 0;
+    if (!left) return 1;
+    if (!right) return -1;
+    return left.pushes - right.pushes || left.moves - right.moves;
+  }
+
+  function acceptsIncumbent(candidate, incumbent = null) {
+    return Number.isInteger(candidate?.pushes) && candidate.pushes >= 0 &&
+      Number.isInteger(candidate?.moves) && candidate.moves >= 0 &&
+      compareSolutionQuality(candidate, incumbent) < 0;
+  }
+
+  function tightenedWorkerBound(incumbentPushes, prefixPushes = 0) {
+    if (!Number.isFinite(incumbentPushes)) return Infinity;
+    return Math.max(0, Math.floor(incumbentPushes) - 1 -
+      Math.max(0, Math.floor(prefixPushes) || 0));
+  }
+
   return {
     DEFAULT_BRIDGE_LIMITS,
     createBridgeCampaignTracker,
@@ -171,5 +190,8 @@
     directWorkerCapacity,
     portfolioWorkerCapacity,
     structuralHeadStartMs,
+    compareSolutionQuality,
+    acceptsIncumbent,
+    tightenedWorkerBound,
   };
 });

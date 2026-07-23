@@ -1,5 +1,7 @@
 const EXACT_CHECKPOINT_STORAGE_KEY = "sokomind-exact-checkpoints-v1";
 const EXACT_CHECKPOINT_MAX_ENTRIES = 8;
+const ANYTIME_INCUMBENT_STORAGE_KEY = "sokomind-anytime-incumbents-v1";
+const ANYTIME_INCUMBENT_MAX_ENTRIES = 4;
 const SOLVER_WORKER_WATCHDOG_MS = globalThis.SOKOMIND_WORKER_WATCHDOG_MS || 120000;
 let exactCheckpointSaveWarningShown = false;
 
@@ -101,6 +103,56 @@ function clearExactCheckpoints(problemHash = null) {
   }
 }
 
+function readAnytimeIncumbents() {
+  try {
+    const parsed = JSON.parse(
+      globalThis.localStorage?.getItem(ANYTIME_INCUMBENT_STORAGE_KEY) || "{}",
+    );
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch (_error) {
+    return {};
+  }
+}
+
+function saveAnytimeIncumbent(serialized, incumbent) {
+  if (!serialized || !Array.isArray(incumbent?.path)) return false;
+  const problemHash = exactCheckpointProblemHash(serialized);
+  const saved = readAnytimeIncumbents();
+  for (const [key, entry] of Object.entries(saved)) {
+    if (entry?.solverBuild !== SOLVER_BUILD) delete saved[key];
+  }
+  saved[problemHash] = {
+    solverBuild: SOLVER_BUILD,
+    problemHash,
+    path: incumbent.path,
+    pushes: incumbent.pushes,
+    moves: incumbent.moves,
+    strategy: incumbent.strategy,
+    savedAt: Date.now(),
+  };
+  const oldest = () => Object.entries(saved).sort(
+    ([leftKey, left], [rightKey, right]) =>
+      (left?.savedAt || 0) - (right?.savedAt || 0) ||
+      leftKey.localeCompare(rightKey),
+  )[0];
+  while (Object.keys(saved).length > ANYTIME_INCUMBENT_MAX_ENTRIES) {
+    delete saved[oldest()[0]];
+  }
+  try {
+    globalThis.localStorage?.setItem(ANYTIME_INCUMBENT_STORAGE_KEY, JSON.stringify(saved));
+    return true;
+  } catch (_error) {
+    return false;
+  }
+}
+
+function loadAnytimeIncumbent(serialized) {
+  const problemHash = exactCheckpointProblemHash(serialized);
+  const incumbent = readAnytimeIncumbents()[problemHash];
+  return incumbent?.solverBuild === SOLVER_BUILD && Array.isArray(incumbent.path)
+    ? incumbent : null;
+}
+
 function solverPlans(algorithm) {
   if (!["ultimate", "portfolio", "fast"].includes(algorithm)) {
     return [{algorithm, label: $("algorithm").selectedOptions[0].text}];
@@ -156,6 +208,8 @@ function startBidirectionalSolver(purpose) {
   planner.postMessage({algorithm: "analyze-puzzle", state: serializeState(state)});
 }
 function runBidirectionalSolver(purpose, analysis) {
+  const campaignInitialState = cloneState(state);
+  const campaignSerializedState = serializeState(state);
   setStatus(`Ultimate Bidirectional ${SOLVER_BUILD} is searching...`);
   const hardware = navigator.hardwareConcurrency || 2;
   const recommendations = analysis.recommendations;
@@ -337,6 +391,11 @@ function runBidirectionalSolver(purpose, analysis) {
   let settled = false, totalVisited = 0, doneWorkers = 0;
   let targetedReverseQueued = false, exactShardsStarted = false, exactShardsExhausted = 0;
   let discardedExactIncumbent = false;
+  let bestIncumbent = null;
+  let firstSolutionAt = null;
+  let exactRestartRequested = false, restartingExact = false;
+  let restartExactForIncumbent = () => {};
+  const rewriteQueued = new Set();
   const completedPhases = [];
 
   const isRequiredPlan = plan => plan.handoffStage !== "bridge" &&
@@ -646,24 +705,75 @@ function runBidirectionalSolver(purpose, analysis) {
   };
 
   const finish = (path, strategy = "Bidirectional") => {
-    const validated = validatePathToGoal(path);
-    if (validated === null) return false;
-    clearExactCheckpoints(exactCheckpointProblemHash(serializeState(state)));
-    settled = true;
-    appendSearchLog("solution", `${strategy} produced a replay-validated solution`, {
-      moves: validated.length, states: totalVisited.toLocaleString(),
-      status: "solved", reason: "solution",
-    });
-    workers.forEach(worker => worker.terminate()); workers = [];
-    clearSearchTelemetry();
-    setControlsBusy(false);
+    const candidate = evaluateSolutionPath(path, campaignInitialState);
+    if (!candidate) return false;
+    if (!SokomindDirectorPolicy.acceptsIncumbent(candidate, bestIncumbent)) {
+      appendSearchLog("solution", `${strategy} produced a valid non-improving solution`, {
+        pushes: candidate.pushes,
+        moves: candidate.moves,
+        incumbentPushes: bestIncumbent?.pushes,
+        incumbentMoves: bestIncumbent?.moves,
+        status: "unchanged",
+      });
+      return false;
+    }
+    const previous = bestIncumbent;
+    const first = previous === null;
+    bestIncumbent = {...candidate, strategy};
+    saveAnytimeIncumbent(campaignSerializedState, bestIncumbent);
+    if (exactShardsStarted) exactRestartRequested = true;
+    firstSolutionAt ??= performance.now();
+    rememberSolverPushBound(candidate.pushes);
+    clearExactCheckpoints(exactCheckpointProblemHash(campaignSerializedState));
+    appendSearchLog(first ? "solution" : "improvement",
+      `${strategy} produced a replay-validated ${first ? "solution" : "improvement"}`, {
+        pushes: candidate.pushes,
+        moves: candidate.moves,
+        pushImprovement: previous ? previous.pushes - candidate.pushes : undefined,
+        moveImprovement: previous ? previous.moves - candidate.moves : undefined,
+        firstSolutionMs: Math.round(firstSolutionAt - (searchStartedAt || firstSolutionAt)),
+        states: totalVisited.toLocaleString(),
+        status: first ? "solved" : "improved",
+        reason: first ? "solution" : "better-incumbent",
+      });
+    const rewriteKey = `${candidate.pushes}/${candidate.moves}`;
+    if (purpose !== "hint" && !rewriteQueued.has(rewriteKey)) {
+      rewriteQueued.add(rewriteKey);
+      enqueueDirectPlans([{
+        algorithm: "solution-window-rewrite",
+        side: "direct",
+        label: `Exact Window Rewrite ${candidate.pushes}p`,
+        anytimeGuided: true,
+        handoffStage: "rewrite",
+        state: campaignSerializedState,
+        solutionPath: candidate.path,
+        maxVisited: 120000,
+        windowVisited: 8000,
+        windowPushes: [8, 16],
+        queuePriority: 2,
+      }], {priority: 2});
+    }
     if (purpose === "hint") {
-      setStatus(validated.length
-        ? `Hint: ${validated[0]} - ${validated.length} moves remain (${strategy})`
+      settled = true;
+      solverAnytimeActive = false;
+      workers.forEach(worker => worker.terminate()); workers = [];
+      clearSearchTelemetry();
+      setControlsBusy(false);
+      setStatus(candidate.path.length
+        ? `Hint: ${candidate.path[0]} - ${candidate.moves} moves remain (${strategy})`
         : "This puzzle is already solved.");
+    } else if (first) {
+      solverAnytimeActive = true;
+      setStatus(
+        `${strategy} found ${candidate.pushes} pushes / ${candidate.moves} moves; ` +
+        `continuing to improve.`,
+      );
+      animation = candidate.path; animate();
     } else {
-      setStatus(`${strategy} found ${validated.length} moves after ${totalVisited.toLocaleString()} states.`);
-      animation = validated; animate();
+      setStatus(
+        `Improved to ${candidate.pushes} pushes / ${candidate.moves} moves with ${strategy}; ` +
+        `searching for a better incumbent.`,
+      );
     }
     return true;
   };
@@ -717,9 +827,8 @@ function runBidirectionalSolver(purpose, analysis) {
         reverseFrontiers: reverseRecordSets.length,
       });
       for (const reverseRecords of reverseRecordSets) {
-        if (reverseRecords.has(meetKey) && requestCheckpointSolve(meetKey, reverseRecords)) {
-          return true;
-        }
+        if (reverseRecords.has(meetKey)) requestCheckpointSolve(meetKey, reverseRecords);
+        if (settled) return true;
       }
       queueBridgePlans();
     }
@@ -836,7 +945,9 @@ function runBidirectionalSolver(purpose, analysis) {
       exactRoundShardCount,
     );
     const round = ++exactRound;
-    const exactBound = discardedExactIncumbent ? Infinity : currentUpperBound() ?? Infinity;
+    const exactBound = bestIncumbent
+      ? SokomindDirectorPolicy.tightenedWorkerBound(bestIncumbent.pushes)
+      : discardedExactIncumbent ? Infinity : currentUpperBound() ?? Infinity;
     expectedWorkers += exactRoundShardCount;
     appendSearchLog("director", "Started persistent partitioned exact contour", {
       round, shards: exactRoundShardCount, shardDepth: 4, anytimeWorkers,
@@ -846,7 +957,7 @@ function runBidirectionalSolver(purpose, analysis) {
     for (let index = 0; index < exactRoundShardCount; index++) {
       const exactShard = {index, count: exactRoundShardCount, depth: 4};
       const resumeExactCheckpoint = loadExactCheckpoint(
-        serializeState(state), exactShard, exactBound,
+        campaignSerializedState, exactShard, exactBound,
       );
       if (resumeExactCheckpoint?.visited) totalVisited += resumeExactCheckpoint.visited;
       launch({
@@ -867,6 +978,29 @@ function runBidirectionalSolver(purpose, analysis) {
         seed: 911 + index * 104729,
       });
     }
+  };
+
+  restartExactForIncumbent = () => {
+    if (!exactRestartRequested || restartingExact || settled) return false;
+    exactRestartRequested = false;
+    restartingExact = true;
+    exactShardsStarted = false;
+    exactShardsExhausted = 0;
+    const exactCancellations = [...workerPlans]
+      .filter(([, plan]) => plan.persistentExact)
+      .map(([worker]) => workerCancellations.get(worker))
+      .filter(Boolean);
+    exactCancellations.forEach(cancel => cancel("incumbent-tightened"));
+    restartingExact = false;
+    appendSearchLog("director", "Restarting exact proof under tighter incumbent", {
+      pushes: bestIncumbent?.pushes,
+      bound: bestIncumbent
+        ? SokomindDirectorPolicy.tightenedWorkerBound(bestIncumbent.pushes)
+        : undefined,
+      retiredShards: exactCancellations.length,
+    });
+    launchExactShards();
+    return true;
   };
 
   const refillExactDiscovery = () => {
@@ -915,7 +1049,16 @@ function runBidirectionalSolver(purpose, analysis) {
 
   const launch = (plan) => {
     const worker = new Worker(SOLVER_WORKER_URL);
-    const effectiveUpperBound = plan.upperBound ?? planUpperBound(plan);
+    const configuredUpperBound = plan.upperBound ?? planUpperBound(plan);
+    const incumbentUpperBound = bestIncumbent
+      ? SokomindDirectorPolicy.tightenedWorkerBound(
+          bestIncumbent.pushes, plan.prefixCost || 0,
+        )
+      : Infinity;
+    const effectiveUpperBound = Math.min(
+      configuredUpperBound ?? Infinity,
+      incumbentUpperBound,
+    );
     let workerFinished = false;
     let firstMessageAt = null;
     workers.push(worker);
@@ -998,6 +1141,8 @@ function runBidirectionalSolver(purpose, analysis) {
     };
     const continuePortfolio = () => {
       if (settled) return;
+      if (restartingExact) return;
+      if (restartExactForIncumbent()) return;
       if (exactShardsStarted) {
         refillExactDiscovery();
         return;
@@ -1271,9 +1416,26 @@ function runBidirectionalSolver(purpose, analysis) {
           transpositionEvictions: data.transpositionEvictions,
           shardRejected: data.shardRejected,
           shardAccepted: data.shardAccepted,
+          incumbentPushes: bestIncumbent?.pushes,
+          incumbentMoves: bestIncumbent?.moves,
+          proofGap: plan.persistentExact && Number.isFinite(data.threshold) && bestIncumbent
+            ? Math.max(0, bestIncumbent.pushes - data.threshold) : undefined,
         });
         const phase = plan.side === "direct" ? `${plan.label} - ` : "";
-        setStatus(`${workers.length} Ultimate workers searching... ${phase}${totalVisited.toLocaleString()} states`);
+        if (plan.persistentExact && bestIncumbent) {
+          const lowerBound = Number.isFinite(data.threshold) ? data.threshold : "?";
+          const gap = Number.isFinite(data.threshold)
+            ? Math.max(0, bestIncumbent.pushes - data.threshold) : "?";
+          setStatus(
+            `Best known: ${bestIncumbent.pushes} pushes / ${bestIncumbent.moves} moves; ` +
+            `exact lower bound ${lowerBound}, gap ${gap}.`,
+          );
+        } else {
+          setStatus(
+            `${workers.length} Ultimate workers searching... ` +
+            `${phase}${totalVisited.toLocaleString()} states`,
+          );
+        }
         return;
       }
       if (settled) return;
@@ -1400,7 +1562,8 @@ function runBidirectionalSolver(purpose, analysis) {
           const joined = reverseRecords && reconstructCheckpointMeetPath(
             {state: data.finalState}, prefixPath, reverseRecords,
           );
-          if (joined && finish(joined, plan.label)) return;
+          if (joined) finish(joined, plan.label);
+          if (settled) return;
         }
         let bridgeCampaignSnapshot = null;
         if (plan.handoffStage === "bridge") {
@@ -1470,7 +1633,8 @@ function runBidirectionalSolver(purpose, analysis) {
         const completePath = plan.handoffStage !== "bridge" && plan.prefixPath && data.path
           ? [...plan.prefixPath, ...data.path]
           : plan.handoffStage !== "bridge" ? data.path : null;
-        if (plan.side === "direct" && completePath && finish(completePath, plan.label)) return;
+        if (plan.side === "direct" && completePath) finish(completePath, plan.label);
+        if (settled) return;
         if (plan.side === "direct" && plan.handoffStage !== "bridge" &&
             registerCheckpoints(plan, data)) return;
         if (plan.side === "direct" && plan.handoffStage !== "bridge") {
@@ -1481,8 +1645,13 @@ function runBidirectionalSolver(purpose, analysis) {
 
         const exactRoundComplete = exhaustedExactShard &&
           exactShardsExhausted === exactRoundShardCount;
-        const provedUnsolvable = exactRoundComplete && !Number.isFinite(effectiveUpperBound);
-        if (exactRoundComplete && Number.isFinite(effectiveUpperBound)) {
+        const provedOptimal = exactRoundComplete && bestIncumbent &&
+          effectiveUpperBound ===
+            SokomindDirectorPolicy.tightenedWorkerBound(bestIncumbent.pushes);
+        const provedUnsolvable = exactRoundComplete &&
+          !Number.isFinite(effectiveUpperBound) && !bestIncumbent;
+        if (exactRoundComplete && Number.isFinite(effectiveUpperBound) &&
+            !bestIncumbent) {
           discardedExactIncumbent = true;
           exactShardsStarted = false;
           appendSearchLog("director", "Stored incumbent bound did not replay; removing it from exact search", {
@@ -1492,8 +1661,28 @@ function runBidirectionalSolver(purpose, analysis) {
         doneWorkers++;
         finishRequiredPlan(plan);
         releaseWorker({reason: data.terminationReason || "completed"});
+        if (provedOptimal) {
+          settled = true;
+          solverAnytimeActive = false;
+          workers.forEach(item => item.terminate()); workers = [];
+          clearSearchTelemetry();
+          setControlsBusy(false);
+          setStatus(
+            `Proved push-optimal: ${bestIncumbent.pushes} pushes / ` +
+            `${bestIncumbent.moves} moves (${totalVisited.toLocaleString()} states).`,
+          );
+          appendSearchLog("proof", "Exact search proved the incumbent push-optimal", {
+            pushes: bestIncumbent.pushes,
+            moves: bestIncumbent.moves,
+            states: totalVisited.toLocaleString(),
+            status: "proven-optimal",
+            reason: "no-better-push-solution",
+          });
+          return;
+        }
         if (provedUnsolvable) {
-          clearExactCheckpoints(exactCheckpointProblemHash(serializeState(state)));
+          solverAnytimeActive = false;
+          clearExactCheckpoints(exactCheckpointProblemHash(campaignSerializedState));
           settled = true;
           setControlsBusy(false);
           setStatus(
@@ -1514,7 +1703,7 @@ function runBidirectionalSolver(purpose, analysis) {
       if (!workers.includes(worker)) return;
       abandonWorker("worker-error", error);
     };
-    const planState = plan.state || serializeState(state);
+    const planState = plan.state || campaignSerializedState;
     worker.postMessage({
       ...plan,
       state: {...planState, preparedBoard: analysis.preparedBoard},
@@ -1522,6 +1711,16 @@ function runBidirectionalSolver(purpose, analysis) {
       solverBuild: SOLVER_BUILD,
     });
   };
+
+  const savedIncumbent = loadAnytimeIncumbent(campaignSerializedState);
+  if (savedIncumbent) {
+    appendSearchLog("director", "Restoring replay-validated anytime incumbent", {
+      pushes: savedIncumbent.pushes,
+      moves: savedIncumbent.moves,
+      strategy: savedIncumbent.strategy,
+    });
+    finish(savedIncumbent.path, savedIncumbent.strategy || "Saved Incumbent");
+  }
 
   launch({
     mode: "bidir-forward",

@@ -75,7 +75,7 @@ becomes a full macro candidate and reducing contention around the most productiv
 worker.
 
 1. Apply structural rejection during macro expansion
-   Status: Partial; the current guards primarily evaluate macro endpoints.
+   Status: Complete in build 2026-07-23.36.
 
    Plan:
    - Build an incremental macro context containing the active assignment,
@@ -99,7 +99,7 @@ worker.
      without increasing retained structural states or peak memory.
 
 2. Make macro effort adaptive
-   Status: Planned; current exploration limits are fixed.
+   Status: Complete in build 2026-07-23.36.
 
    Plan:
    - Estimate local ambiguity from legal push directions, competing targets,
@@ -122,8 +122,7 @@ worker.
      its deterministic top-level search counters.
 
 3. Give the structural worker resource priority
-   Status: Partial; it is scheduled first but still competes with the full
-   Ultimate portfolio.
+   Status: Complete in build 2026-07-23.36.
 
    Plan:
    - Give structural discovery a short head start or exclusive high-priority slot
@@ -157,7 +156,7 @@ Goal: turn the first structural solution into an incumbent that immediately help
 find better solutions and constrains complete search.
 
 4. Continue structural search after the first solution
-   Status: Planned.
+   Status: Complete in build 2026-07-23.37.
 
    Plan:
    - Publish and animate the first replay-valid solution immediately, then move
@@ -178,7 +177,7 @@ find better solutions and constrains complete search.
      budget, with every incumbent independently replayed.
 
 5. Rewrite completed solutions with exact local windows
-   Status: Planned.
+   Status: Complete in build 2026-07-23.37.
 
    Plan:
    - Partition a solution at stable structural milestones such as completed
@@ -199,8 +198,7 @@ find better solutions and constrains complete search.
      post-processing time and memory budget.
 
 6. Feed every incumbent into exact search
-   Status: Partial; exact algorithms accept bounds, but the full anytime director
-   does not yet exploit a live improving incumbent end to end.
+   Status: Complete in build 2026-07-23.37.
 
    Plan:
    - Start or tighten exact IDA*/A* with the best replay-valid push bound as soon
@@ -224,6 +222,23 @@ find better solutions and constrains complete search.
 Sprint 2 completion gate:
 Sokomind returns the first solution promptly, improves it monotonically, and uses
 each improvement to reduce exact proof work without overstating optimality.
+
+Delivered:
+
+- The first replay-valid solution is animated immediately while the Ultimate
+  campaign remains active. Later candidates improve pushes first and moves
+  second, and non-improving solutions are retained only as telemetry.
+- Incumbents are saved by puzzle-content hash, replayed before reuse, and paired
+  with the existing durable exact checkpoints.
+- Overlapping exact target-state windows rewrite completed paths without
+  weakening validation. The reviewed Huge run improved the planner's own
+  330-push / 1,306-move result to 300 pushes / 1,222 moves in 17.2 seconds and
+  7,683 local states. The same generic pass improved the independent diagnostic
+  incumbent from 250 pushes to 240.
+- Each accepted incumbent tightens newly launched discovery work and restarts
+  active exact shards under the lower bound. Exhausting the strictly-better
+  contour proves push optimality; incomplete runs report best-known quality,
+  the current exact lower bound, and the remaining push gap separately.
 
 
 Sprint 3 - Compact and nonredundant search

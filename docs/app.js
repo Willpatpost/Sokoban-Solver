@@ -34,6 +34,7 @@ let pushBounds = {};
 let searchLog = [], searchStartedAt = null;
 let searchRunId = null, searchLogSequence = 0;
 let searchTelemetryTimers = [];
+let solverAnytimeActive = false;
 
 const searchLogText = (entries = searchLog) => formatSearchLogText(entries);
 const searchLogJsonLines = (entries = searchLog) => formatSearchLogJsonLines(entries);
@@ -50,9 +51,15 @@ try {
 
 function rememberPushBound() {
   const pushes = moveHistory.filter(entry => entry.pushed).length;
-  if (!pushes || pushes >= (pushBounds[levelKey] ?? Infinity)) return;
+  rememberSolverPushBound(pushes);
+}
+
+function rememberSolverPushBound(pushes) {
+  if (!Number.isInteger(pushes) || pushes <= 0 ||
+      pushes >= (pushBounds[levelKey] ?? Infinity)) return false;
   pushBounds[levelKey] = pushes;
   try { localStorage.setItem(PUSH_BOUNDS_KEY, JSON.stringify(pushBounds)); } catch (_error) {}
+  return true;
 }
 
 function currentUpperBound() {
@@ -205,7 +212,15 @@ function tryMove(direction, fromSolver = false) {
   return true;
 }
 function complete() {
-  stop(false); setControlsBusy(false); freezeTimer(); setStatus(`Solved in ${moves} moves!`);
+  const continuingSearch = solverAnytimeActive && workers.length > 0;
+  if (!continuingSearch) {
+    stop(false);
+    setControlsBusy(false);
+  }
+  freezeTimer();
+  setStatus(continuingSearch
+    ? `First solution shown in ${moves} moves; search continues for a better incumbent.`
+    : `Solved in ${moves} moves!`);
   rememberPushBound();
   if (solvedShown) return; solvedShown = true;
   $("complete-level").textContent = title(levelKey);
@@ -232,6 +247,7 @@ function stop(message = true) {
   if (workers.length && message) appendSearchLog("control", "Search stopped by user",
     {activeWorkers: workers.length, status: "cancelled", reason: "user-stop"});
   workers.forEach(worker => worker.terminate()); workers = [];
+  solverAnytimeActive = false;
   clearSearchTelemetry();
   animation = []; clearTimeout(timer); timer = null;
   setControlsBusy(false);
@@ -261,6 +277,18 @@ function hideHome() {
 }
 function validatePathToGoal(path) {
   return SokomindPath.validatePathToGoal(state, path, cloneState, moveState, isGoal);
+}
+function evaluateSolutionPath(path, initial = state) {
+  const validated = SokomindPath.validatePathToGoal(
+    initial, path, cloneState, moveState, isGoal,
+  );
+  if (validated === null) return null;
+  let replay = cloneState(initial), pushes = 0;
+  for (const direction of validated) {
+    if (isPushMove(replay, direction)) pushes++;
+    replay = moveState(replay, direction);
+  }
+  return {path: validated, pushes, moves: validated.length};
 }
 function walkBetween(board, boxes, start, target) {
   const blocked = new Set(boxes.map(([y, x]) => pos(y, x)));

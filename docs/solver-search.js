@@ -2324,6 +2324,122 @@ function replaySearchPath(state, board, path) {
   return replay;
 }
 
+function replaySolutionDetails(payload, path, board = parse(payload.state)) {
+  let replay = {
+    robot: payload.state.robot,
+    boxes: payload.state.boxes.map(([position, label]) => [
+      ...position.split(",").map(Number), label,
+    ]),
+    cost: 0,
+  };
+  const boundaries = [{moveIndex: 0, pushes: 0, state: replay}];
+  let pushes = 0;
+  for (let index = 0; index < path.length; index++) {
+    const next = neighbors(replay, board, false)
+      .find(candidate => candidate.move === path[index]);
+    if (!next) return null;
+    const pushed = next.boxes !== replay.boxes;
+    replay = {robot: next.robot, boxes: next.boxes, cost: replay.cost + 1};
+    if (pushed) {
+      pushes++;
+      boundaries.push({moveIndex: index + 1, pushes, state: replay});
+    }
+  }
+  return {state: replay, pushes, moves: path.length, boundaries};
+}
+
+function serializedSearchState(state, rows) {
+  return {
+    rows,
+    robot: state.robot,
+    boxes: state.boxes.map(([y, x, label]) => [pkey(y, x), label]),
+  };
+}
+
+function solutionWindowRewriteSearch(payload) {
+  const board = parse(payload.state);
+  let path = [...(payload.solutionPath || [])];
+  let details = replaySolutionDetails(payload, path, board);
+  if (!details || !goal(details.state.boxes, board.goals)) {
+    return {path: null, visited: 0, failed: true,
+      terminationReason: "invalid-rewrite-incumbent"};
+  }
+  const initialQuality = {pushes: details.pushes, moves: details.moves};
+  const windowSizes = payload.windowPushes || [8, 16, 32];
+  const maximumVisited = payload.maxVisited || 300000;
+  const perWindowVisited = payload.windowVisited || 20000;
+  let visited = 0, windows = 0, improvements = 0;
+
+  for (const windowPushes of windowSizes) {
+    let startPush = Math.max(0, details.pushes - windowPushes);
+    while (startPush >= 0 && visited < maximumVisited) {
+      const endPush = Math.min(details.pushes, startPush + windowPushes);
+      if (endPush <= startPush) break;
+      const start = details.boundaries[startPush];
+      const target = details.boundaries[endPush];
+      if (!start || !target) break;
+      const originalSegmentPushes = endPush - startPush;
+      const budget = Math.min(perWindowVisited, maximumVisited - visited);
+      const result = bridgeAStarSearch({
+        algorithm: "bridge-astar",
+        state: serializedSearchState(start.state, board.rows),
+        targetState: serializedSearchState(target.state, board.rows),
+        upperBound: originalSegmentPushes,
+        maxVisited: budget,
+        frontierLimit: payload.frontierLimit || 12000,
+        forcedMacros: false,
+        weight: 1,
+      });
+      visited += result.visited || 0;
+      windows++;
+      if (result.path) {
+        const rewrittenEnd = replaySearchPath(start.state, board, result.path);
+        const walking = rewrittenEnd
+          ? reachablePaths(rewrittenEnd, board)
+            .get(pkey(target.state.robot[0], target.state.robot[1]))
+          : null;
+        if (walking) {
+          const candidate = [
+            ...path.slice(0, start.moveIndex),
+            ...result.path,
+            ...walking,
+            ...path.slice(target.moveIndex),
+          ];
+          const candidateDetails = replaySolutionDetails(payload, candidate, board);
+          const improves = candidateDetails &&
+            goal(candidateDetails.state.boxes, board.goals) &&
+            (candidateDetails.pushes < details.pushes ||
+              (candidateDetails.pushes === details.pushes &&
+                candidateDetails.moves < details.moves));
+          if (improves) {
+            path = candidate;
+            details = candidateDetails;
+            improvements++;
+            startPush = Math.max(0, Math.min(
+              startPush + Math.floor(windowPushes / 2),
+              details.pushes - windowPushes,
+            ));
+            continue;
+          }
+        }
+      }
+      if (startPush === 0) break;
+      startPush = Math.max(0, startPush - Math.max(1, Math.floor(windowPushes / 2)));
+    }
+  }
+  return {
+    path,
+    visited,
+    windows,
+    improvements,
+    initialPushes: initialQuality.pushes,
+    initialMoves: initialQuality.moves,
+    bestPushes: details.pushes,
+    bestMoves: details.moves,
+    terminationReason: improvements ? "rewrite-improved" : "rewrite-fixed-point",
+  };
+}
+
 function solveGoalCutComponents(payload, board, initial, certificate) {
   let current = initial, visited = 0;
   const path = [];
@@ -2363,6 +2479,9 @@ function searchCore(payload) {
     return {path: null, visited: 0, analysis: analyzePuzzleForSearch(payload.state)};
   }
   if (payload.algorithm === "bridge-astar") return bridgeAStarSearch(payload);
+  if (payload.algorithm === "solution-window-rewrite") {
+    return solutionWindowRewriteSearch(payload);
+  }
   if (payload.algorithm === "plan-macro-beam") return canonicalPlanMacroBeamSearch(payload);
   if (payload.algorithm === "push-beam") return beamSearch(payload);
   if (payload.algorithm === "push-beam-restarts") return beamRestartSearch(payload);
@@ -2526,6 +2645,10 @@ function terminalSearchResult(payload, result) {
     ? (payload.upperBound ?? payload.pushBound ?? 300)
     : (payload.upperBound ?? payload.pushBound);
   const finiteBound = Number.isFinite(effectiveBound);
+  if (exactAlgorithms.has(payload.algorithm) && finiteBound && !result.cutoff) {
+    return {...result, status: TERMINAL_STATUS.CUTOFF, cutoff: false,
+      terminationReason: "bound-exhausted"};
+  }
   const proofComplete = exactAlgorithms.has(payload.algorithm) && !result.cutoff &&
     (!finiteBound || result.terminationReason === "infeasible-root");
   if (proofComplete) {

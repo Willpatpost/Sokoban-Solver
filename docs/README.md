@@ -308,13 +308,20 @@ Packing checkpoints retire active bridge work and extreme puzzles run only the t
 best local exact handoffs, allowing the anytime workers to begin earlier. No stored
 solution path or puzzle-specific coordinate is used.
 
-Build `2026-07-23.33` replay-validated a fresh Huge solution with the released
-limits in 85.4 seconds after 3,752 structural states and 19,689 generated
-candidates on the development machine. The same solve passed a 256 MB V8 heap
-ceiling in 86.8 seconds. Base, mirrored, and rotated Huge variants all produced
-replay-valid 330-push solutions in the transformation campaign. These are
-regression data, not universal time guarantees; exact search remains the
-completeness fallback.
+Build `2026-07-23.37` keeps the first replay-valid result visible while discovery
+and proof continue. Candidates are ordered by pushes first and moves second.
+Every accepted incumbent is replayed, persisted by puzzle-content hash, applied
+to newly launched discovery workers, and used to restart exact shards under the
+tighter strictly-better bound. Exact progress reports the best-known result,
+admissible lower bound, and remaining push gap separately.
+
+The released Huge structural plan still produces 330 pushes / 1,306 moves after
+3,752 structural states and 19,689 generated candidates. Its bounded overlapping
+window pass improved that generated route to 300 pushes / 1,222 moves in 17.2
+seconds and 7,683 local states on the development machine. The same generic pass
+improved the independent 250-push diagnostic route to 240 pushes. These are
+regression data, not universal time guarantees or optimality claims; exact search
+remains the completeness fallback.
 
 Guided beam and bounded DFS workers publish progress on both state-count and
 elapsed-time intervals, so expensive states cannot make a productive worker appear

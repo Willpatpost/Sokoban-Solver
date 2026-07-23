@@ -86,6 +86,25 @@ function installScriptedWorker(page, mode) {
           }, 120);
           return;
         }
+        if (selectedMode === "anytime" && payload.handoffStage === "structural") {
+          emitLater(this, {
+            type: "done",
+            path: ["Left", "Down", "Up", "Right", "Down"],
+            visited: 1, checkpoints: [],
+            status: "solved", terminationReason: "solution",
+          });
+          return;
+        }
+        if (selectedMode === "anytime" &&
+            payload.algorithm === "solution-window-rewrite") {
+          emitLater(this, {
+            type: "done", path: ["Down"], visited: 1,
+            initialPushes: 1, initialMoves: 1, bestPushes: 1, bestMoves: 1,
+            improvements: 0, status: "solved",
+            terminationReason: "rewrite-fixed-point",
+          }, 10);
+          return;
+        }
         const checkpoint = {
           state: payload.state,
           path: [],
@@ -260,4 +279,21 @@ test("Ultimate gives the structural planner exclusive direct capacity during its
   await expect.poll(() => page.evaluate(() => window.__workerMessages.filter(
     message => message.side === "direct",
   ).length)).toBeGreaterThan(1);
+});
+
+test("Ultimate publishes its first solution and continues with an exact rewrite", async ({page}) => {
+  await installScriptedWorker(page, "anytime");
+  await enterGame(page);
+  await page.getByRole("button", {name: "Solve"}).click();
+  await expect.poll(() => page.evaluate(() => window.__workerMessages.some(
+    message => message.algorithm === "solution-window-rewrite",
+  ))).toBe(true);
+  const rewrite = await page.evaluate(() => window.__workerMessages.find(
+    message => message.algorithm === "solution-window-rewrite",
+  ));
+  expect(rewrite.state.robot).toEqual([1, 2]);
+  expect(rewrite.upperBound).toBe(0);
+  await expect(page.locator("#search-log-text")).toHaveValue(/replay-validated solution/);
+  await expect(page.locator("#search-log-text")).toHaveValue(/replay-validated improvement/);
+  await expect(page.locator("#search-log-text")).toHaveValue(/pushes=1 moves=1/);
 });

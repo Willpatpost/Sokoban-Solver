@@ -10,6 +10,9 @@ const {
   directWorkerCapacity,
   portfolioWorkerCapacity,
   structuralHeadStartMs,
+  compareSolutionQuality,
+  acceptsIncumbent,
+  tightenedWorkerBound,
 } = require("./director-policy.js");
 
 test("anytime checkpoint selection minimizes projected cost and preserves phase diversity", () => {
@@ -55,6 +58,18 @@ test("a structural plan receives a short, bounded head start", () => {
   assert.equal(structuralHeadStartMs(false, 8), 0);
   assert.equal(structuralHeadStartMs(true, 8), 600);
   assert.equal(structuralHeadStartMs(true, 4), 900);
+});
+
+test("anytime incumbents improve pushes first and moves second", () => {
+  const incumbent = {pushes: 12, moves: 40};
+  assert.equal(acceptsIncumbent({pushes: 11, moves: 100}, incumbent), true);
+  assert.equal(acceptsIncumbent({pushes: 12, moves: 39}, incumbent), true);
+  assert.equal(acceptsIncumbent({pushes: 12, moves: 40}, incumbent), false);
+  assert.equal(acceptsIncumbent({pushes: 13, moves: 1}, incumbent), false);
+  assert.ok(compareSolutionQuality({pushes: 11, moves: 100}, incumbent) < 0);
+  assert.equal(tightenedWorkerBound(12, 0), 11);
+  assert.equal(tightenedWorkerBound(12, 5), 6);
+  assert.equal(tightenedWorkerBound(Infinity, 5), Infinity);
 });
 
 test("opportunistic bridge churn cannot delay completion of required work", () => {
