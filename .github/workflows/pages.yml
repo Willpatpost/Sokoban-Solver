@@ -14,22 +14,63 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  test:
+  node-compat:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: ["20", "22", "24"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+      - run: npm ci
+      - run: npm run test:unit
+      - run: node bench/verify-solution.js huge docs/optimalForHuge.txt
+
+  python-compat:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.12", "3.14"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
+      - run: python -m unittest discover -v
+
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - run: python -m unittest discover -v
-      - run: node --test docs/solver-worker.test.js docs/solver-worker-protocol.test.js docs/exact-kernel-differential.test.js docs/exact-checkpoint-storage.test.js docs/browser-modules.test.js docs/path-validation.test.js docs/director-policy.test.js docs/keyboard-policy.test.js docs/conformance.test.js
-      - run: node --test docs/pruning-differential.test.js bench/evaluator.test.js bench/generated-cases.test.js bench/benchmark.test.js bench/conformance.test.js bench/verify-solution.test.js bench/solver-generality.test.js
-      - run: node bench/verify-solution.js huge docs/optimalForHuge.txt
-      - run: node bench/benchmark.js --suite smoke
-      - run: node bench/benchmark.js --suite validation
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: npm ci
+      - run: pip install -r requirements-dev.txt
+      - run: npm run check:build
+      - run: npm run check:quality
+      - run: npm run test:coverage
+      - run: ruff format --check Searches tests
+      - run: ruff check Searches tests
+      - run: mypy
+      - run: coverage run -m unittest discover -v
+      - run: coverage report
+
+  performance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: node bench/performance-gate.js
 
   browser-test:
     runs-on: ubuntu-latest
@@ -48,7 +89,7 @@ jobs:
       - run: npx playwright test --project=${{ matrix.browser }}
 
   deploy:
-    needs: [test, browser-test]
+    needs: [node-compat, python-compat, quality, performance, browser-test]
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     permissions:
       contents: read

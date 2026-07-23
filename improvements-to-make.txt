@@ -270,7 +270,7 @@ Later optimization sprints need trustworthy memory/state baselines, compatible
 runtime coverage, and one authoritative build identifier.
 
 7. Add detailed solver performance instrumentation.
-   Current status: Strong, bounded.
+   Status: Done in build 2026-07-23.27.
    Existing foundation:
    - Timings and counters cover reachability, matching, hashing, pruning, caches,
      frontier behavior, strategic reasoning, heap samples, worker lifecycle, and
@@ -281,26 +281,41 @@ runtime coverage, and one authoritative build identifier.
    - Standardize supported/unsupported memory fields and document unavoidable
      browser GC limitations.
    - Add tests proving every performance schema remains stable across algorithms.
+   Completion notes:
+   - Bidirectional, planner, and ordinary portfolio workers share startup,
+     first-message, wall-clock, termination-call, and release-reason accounting.
+   - Memory has a versioned supported/unsupported schema with an explicit source
+     and documented uncontrolled-GC limitation.
+   - Cross-algorithm schema tests cover every public search family.
 
 31. Add deterministic performance and memory regression gates.
-   Current status: Backlog.
+   Status: Done in build 2026-07-23.27.
    Finish gate:
    - Store reviewed baselines and tolerances for visited/generated states, retained
      states, frontier peaks, transposition evictions, and heap peaks.
    - Separate deterministic counters from machine-sensitive elapsed time.
    - Fail CI on material smoke/validation regressions and add a scheduled or
      explicitly dispatched Huge performance workflow.
+   Completion notes:
+   - Reviewed smoke/validation baselines gate visited, generated, retained,
+     frontier, eviction, solution, and replay-validity counters.
+   - Heap uses an isolated-process envelope; elapsed time remains telemetry-only.
+   - Huge has a weekly and manually dispatched artifact-producing workflow.
 
 33. Expand compatibility and quality checks.
-   Current status: Backlog.
+   Status: Done in build 2026-07-23.27.
    Finish gate:
    - Test the documented Python 3.10+ range and supported Node range.
    - Add formatting, linting, type checking where practical, and coverage reports
      with reviewed thresholds.
    - Keep dependency-free browser deployment and deterministic tests intact.
+   Completion notes:
+   - CI covers Python 3.10/3.12/3.14 and Node 20/22/24.
+   - Ruff formatting/lint, mypy, JavaScript syntax/format checks, Python branch
+     coverage (85%), and Node line/branch/function coverage gates are enforced.
 
 34. Replace manually synchronized browser build strings.
-   Current status: Partial.
+   Status: Done in build 2026-07-23.27.
    Existing foundation:
    - The homepage badge, worker URL, search events, and tests expose the current
      build and currently use synchronized cache queries.
@@ -308,10 +323,17 @@ runtime coverage, and one authoritative build identifier.
    - Establish one authoritative version source and generate or inject every HTML,
      policy, UI, director, engine, search, and worker cache revision.
    - Add a CI/release check that rejects drift.
+   Completion notes:
+   - `docs/build.json` is the single source consumed by a cache-busting bootstrap.
+   - The release check validates every browser asset and worker import revision.
 
 Sprint completion gate:
 All four items are Done, build drift is mechanically impossible in normal
 development, and deterministic regression gates protect later tuning.
+
+Completed in build 2026-07-23.27. All four items are Done; reviewed state and
+memory gates, supported-runtime matrices, quality/coverage checks, and the single
+browser build manifest now protect subsequent optimization sprints.
 
 
 Sprint 17 - Dense reusable state and assignment core

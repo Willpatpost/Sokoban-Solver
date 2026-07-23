@@ -111,22 +111,28 @@ let activePerformance = null;
 
 const now = () => globalThis.performance?.now?.() ?? Date.now();
 
-function currentHeapBytes() {
+function currentHeapSample() {
   let injected = null;
   try {
     injected = globalThis.__sokomindMemoryUsage?.();
   } catch (_error) {
     injected = null;
   }
-  if (Number.isFinite(injected) && injected >= 0) return Math.round(injected);
+  if (Number.isFinite(injected) && injected >= 0) {
+    return {bytes: Math.round(injected), source: "injected-runtime"};
+  }
   const browserHeap = globalThis.performance?.memory?.usedJSHeapSize;
-  return Number.isFinite(browserHeap) && browserHeap >= 0 ? Math.round(browserHeap) : null;
+  return Number.isFinite(browserHeap) && browserHeap >= 0
+    ? {bytes: Math.round(browserHeap), source: "browser-performance-memory"}
+    : null;
 }
 
 function samplePerformanceMemory(metrics) {
-  const heap = currentHeapBytes();
-  if (heap === null) return;
+  const sample = currentHeapSample();
+  if (sample === null) return;
+  const heap = sample.bytes;
   if (metrics._heapStartBytes === null) metrics._heapStartBytes = heap;
+  metrics._heapSource = sample.source;
   metrics.heapSupported = true;
   metrics.heapUsedBytes = heap;
   metrics.heapPeakBytes = Math.max(metrics.heapPeakBytes || 0, heap);
@@ -138,6 +144,8 @@ function createPerformanceMetrics() {
   const metrics = {
     _startedAt: now(),
     _heapStartBytes: null,
+    _heapSource: null,
+    schemaVersion: 1,
     totalMs: 0,
     heapSupported: false,
     heapUsedBytes: null,
@@ -232,6 +240,16 @@ function performanceSnapshot(metrics) {
   };
   delete rounded._startedAt;
   delete rounded._heapStartBytes;
+  delete rounded._heapSource;
+  rounded.memory = {
+    supported: metrics.heapSupported,
+    source: metrics._heapSource,
+    usedBytes: metrics.heapUsedBytes,
+    peakBytes: metrics.heapPeakBytes,
+    deltaBytes: metrics.heapDeltaBytes,
+    samples: metrics.heapSamples,
+    gcControlled: false,
+  };
   for (const key of ["totalMs", "parseMs", "graphCompileMs", "denseBuildMs", "signatureMs", "heuristicMs", "commitmentMs", "supportDependencyMs", "localRoomMs", "localCorralMs", "doorwayFlowMs", "pushDistanceMs", "reachabilityMs"]) {
     rounded[key] = Math.round((rounded[key] || 0) * 1000) / 1000;
   }

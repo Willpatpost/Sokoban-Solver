@@ -199,6 +199,7 @@ function beamSearch(payload) {
   const progressIntervalMs = payload.progressIntervalMs || 5000;
   const handoffCheckpoints = new Map();
   let visited = 0, reported = 0, bestEstimate = Infinity, bestPushes = 0;
+  let generated = 0, peakFrontier = 1;
   let lastProgressAt = now();
   let beamCutoff = false;
   let bestCheckpoint = null;
@@ -226,7 +227,14 @@ function beamSearch(payload) {
     for (const current of beam) {
       visited++;
       if (goal(current.boxes, board.goals)) {
-        return {path: reconstructNodePath(current.node), visited};
+        return {
+          path: reconstructNodePath(current.node),
+          visited,
+          generated,
+          retained: seenDepth.size,
+          peakFrontier,
+          transpositionEvictions: seenDepth.evictions + seenExactDepth.evictions,
+        };
       }
       if (payload.maxVisited && visited >= payload.maxVisited) {
         beamCutoff = true;
@@ -279,6 +287,10 @@ function beamSearch(payload) {
           return {
             path: [...reconstructNodePath(current.node), ...next.path],
             visited,
+            generated: generated + candidates.size + 1,
+            retained: seenDepth.size,
+            peakFrontier: Math.max(peakFrontier, beam.length, candidates.size + 1),
+            transpositionEvictions: seenDepth.evictions + seenExactDepth.evictions,
           };
         }
         child.exactIdentity = exactPushIdentity(child, board);
@@ -408,6 +420,8 @@ function beamSearch(payload) {
         lastProgressAt = progressNow;
       }
     }
+    generated += candidates.size;
+    peakFrontier = Math.max(peakFrontier, beam.length, candidates.size);
     const shortlist = selectBeamLayer(
       [...candidates.values()],
       width * 3,
@@ -499,6 +513,13 @@ function beamSearch(payload) {
         return {
           path: [...reconstructNodePath(checkpoint.node), ...continuation.path],
           visited: visited + continuation.visited,
+          generated: generated + continuation.generated,
+          retained: seenDepth.size + continuation.retained,
+          peakFrontier: Math.max(peakFrontier, continuation.peakFrontier),
+          transpositionEvictions:
+            seenDepth.evictions +
+            seenExactDepth.evictions +
+            continuation.transpositionEvictions,
           bestEstimate: 0,
           bestPushes: checkpoint.cost,
           continuation: true,
@@ -542,6 +563,13 @@ function beamSearch(payload) {
       return {
         path: [...reconstructNodePath(checkpoint.node), ...endgame.path],
         visited: visited + endgame.visited,
+        generated: generated + (endgame.generated || 0),
+        retained: seenDepth.size + (endgame.retained || 0),
+        peakFrontier: Math.max(peakFrontier, endgame.peakFrontier || 0),
+        transpositionEvictions:
+          seenDepth.evictions +
+          seenExactDepth.evictions +
+          (endgame.transpositionEvictions || 0),
         bestEstimate: 0,
         bestPushes: checkpoint.cost,
         endgame: true,
@@ -554,6 +582,10 @@ function beamSearch(payload) {
   return {
     path: null,
     visited,
+    generated,
+    retained: seenDepth.size,
+    peakFrontier,
+    transpositionEvictions: seenDepth.evictions + seenExactDepth.evictions,
     cutoff: beamCutoff,
     terminationReason: beamCutoff ? "budget" : "frontier-exhausted",
     bestEstimate,
@@ -1651,10 +1683,18 @@ function search(payload) {
       metrics.totalMs = now() - started;
       metrics._startedAt = null;
     }
-    return terminalSearchResult(
-      payload,
-      {...result, performance: performanceSnapshot(metrics)},
-    );
+    const performance = performanceSnapshot(metrics);
+    return terminalSearchResult(payload, {
+      ...result,
+      generated:
+        result.generated ??
+        Math.max(result.visited || 0, performance.pushCandidates || 0),
+      retained: result.retained ?? result.visited ?? 0,
+      peakFrontier:
+        result.peakFrontier ?? result.frontier ?? (result.visited ? 1 : 0),
+      transpositionEvictions: result.transpositionEvictions ?? 0,
+      performance,
+    });
   } finally {
     activePerformance = parentPerformance;
   }

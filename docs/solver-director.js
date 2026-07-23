@@ -79,12 +79,21 @@ function startBidirectionalSolver(purpose) {
   appendSearchLog("director", "Reading puzzle before worker allocation",
     {level: levelKey, boxes: state.boxes.size, floor: state.board.floor.size});
   const planner = new Worker(SOLVER_WORKER_URL);
+  const plannerStarted = performance.now();
   workers.push(planner);
   planner.onmessage = ({data}) => {
     if (!workers.includes(planner)) return;
     if (data.type !== "done") return;
+    const terminateStarted = performance.now();
     planner.terminate();
+    const terminateCallMs = performance.now() - terminateStarted;
     workers = workers.filter(worker => worker !== planner);
+    appendSearchLog("lifecycle", "Puzzle analysis worker released", {
+      reason: data.analysis ? "completed" : "missing-analysis",
+      firstMessageMs: Math.round(performance.now() - plannerStarted),
+      wallMs: Math.round(performance.now() - plannerStarted),
+      terminateCallMs: Math.round(terminateCallMs * 1000) / 1000,
+    });
     if (!data.analysis) {
       setControlsBusy(false); setStatus("Puzzle analysis failed.");
       appendSearchLog("error", "Planner returned no analysis");
@@ -94,7 +103,13 @@ function startBidirectionalSolver(purpose) {
   };
   planner.onerror = () => {
     if (!workers.includes(planner)) return;
+    const terminateStarted = performance.now();
     planner.terminate(); workers = workers.filter(worker => worker !== planner);
+    appendSearchLog("lifecycle", "Puzzle analysis worker released", {
+      reason: "worker-error",
+      wallMs: Math.round(performance.now() - plannerStarted),
+      terminateCallMs: Math.round((performance.now() - terminateStarted) * 1000) / 1000,
+    });
     setControlsBusy(false); setStatus("Puzzle analysis worker failed.");
     appendSearchLog("error", "Puzzle analysis worker failed");
   };
@@ -837,6 +852,7 @@ function runBidirectionalSolver(purpose, analysis) {
     const worker = new Worker(SOLVER_WORKER_URL);
     const effectiveUpperBound = plan.upperBound ?? planUpperBound(plan);
     let workerFinished = false;
+    let firstMessageAt = null;
     workers.push(worker);
     workerPlans.set(worker, plan);
     if (plan.side === "direct") activeDirectWorkers++;
@@ -861,8 +877,21 @@ function runBidirectionalSolver(purpose, analysis) {
       round: plan.exactRound,
       checkpoint: plan.sourceCheckpointId ? shortStateId(plan.sourceCheckpointId) : undefined,
     });
-    const releaseWorker = ({queueBridge = true} = {}) => {
+    const releaseWorker = ({queueBridge = true, reason = "completed"} = {}) => {
+      const releasedAt = performance.now();
+      const startedAt = workerStarted.get(worker) || releasedAt;
+      const visited = workerProgress.get(worker) || 0;
+      const terminateStarted = performance.now();
       worker.terminate();
+      const terminateCallMs = performance.now() - terminateStarted;
+      appendSearchLog("lifecycle", `${plan.label} worker released`, {
+        reason,
+        firstMessageMs: firstMessageAt === null
+          ? undefined : Math.round(firstMessageAt - startedAt),
+        wallMs: Math.round(releasedAt - startedAt),
+        terminateCallMs: Math.round(terminateCallMs * 1000) / 1000,
+        visited: visited.toLocaleString(),
+      });
       workers = workers.filter(item => item !== worker);
       workerSides.delete(worker);
       workerProgress.delete(worker);
@@ -942,7 +971,7 @@ function runBidirectionalSolver(purpose, analysis) {
           });
         }
       }
-      releaseWorker();
+      releaseWorker({reason});
       if (plan.persistentExact) {
         const recoveryCount = (plan.exactRecoveryCount || 0) + 1;
         if (recoveryCount > 3) {
@@ -1007,7 +1036,7 @@ function runBidirectionalSolver(purpose, analysis) {
         reason,
         visited: workerProgress.get(worker) || 0,
       });
-      releaseWorker({queueBridge: false});
+      releaseWorker({queueBridge: false, reason: "retired"});
       continuePortfolio();
     };
     workerCancellations.set(worker, cancelWorker);
@@ -1036,6 +1065,7 @@ function runBidirectionalSolver(purpose, analysis) {
     }
     worker.onmessage = ({data}) => {
       if (!workers.includes(worker)) return;
+      if (firstMessageAt === null) firstMessageAt = performance.now();
       workerLastMessage.set(worker, performance.now());
       if (data.type === "records") {
         inspectRecords(data.records, worker);
@@ -1224,7 +1254,7 @@ function runBidirectionalSolver(purpose, analysis) {
           saveExactCheckpoint(data.exactCheckpoint);
           plan.resumeExactCheckpoint = data.exactCheckpoint;
           doneWorkers++;
-          releaseWorker();
+          releaseWorker({reason: "checkpoint-yield"});
           expectedWorkers++;
           launch({...plan, label: plan.label.replace(/ Continuation$/, "") + " Continuation"});
           return;
@@ -1326,7 +1356,7 @@ function runBidirectionalSolver(purpose, analysis) {
         }
         doneWorkers++;
         finishRequiredPlan(plan);
-        releaseWorker();
+        releaseWorker({reason: data.terminationReason || "completed"});
         if (provedUnsolvable) {
           clearExactCheckpoints(exactCheckpointProblemHash(serializeState(state)));
           settled = true;

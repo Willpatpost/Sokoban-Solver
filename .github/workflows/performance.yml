@@ -1,0 +1,27 @@
+name: Huge Performance
+
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  huge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Run Huge performance suite
+        run: node bench/benchmark.js --suite huge --jsonl > huge-performance.jsonl
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: huge-performance-${{ github.run_id }}
+          path: huge-performance.jsonl
+          if-no-files-found: error

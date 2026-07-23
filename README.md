@@ -23,17 +23,18 @@ Run the automated solver tests with:
 
 ```powershell
 python -m unittest discover -v
-node --test docs/solver-worker.test.js docs/solver-worker-protocol.test.js docs/exact-kernel-differential.test.js docs/exact-checkpoint-storage.test.js docs/browser-modules.test.js docs/path-validation.test.js docs/director-policy.test.js docs/keyboard-policy.test.js docs/conformance.test.js
-node --test docs/pruning-differential.test.js bench/evaluator.test.js bench/generated-cases.test.js bench/benchmark.test.js bench/conformance.test.js bench/verify-solution.test.js bench/solver-generality.test.js
+npm run test:unit
+npm run check:build
+npm run check:quality
+node bench/performance-gate.js
 node bench/verify-solution.js huge docs/optimalForHuge.txt
-node bench/benchmark.js --suite smoke
-node bench/benchmark.js --suite validation
 npm ci
 npx playwright install chromium webkit
 npm run test:browser
 ```
 
 On Windows, use `py -m unittest discover -v` if `python` is not on PATH.
+Supported development runtimes are Python 3.10 or newer and Node 20 through 24.
 The Playwright suite serves `docs/` itself and exercises Chromium and WebKit.
 
 The canonical level catalog and cross-runtime parsing/rule cases live in

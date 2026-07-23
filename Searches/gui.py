@@ -66,9 +66,18 @@ SEARCHES = {
 }
 
 KEY_MOVES = {
-    "Up": "Up", "Down": "Down", "Left": "Left", "Right": "Right",
-    "w": "Up", "W": "Up", "s": "Down", "S": "Down",
-    "a": "Left", "A": "Left", "d": "Right", "D": "Right",
+    "Up": "Up",
+    "Down": "Down",
+    "Left": "Left",
+    "Right": "Right",
+    "w": "Up",
+    "W": "Up",
+    "s": "Down",
+    "S": "Down",
+    "a": "Left",
+    "A": "Left",
+    "d": "Right",
+    "D": "Right",
 }
 
 
@@ -83,7 +92,7 @@ class SokomindApp(tk.Tk):
         self.geometry("900x720")
         self.minsize(620, 500)
 
-        self.state: State
+        self.state: State  # type: ignore[assignment]
         self.initial_state: State
         self.history: list[State] = []
         self.move_history: list[tuple[str, bool]] = []
@@ -119,8 +128,11 @@ class SokomindApp(tk.Tk):
 
         ttk.Label(toolbar, text="Solver").pack(side="left")
         ttk.Combobox(
-            toolbar, textvariable=self.algorithm,
-            values=list(SEARCHES), state="readonly", width=16,
+            toolbar,
+            textvariable=self.algorithm,
+            values=list(SEARCHES),
+            state="readonly",
+            width=16,
         ).pack(side="left", padx=5)
         ttk.Button(toolbar, text="Solve", command=self.solve_animated).pack(side="left", padx=2)
         ttk.Button(toolbar, text="Hint", command=self.hint).pack(side="left", padx=2)
@@ -140,8 +152,14 @@ class SokomindApp(tk.Tk):
         sidebar.pack(side="left", fill="y", padx=(0, 10))
         sidebar.pack_propagate(False)
         tk.Label(
-            sidebar, text="LEVELS", background="#202631", foreground="#aab4c3",
-            font=("Segoe UI", 10, "bold"), anchor="w", padx=12, pady=10,
+            sidebar,
+            text="LEVELS",
+            background="#202631",
+            foreground="#aab4c3",
+            font=("Segoe UI", 10, "bold"),
+            anchor="w",
+            padx=12,
+            pady=10,
         ).pack(fill="x")
         self._level_list = tk.Frame(sidebar, background="#202631")
         self._level_list.pack(fill="both", expand=True)
@@ -154,9 +172,16 @@ class SokomindApp(tk.Tk):
         move_log.pack(side="bottom", fill="x")
         ttk.Label(move_log, text="Move history").pack(side="left", anchor="n", padx=(0, 8))
         self.move_history_text = tk.Text(
-            move_log, height=5, wrap="none", state="disabled",
-            background="#111722", foreground="#dbe6f2", insertbackground="white",
-            relief="flat", padx=8, pady=6,
+            move_log,
+            height=5,
+            wrap="none",
+            state="disabled",
+            background="#111722",
+            foreground="#dbe6f2",
+            insertbackground="white",
+            relief="flat",
+            padx=8,
+            pady=6,
         )
         self.move_history_text.pack(side="left", fill="x", expand=True)
         ttk.Button(move_log, text="Copy", command=self._copy_move_history).pack(
@@ -176,18 +201,28 @@ class SokomindApp(tk.Tk):
 
         self.home = tk.Frame(self, background="#111722")
         hero = tk.Frame(self.home, background="#111722")
-        hero.place(relx=.5, rely=.48, anchor="center")
+        hero.place(relx=0.5, rely=0.48, anchor="center")
         tk.Label(
-            hero, text="S", width=3, background="#397fc3", foreground="white",
+            hero,
+            text="S",
+            width=3,
+            background="#397fc3",
+            foreground="white",
             font=("Segoe UI", 30, "bold"),
         ).pack(pady=(0, 12))
         tk.Label(
-            hero, text="Sokomind", background="#111722", foreground="white",
+            hero,
+            text="Sokomind",
+            background="#111722",
+            foreground="white",
             font=("Segoe UI", 30, "bold"),
         ).pack()
         tk.Label(
-            hero, text="Think ahead. Push with purpose.", background="#111722",
-            foreground="#91a0b3", font=("Segoe UI", 12),
+            hero,
+            text="Think ahead. Push with purpose.",
+            background="#111722",
+            foreground="#91a0b3",
+            font=("Segoe UI", 12),
         ).pack(pady=(3, 22))
         directions = (
             "Push every box onto its matching goal.\n\n"
@@ -198,8 +233,14 @@ class SokomindApp(tk.Tk):
             "the matching lowercase goal. Boxes can be pushed, not pulled."
         )
         tk.Label(
-            hero, text=directions, justify="left", background="#1d2633",
-            foreground="#dbe6f2", font=("Segoe UI", 11), padx=24, pady=18,
+            hero,
+            text=directions,
+            justify="left",
+            background="#1d2633",
+            foreground="#dbe6f2",
+            font=("Segoe UI", 11),
+            padx=24,
+            pady=18,
         ).pack()
         ttk.Button(hero, text="Play Sokomind", command=self._hide_home).pack(
             pady=(22, 0), ipadx=24, ipady=6
@@ -207,24 +248,39 @@ class SokomindApp(tk.Tk):
 
     def _add_level_card(self, name: str, puzzle: list[str]) -> None:
         card = tk.Frame(
-            self._level_list, background="#2a313d", highlightthickness=2,
-            highlightbackground="#2a313d", cursor="hand2",
+            self._level_list,
+            background="#2a313d",
+            highlightthickness=2,
+            highlightbackground="#2a313d",
+            cursor="hand2",
         )
         card.pack(fill="x", padx=8, pady=5)
         preview = tk.Canvas(
-            card, width=74, height=60, background="#171a21",
-            highlightthickness=0, cursor="hand2",
+            card,
+            width=74,
+            height=60,
+            background="#171a21",
+            highlightthickness=0,
+            cursor="hand2",
         )
         preview.pack(side="left", padx=6, pady=6)
         title = tk.Label(
-            card, text=name.replace("-", " ").title(), background="#2a313d",
-            foreground="white", font=("Segoe UI", 10, "bold"), cursor="hand2",
+            card,
+            text=name.replace("-", " ").title(),
+            background="#2a313d",
+            foreground="white",
+            font=("Segoe UI", 10, "bold"),
+            cursor="hand2",
             anchor="w",
         )
         title.pack(side="left", fill="x", expand=True, padx=(2, 6))
         self._draw_thumbnail(preview, puzzle)
         for widget in (card, preview, title):
-            widget.bind("<Button-1>", lambda _event, level=name: self.select_level(level))
+
+            def select_card(_event: object, level: str = name) -> None:
+                self.select_level(level)
+
+            widget.bind("<Button-1>", select_card)
         self._level_cards[name] = card
 
     @staticmethod
@@ -235,18 +291,23 @@ class SokomindApp(tk.Tk):
         ox = (74 - tile * width) // 2
         oy = (60 - tile * height) // 2
         colors = {
-            "O": "#586475", "R": "#54a8e8", "X": "#d88d3c",
-            "S": "#d39b31", " ": "#252a34",
+            "O": "#586475",
+            "R": "#54a8e8",
+            "X": "#d88d3c",
+            "S": "#d39b31",
+            " ": "#252a34",
         }
         for y, row in enumerate(puzzle):
             for x, char in enumerate(row):
-                color = colors.get(
-                    char, "#d88d3c" if char.isupper() else "#d39b31"
-                )
+                color = colors.get(char, "#d88d3c" if char.isupper() else "#d39b31")
                 canvas.create_rectangle(
-                    ox + x * tile, oy + y * tile,
-                    ox + (x + 1) * tile, oy + (y + 1) * tile,
-                    fill=color, outline="#303744", width=1,
+                    ox + x * tile,
+                    oy + y * tile,
+                    ox + (x + 1) * tile,
+                    oy + (y + 1) * tile,
+                    fill=color,
+                    outline="#303744",
+                    width=1,
                 )
 
     def select_level(self, name: str) -> None:
@@ -256,9 +317,7 @@ class SokomindApp(tk.Tk):
     def _update_level_selection(self) -> None:
         selected = self.puzzle_name.get()
         for name, card in self._level_cards.items():
-            card.configure(
-                highlightbackground="#54a8e8" if name == selected else "#2a313d"
-            )
+            card.configure(highlightbackground="#54a8e8" if name == selected else "#2a313d")
 
     def _move_history_value(self) -> str:
         return "\n".join(
@@ -408,20 +467,32 @@ class SokomindApp(tk.Tk):
         dialog.grab_set()
 
         tk.Label(
-            dialog, text="\u2605", background="#202631", foreground="#f4c761",
+            dialog,
+            text="\u2605",
+            background="#202631",
+            foreground="#f4c761",
             font=("Segoe UI Symbol", 42),
         ).pack(pady=(18, 0))
         tk.Label(
-            dialog, text="Congratulations!", background="#202631",
-            foreground="white", font=("Segoe UI", 20, "bold"),
+            dialog,
+            text="Congratulations!",
+            background="#202631",
+            foreground="white",
+            font=("Segoe UI", 20, "bold"),
         ).pack(padx=42)
         tk.Label(
-            dialog, text="Level passed", background="#202631",
-            foreground="#aab4c3", font=("Segoe UI", 12),
+            dialog,
+            text="Level passed",
+            background="#202631",
+            foreground="#aab4c3",
+            font=("Segoe UI", 12),
         ).pack(pady=(2, 4))
         tk.Label(
-            dialog, text=f"Completed in {self.moves} moves",
-            background="#202631", foreground="#65b96e", font=("Segoe UI", 11, "bold"),
+            dialog,
+            text=f"Completed in {self.moves} moves",
+            background="#202631",
+            foreground="#65b96e",
+            font=("Segoe UI", 11, "bold"),
         ).pack(pady=(0, 16))
         buttons = ttk.Frame(dialog, padding=(14, 0, 14, 16))
         buttons.pack()
@@ -434,9 +505,7 @@ class SokomindApp(tk.Tk):
             ttk.Button(buttons, text="Next level", command=self._next_from_dialog).pack(
                 side="left", padx=4
             )
-        ttk.Button(buttons, text="Keep looking", command=dialog.destroy).pack(
-            side="left", padx=4
-        )
+        ttk.Button(buttons, text="Keep looking", command=dialog.destroy).pack(side="left", padx=4)
         dialog.protocol("WM_DELETE_WINDOW", dialog.destroy)
         dialog.update_idletasks()
         x = self.winfo_rootx() + (self.winfo_width() - dialog.winfo_width()) // 2
@@ -540,18 +609,14 @@ class SokomindApp(tk.Tk):
                     continue
                 self._cancel_event = None
                 if isinstance(result, Exception):
-                    self.status.set(
-                        f"{algorithm} failed: {type(result).__name__}: {result}"
-                    )
+                    self.status.set(f"{algorithm} failed: {type(result).__name__}: {result}")
                     continue
                 path, _final, elapsed, visited = result
                 if path is None:
                     status = getattr(result, "status", None)
                     reason = getattr(result, "reason", "unknown")
                     label = getattr(status, "value", str(status or "unknown"))
-                    self.status.set(
-                        f"{algorithm}: {label} ({reason}; {visited:,} states)"
-                    )
+                    self.status.set(f"{algorithm}: {label} ({reason}; {visited:,} states)")
                     continue
                 moves = [move for move, _position in path]
                 self.status.set(
@@ -585,7 +650,11 @@ class SokomindApp(tk.Tk):
         canvas_height = max(1, self.canvas.winfo_height())
         tile = max(
             self.TILE_MIN,
-            min(self.TILE_MAX, (canvas_width - 24) // width, (canvas_height - 24) // height),
+            min(
+                self.TILE_MAX,
+                (canvas_width - 24) // width,
+                (canvas_height - 24) // height,
+            ),
         )
         origin_x = (canvas_width - tile * width) // 2
         origin_y = (canvas_height - tile * height) // 2
@@ -601,9 +670,7 @@ class SokomindApp(tk.Tk):
                         x1, y1, x2, y2, fill="#394352", outline="#566274", width=2
                     )
                     continue
-                self.canvas.create_rectangle(
-                    x1, y1, x2, y2, fill="#252a34", outline="#303744"
-                )
+                self.canvas.create_rectangle(x1, y1, x2, y2, fill="#252a34", outline="#303744")
                 goal_label = None
                 if pos in board.generic_goals:
                     goal_label = "S"
@@ -615,12 +682,19 @@ class SokomindApp(tk.Tk):
                 if goal_label:
                     margin = tile * 0.31
                     self.canvas.create_oval(
-                        x1 + margin, y1 + margin, x2 - margin, y2 - margin,
-                        fill="#d39b31", outline="#f4c761", width=2,
+                        x1 + margin,
+                        y1 + margin,
+                        x2 - margin,
+                        y2 - margin,
+                        fill="#d39b31",
+                        outline="#f4c761",
+                        width=2,
                     )
                     self.canvas.create_text(
-                        (x1 + x2) / 2, (y1 + y2) / 2,
-                        text=goal_label, fill="#2b2112",
+                        (x1 + x2) / 2,
+                        (y1 + y2) / 2,
+                        text=goal_label,
+                        fill="#2b2112",
                         font=("Segoe UI", max(9, tile // 5), "bold"),
                     )
                 if pos in boxes:
@@ -628,24 +702,37 @@ class SokomindApp(tk.Tk):
                     margin = tile * 0.12
                     on_goal = pos in board.goals_for(label)
                     self.canvas.create_rectangle(
-                        x1 + margin, y1 + margin, x2 - margin, y2 - margin,
+                        x1 + margin,
+                        y1 + margin,
+                        x2 - margin,
+                        y2 - margin,
                         fill="#65b96e" if on_goal else "#d88d3c",
-                        outline="#a9e0ae" if on_goal else "#f2b568", width=3,
+                        outline="#a9e0ae" if on_goal else "#f2b568",
+                        width=3,
                     )
                     self.canvas.create_text(
-                        (x1 + x2) / 2, (y1 + y2) / 2,
-                        text=label, fill="#171a21",
+                        (x1 + x2) / 2,
+                        (y1 + y2) / 2,
+                        text=label,
+                        fill="#171a21",
                         font=("Segoe UI", max(11, tile // 3), "bold"),
                     )
                 if pos == self.state.robot_pos:
                     margin = tile * 0.15
                     self.canvas.create_oval(
-                        x1 + margin, y1 + margin, x2 - margin, y2 - margin,
-                        fill="#54a8e8", outline="#a6d8ff", width=3,
+                        x1 + margin,
+                        y1 + margin,
+                        x2 - margin,
+                        y2 - margin,
+                        fill="#54a8e8",
+                        outline="#a6d8ff",
+                        width=3,
                     )
                     self.canvas.create_text(
-                        (x1 + x2) / 2, (y1 + y2) / 2,
-                        text="R", fill="white",
+                        (x1 + x2) / 2,
+                        (y1 + y2) / 2,
+                        text="R",
+                        fill="white",
                         font=("Segoe UI", max(11, tile // 3), "bold"),
                     )
 

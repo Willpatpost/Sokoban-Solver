@@ -10,6 +10,10 @@ game rules, telemetry formatting, page UI, worker orchestration, solver rules an
 heuristics, search algorithms, and the Web Worker protocol each have an explicit
 module boundary. Pure rule and formatting modules run directly in Node tests, while
 the page and worker load the same files as classic scripts.
+`build.json` is the authoritative release identifier. The unversioned bootstrap
+fetches it without cache and injects that revision into every stylesheet, UI,
+policy, director, engine, search, and worker request. `npm run check:build`
+rejects copied versions or missing revision propagation.
 
 The move-history panel records every direction, marks pushes, follows
 undo/reset, and can copy the complete numbered sequence for sharing.
@@ -31,6 +35,10 @@ browser heap APIs are omitted rather than displayed as zero. Robot flood fills
 and forward push generation use
 immutable integer cell IDs and typed arrays while retaining string coordinates
 at module boundaries for compatible logs, checkpoints, and replay paths.
+The versioned memory schema reports support, source, used/peak/delta bytes,
+sample count, and `gcControlled`. Browser JavaScript cannot require garbage
+collection before sampling, so those values are useful regression envelopes
+rather than exact retained-object measurements.
 Canonical box layouts retain collision-free dense base-36 keys for memo tables
 and worker boundaries. Hot search transposition maps instead use collision-free
 packed `BigInt` identities that combine sorted typed-box cell tokens with the

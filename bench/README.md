@@ -25,6 +25,18 @@ and three- and four-box cases:
 node bench/benchmark.js --suite validation --jsonl
 ```
 
+Gate the reviewed smoke and validation counters and heap envelopes:
+
+```powershell
+node bench/performance-gate.js
+```
+
+`performance-baselines.json` records visited/generated/retained states, frontier
+peaks, transposition evictions, and isolated-process heap peaks. Deterministic
+counters use narrow reviewed tolerances. Heap has a separate wider tolerance,
+and elapsed time is reported but never gated. The Huge suite runs only in the
+scheduled or manually dispatched `Huge Performance` workflow.
+
 The procedural families are separate from the built-in levels. Their private
 seeds never enter solver payloads, and an independent exact push-state search in
 `generated-cases.test.js` checks every reviewed solved/push expectation.
@@ -66,6 +78,11 @@ The final JSON object contains:
   validation, total time, and heap delta, plus `processLifecycle` for first
   output, result delivery, shutdown, and total child-process time. Heap fields
   explicitly report unsupported hosts instead of substituting zero.
+
+Memory records use one versioned shape with an explicit support flag and source.
+Neither browsers nor ordinary Node processes guarantee a collection before a
+sample, so `gcControlled` is false and heap values are treated as envelopes,
+not exact retained-object measurements.
 
 For AlphaEvolve, optimize `totalScore` while treating any `valid: false` or
 non-zero `errors` as a hard rejection. The benchmark intentionally rewards a

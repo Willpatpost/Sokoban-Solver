@@ -329,6 +329,12 @@ async function main() {
     memorySupportedCases: results.filter(result => result.performance?.heapSupported).length,
     peakHeapBytes: results.reduce((peak, result) =>
       Math.max(peak, result.performance?.heapPeakBytes || 0), 0),
+    memory: {
+      supportedCases: results.filter(result => result.performance?.memory?.supported).length,
+      peakBytes: results.reduce((peak, result) =>
+        Math.max(peak, result.performance?.memory?.peakBytes || 0), 0),
+      gcControlled: false,
+    },
     totalChildProcessMs: Math.round(results.reduce((sum, result) =>
       sum + (result.processLifecycle?.totalMs || 0), 0) * 1000) / 1000,
     totalShutdownMs: Math.round(results.reduce((sum, result) =>

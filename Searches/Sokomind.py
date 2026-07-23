@@ -33,9 +33,7 @@ RESERVED_SYMBOLS = frozenset("ORSX")
 DEDICATED_BOX_LABELS = frozenset(set("ABCDEFGHIJKLMNOPQRSTUVWXYZ") - RESERVED_SYMBOLS)
 DEDICATED_GOAL_LABELS = frozenset(label.lower() for label in DEDICATED_BOX_LABELS)
 
-CONFORMANCE_PATH = (
-    Path(__file__).resolve().parents[1] / "shared" / "sokomind-conformance.json"
-)
+CONFORMANCE_PATH = Path(__file__).resolve().parents[1] / "shared" / "sokomind-conformance.json"
 with CONFORMANCE_PATH.open(encoding="utf-8") as conformance_file:
     BUILTIN_PUZZLES = json.load(conformance_file)["levels"]
 
@@ -133,7 +131,9 @@ class State:
         return heuristic(self)
 
 
-def _reverse_reachable(floor: frozenset[Position], goals: Iterable[Position]) -> frozenset[Position]:
+def _reverse_reachable(
+    floor: frozenset[Position], goals: Iterable[Position]
+) -> frozenset[Position]:
     """Cells from which a box can reach a goal on an otherwise empty board."""
     reachable = set(goals)
     queue = deque(reachable)
@@ -167,8 +167,7 @@ def parse_puzzle(puzzle: Sequence[str]) -> State:
     for y, row in enumerate(rows):
         for x, char in enumerate(row):
             if char not in allowed:
-                raise PuzzleError(
-                    f"Unsupported symbol {char!r} at row {y + 1}, column {x + 1}.")
+                raise PuzzleError(f"Unsupported symbol {char!r} at row {y + 1}, column {x + 1}.")
             pos = (y, x)
             if char == "O":
                 walls.add(pos)
@@ -186,8 +185,7 @@ def parse_puzzle(puzzle: Sequence[str]) -> State:
                 dedicated.setdefault(char.upper(), set()).add(pos)
 
     if len(robots) != 1:
-        raise PuzzleError(
-            f"Puzzle must contain exactly one robot; found {len(robots)}.")
+        raise PuzzleError(f"Puzzle must contain exactly one robot; found {len(robots)}.")
     if len({pos for _, pos in boxes}) != len(boxes):
         raise PuzzleError("Two boxes occupy the same cell.")
 
@@ -207,29 +205,29 @@ def parse_puzzle(puzzle: Sequence[str]) -> State:
 
     frozen_floor = frozenset(floor)
     goal_map = {"X": frozenset(generic_goals)}
-    goal_map.update({label: frozenset(goals)
-                    for label, goals in dedicated.items()})
+    goal_map.update({label: frozenset(goals) for label, goals in dedicated.items()})
     dead = {
         label: frozen_floor - _reverse_reachable(frozen_floor, goals)
         for label, goals in goal_map.items()
     }
     board = Board(
-        rows, frozen_floor, frozenset(walls), frozenset(generic_goals),
-        tuple(sorted((label, frozenset(goals))
-              for label, goals in dedicated.items())),
+        rows,
+        frozen_floor,
+        frozenset(walls),
+        frozenset(generic_goals),
+        tuple(sorted((label, frozenset(goals)) for label, goals in dedicated.items())),
         tuple(sorted(dead.items())),
     )
     return State(robots[0], tuple(sorted(boxes)), board)
 
 
 @lru_cache(maxsize=2_000)
-def _reverse_push_distances(rows: tuple[str, ...], goal: Position) -> tuple[tuple[Position, int], ...]:
+def _reverse_push_distances(
+    rows: tuple[str, ...], goal: Position
+) -> tuple[tuple[Position, int], ...]:
     """Empty-board push distances from every reachable box cell to one goal."""
     floor = frozenset(
-        (y, x)
-        for y, row in enumerate(rows)
-        for x, char in enumerate(row)
-        if char != "O"
+        (y, x) for y, row in enumerate(rows) for x, char in enumerate(row) if char != "O"
     )
     distances = {goal: 0}
     queue = deque([goal])
@@ -284,10 +282,7 @@ def _minimum_assignment_cost(costs: Sequence[Sequence[float]]) -> float:
     if any(len(row) != size for row in costs):
         return math.inf
     blocked = 1_000_000_000.0
-    finite_costs = [
-        [blocked if math.isinf(cost) else cost for cost in row]
-        for row in costs
-    ]
+    finite_costs = [[blocked if math.isinf(cost) else cost for cost in row] for row in costs]
     row_potential: list[float] = [0.0] * (size + 1)
     col_potential: list[float] = [0.0] * (size + 1)
     matching: list[int] = [0] * (size + 1)
@@ -352,8 +347,7 @@ def _heuristic_for_layout(
     for label, pos in boxes:
         by_label.setdefault(label, []).append(pos)
     return sum(
-        _matching_cost(tuple(sorted(positions)), tuple(
-            sorted(goals_by_label.get(label, ()))), rows)
+        _matching_cost(tuple(sorted(positions)), tuple(sorted(goals_by_label.get(label, ()))), rows)
         for label, positions in by_label.items()
     )
 
@@ -380,8 +374,10 @@ def is_deadlock(box_pos: Position, walls_or_board, goals=None, box_label: str = 
     return any(
         a in walls and b in walls
         for a, b in [
-            ((y - 1, x), (y, x - 1)), ((y - 1, x), (y, x + 1)),
-            ((y + 1, x), (y, x - 1)), ((y + 1, x), (y, x + 1)),
+            ((y - 1, x), (y, x - 1)),
+            ((y - 1, x), (y, x + 1)),
+            ((y + 1, x), (y, x - 1)),
+            ((y + 1, x), (y, x + 1)),
         ]
     )
 
@@ -402,14 +398,15 @@ def creates_2x2_deadlock(
     for origin_y in (box_y - 1, box_y):
         for origin_x in (box_x - 1, box_x):
             cells = (
-                (origin_y, origin_x), (origin_y + 1, origin_x),
-                (origin_y, origin_x + 1), (origin_y + 1, origin_x + 1),
+                (origin_y, origin_x),
+                (origin_y + 1, origin_x),
+                (origin_y, origin_x + 1),
+                (origin_y + 1, origin_x + 1),
             )
             if not all(cell in board.walls or cell in occupied for cell in cells):
                 continue
             if any(
-                cell in occupied and cell not in board.goals_for(occupied[cell])
-                for cell in cells
+                cell in occupied and cell not in board.goals_for(occupied[cell]) for cell in cells
             ):
                 return True
     return False
@@ -509,17 +506,17 @@ def creates_closed_diagonal_deadlock(
     for center_x in (box_x - 1, box_x + 1):
         for slope in (-1, 1):
             up_closed, up_boxes, up_sides, up_rows = scan_half(
-                (box_y, center_x), (-1, -slope),
+                (box_y, center_x),
+                (-1, -slope),
             )
             down_closed, down_boxes, down_sides, down_rows = scan_half(
-                (box_y + 1, center_x + slope), (1, slope),
+                (box_y + 1, center_x + slope),
+                (1, slope),
             )
             participants = up_boxes | down_boxes
             box_sides = list(reversed(up_sides)) + down_sides
             outward_facing = (
-                len(box_sides) == 2
-                and box_sides[0] == -slope
-                and box_sides[1] == slope
+                len(box_sides) == 2 and box_sides[0] == -slope and box_sides[1] == slope
             )
             if (
                 up_closed
@@ -571,20 +568,15 @@ def get_neighbors(
             box_destination = (destination[0] + dy, destination[1] + dx)
             if box_destination not in state.board.floor or box_destination in occupied:
                 continue
-            if prune_deadlocks and is_deadlock(
-                box_destination, state.board, box_label=label
-            ):
+            if prune_deadlocks and is_deadlock(box_destination, state.board, box_label=label):
                 continue
             moved = list(boxes)
             moved.remove((label, destination))
             moved.append((label, box_destination))
             boxes = tuple(sorted(moved))
-            if prune_deadlocks and creates_dynamic_deadlock(
-                boxes, state.board, box_destination
-            ):
+            if prune_deadlocks and creates_dynamic_deadlock(boxes, state.board, box_destination):
                 continue
-        neighbors.append(
-            (State(destination, boxes, state.board, state.cost + 1), move))
+        neighbors.append((State(destination, boxes, state.board, state.cost + 1), move))
     return neighbors
 
 
@@ -600,11 +592,7 @@ def _reachable_parents(state: State) -> ReachabilityParents:
         y, x = queue.popleft()
         for move, (dy, dx) in DIRECTIONS.items():
             next_pos = (y + dy, x + dx)
-            if (
-                next_pos in parents
-                or next_pos not in state.board.floor
-                or next_pos in occupied
-            ):
+            if next_pos in parents or next_pos not in state.board.floor or next_pos in occupied:
                 continue
             parents[next_pos] = ((y, x), move)
             queue.append(next_pos)
@@ -790,19 +778,25 @@ def _search(
     while has_items():
         if cancel_event is not None and cancel_event.is_set():
             return _search_result(
-                SearchStatus.CANCELLED, "user-stop", None, None,
-                time.perf_counter() - started, len(expanded),
+                SearchStatus.CANCELLED,
+                "user-stop",
+                None,
+                None,
+                time.perf_counter() - started,
+                len(expanded),
             )
         if max_seconds is not None and time.perf_counter() - started >= max_seconds:
             return _search_result(
-                SearchStatus.CUTOFF, "time-budget", None, None,
-                time.perf_counter() - started, len(expanded),
+                SearchStatus.CUTOFF,
+                "time-budget",
+                None,
+                None,
+                time.perf_counter() - started,
+                len(expanded),
             )
         current = pop()
         current_reachable = _reachable_parents(current) if push_macro else None
-        current_key = (
-            _push_signature(current, current_reachable) if push_macro else current
-        )
+        current_key = _push_signature(current, current_reachable) if push_macro else current
         if current_key in expanded:
             continue
         expanded.add(current_key)
@@ -810,7 +804,11 @@ def _search(
             elapsed = time.perf_counter() - started
             path = reconstruct_path(came_from, current, initial)
             return _validated_solution_result(
-                initial, path, elapsed, len(expanded), expected_final=current,
+                initial,
+                path,
+                elapsed,
+                len(expanded),
+                expected_final=current,
             )
 
         if push_macro:
@@ -835,8 +833,12 @@ def _search(
                 push(neighbor)
 
     return _search_result(
-        SearchStatus.PROVEN_UNSOLVABLE, "frontier-exhausted", None, None,
-        time.perf_counter() - started, len(expanded),
+        SearchStatus.PROVEN_UNSOLVABLE,
+        "frontier-exhausted",
+        None,
+        None,
+        time.perf_counter() - started,
+        len(expanded),
     )
 
 
@@ -917,13 +919,21 @@ def push_beam_search(
         for current in frontier:
             if cancel_event is not None and cancel_event.is_set():
                 return _search_result(
-                    SearchStatus.CANCELLED, "user-stop", None, None,
-                    time.perf_counter() - started, visited,
+                    SearchStatus.CANCELLED,
+                    "user-stop",
+                    None,
+                    None,
+                    time.perf_counter() - started,
+                    visited,
                 )
             if max_seconds is not None and time.perf_counter() - started >= max_seconds:
                 return _search_result(
-                    SearchStatus.CUTOFF, "time-budget", None, None,
-                    time.perf_counter() - started, visited,
+                    SearchStatus.CUTOFF,
+                    "time-budget",
+                    None,
+                    None,
+                    time.perf_counter() - started,
+                    visited,
                 )
             if current.is_goal():
                 return _validated_solution_result(
@@ -935,8 +945,12 @@ def push_beam_search(
                 )
             if visited >= max_visited:
                 return _search_result(
-                    SearchStatus.CUTOFF, "state-budget", None, None,
-                    time.perf_counter() - started, visited,
+                    SearchStatus.CUTOFF,
+                    "state-budget",
+                    None,
+                    None,
+                    time.perf_counter() - started,
+                    visited,
                 )
             visited += 1
             reachable = _reachable_parents(current)
@@ -951,22 +965,31 @@ def push_beam_search(
                 if neighbor.cost >= best_cost.get(signature, math.inf):
                     continue
                 order += 1
-                candidate = (estimate + 0.15 * neighbor.cost, order,
-                             neighbor, current, segment)
+                candidate = (
+                    estimate + 0.15 * neighbor.cost,
+                    order,
+                    neighbor,
+                    current,
+                    segment,
+                )
                 previous = candidates.get(signature)
                 if previous is None or candidate[:2] < previous[:2]:
                     candidates[signature] = candidate
 
         ranked = sorted(candidates.items(), key=lambda item: item[1][:2])[:beam_width]
         frontier = []
-        for signature, (_score, _order, neighbor, parent, segment) in ranked:
-            best_cost[signature] = neighbor.cost
+        for candidate_signature, (_score, _order, neighbor, parent, segment) in ranked:
+            best_cost[candidate_signature] = neighbor.cost
             came_from[neighbor] = (parent, segment)
             frontier.append(neighbor)
 
     return _search_result(
-        SearchStatus.CUTOFF, "bounded-frontier-exhausted", None, None,
-        time.perf_counter() - started, visited,
+        SearchStatus.CUTOFF,
+        "bounded-frontier-exhausted",
+        None,
+        None,
+        time.perf_counter() - started,
+        visited,
     )
 
 
@@ -990,12 +1013,20 @@ def ultimate_search(initial_state: State, cancel_event: Event | None = None):
         total_visited += result.visited
         if result.status in {SearchStatus.SOLVED, SearchStatus.CANCELLED}:
             return _search_result(
-                result.status, result.reason, result.path, result.final,
-                time.perf_counter() - started, total_visited,
+                result.status,
+                result.reason,
+                result.path,
+                result.final,
+                time.perf_counter() - started,
+                total_visited,
             )
     return _search_result(
-        SearchStatus.CUTOFF, "portfolio-budget", None, None,
-        time.perf_counter() - started, total_visited,
+        SearchStatus.CUTOFF,
+        "portfolio-budget",
+        None,
+        None,
+        time.perf_counter() - started,
+        total_visited,
     )
 
 
@@ -1027,29 +1058,51 @@ def _validated_solution_result(
             replay = apply_move(replay, move)
             if replay.robot_pos != reported_position:
                 return _search_result(
-                    SearchStatus.FAILED, "solution-position-mismatch", None, None,
-                    elapsed, visited,
+                    SearchStatus.FAILED,
+                    "solution-position-mismatch",
+                    None,
+                    None,
+                    elapsed,
+                    visited,
                 )
             validated.append((move, replay.robot_pos))
             if replay.is_goal():
                 if expected_final is not None and (
-                    replay.robot_pos != expected_final.robot_pos or
-                    replay.boxes != expected_final.boxes
+                    replay.robot_pos != expected_final.robot_pos
+                    or replay.boxes != expected_final.boxes
                 ):
                     return _search_result(
-                        SearchStatus.FAILED, "solution-final-state-mismatch",
-                        None, None, elapsed, visited,
+                        SearchStatus.FAILED,
+                        "solution-final-state-mismatch",
+                        None,
+                        None,
+                        elapsed,
+                        visited,
                     )
                 return _search_result(
-                    SearchStatus.SOLVED, "solution", validated,
-                    expected_final or replay, elapsed, visited,
+                    SearchStatus.SOLVED,
+                    "solution",
+                    validated,
+                    expected_final or replay,
+                    elapsed,
+                    visited,
                 )
     except ValueError:
         return _search_result(
-            SearchStatus.FAILED, "illegal-solution-path", None, None, elapsed, visited,
+            SearchStatus.FAILED,
+            "illegal-solution-path",
+            None,
+            None,
+            elapsed,
+            visited,
         )
     return _search_result(
-        SearchStatus.FAILED, "incomplete-solution-path", None, None, elapsed, visited,
+        SearchStatus.FAILED,
+        "incomplete-solution-path",
+        None,
+        None,
+        elapsed,
+        visited,
     )
 
 
@@ -1075,8 +1128,7 @@ def load_custom_puzzle(file_path: str | Path) -> list[str]:
         with Path(file_path).open(encoding="utf-8") as handle:
             rows = [line.rstrip("\r\n") for line in handle]
     except OSError as exc:
-        raise PuzzleError(
-            f"Could not read puzzle {file_path!s}: {exc}") from exc
+        raise PuzzleError(f"Could not read puzzle {file_path!s}: {exc}") from exc
     while rows and not rows[-1]:
         rows.pop()
     return rows
@@ -1107,34 +1159,38 @@ def solve(puzzle: Sequence[str], algorithm: str = "astar"):
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     source = parser.add_mutually_exclusive_group()
-    source.add_argument("--puzzle", choices=BUILTIN_PUZZLES,
-                        default="ultra-tiny")
-    source.add_argument("--file", type=Path,
-                        help="load a puzzle from a UTF-8 text file")
+    source.add_argument("--puzzle", choices=BUILTIN_PUZZLES, default="ultra-tiny")
+    source.add_argument("--file", type=Path, help="load a puzzle from a UTF-8 text file")
     parser.add_argument(
         "--algorithm",
         choices=(
-            "astar", "greedy", "bfs", "dfs", "push-astar",
-            "push-greedy", "push-beam", "weighted-push-astar",
-            "ultimate", "portfolio", "fast",
+            "astar",
+            "greedy",
+            "bfs",
+            "dfs",
+            "push-astar",
+            "push-greedy",
+            "push-beam",
+            "weighted-push-astar",
+            "ultimate",
+            "portfolio",
+            "fast",
         ),
         default="ultimate",
     )
     parser.add_argument("--show-steps", action="store_true")
-    parser.add_argument("--output", type=Path,
-                        help="write the move list to this file")
-    parser.add_argument("--log-level", choices=("DEBUG",
-                        "INFO", "WARNING", "ERROR"), default="INFO")
+    parser.add_argument("--output", type=Path, help="write the move list to this file")
+    parser.add_argument(
+        "--log-level", choices=("DEBUG", "INFO", "WARNING", "ERROR"), default="INFO"
+    )
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    logging.basicConfig(level=args.log_level,
-                        format="%(levelname)s: %(message)s")
+    logging.basicConfig(level=args.log_level, format="%(levelname)s: %(message)s")
     try:
-        puzzle = load_custom_puzzle(
-            args.file) if args.file else BUILTIN_PUZZLES[args.puzzle]
+        puzzle = load_custom_puzzle(args.file) if args.file else BUILTIN_PUZZLES[args.puzzle]
         initial = parse_puzzle(puzzle)
         result = solve(puzzle, args.algorithm)
         path, final, elapsed, visited = result
@@ -1151,8 +1207,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.output:
         try:
             args.output.write_text(
-                "\n".join(f"{i}: {move} {pos}" for i, (move, pos)
-                          in enumerate(path, 1)) + "\n",
+                "\n".join(f"{i}: {move} {pos}" for i, (move, pos) in enumerate(path, 1)) + "\n",
                 encoding="utf-8",
             )
         except OSError as exc:

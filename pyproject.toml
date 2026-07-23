@@ -1,0 +1,24 @@
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
+ignore = ["E731", "F405"]
+
+[tool.mypy]
+python_version = "3.10"
+files = ["Searches"]
+ignore_missing_imports = true
+allow_untyped_defs = true
+check_untyped_defs = true
+
+[tool.coverage.run]
+branch = true
+source = ["Searches"]
+omit = ["Searches/gui.py"]
+
+[tool.coverage.report]
+fail_under = 85
+show_missing = true
+skip_covered = true

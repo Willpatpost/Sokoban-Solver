@@ -1,5 +1,7 @@
 """Compatibility entry point for breadth-first search."""
+
 import sys
+
 try:
     from .Sokomind import *  # noqa: F401,F403
 except ImportError:

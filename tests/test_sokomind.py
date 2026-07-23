@@ -78,14 +78,16 @@ class SokomindTests(unittest.TestCase):
                 self.assertEqual(expected["robot"], ",".join(map(str, state.robot_pos)))
                 self.assertEqual(expected["boxes"], [list(item) for item in boxes])
                 self.assertEqual(expected["goals"], [list(item) for item in encoded_goals])
-                self.assertEqual(expected["legalMoves"], sorted(
-                    move for _next_state, move in get_neighbors(state)
-                ))
-                self.assertEqual(expected["mechanicalMoves"], sorted(
-                    move for _next_state, move in get_neighbors(
-                        state, prune_deadlocks=False
-                    )
-                ))
+                self.assertEqual(
+                    expected["legalMoves"],
+                    sorted(move for _next_state, move in get_neighbors(state)),
+                )
+                self.assertEqual(
+                    expected["mechanicalMoves"],
+                    sorted(
+                        move for _next_state, move in get_neighbors(state, prune_deadlocks=False)
+                    ),
+                )
                 self.assertEqual(expected["solved"], state.is_goal())
                 if "missingWall" in expected:
                     missing = tuple(map(int, expected["missingWall"].split(",")))
@@ -98,8 +100,9 @@ class SokomindTests(unittest.TestCase):
             "box-goal-count": "mismatch|box\\(es\\)",
         }
         for case in self.conformance["invalidCases"]:
-            with self.subTest(case=case["id"]), self.assertRaisesRegex(
-                PuzzleError, patterns[case["errorKind"]]
+            with (
+                self.subTest(case=case["id"]),
+                self.assertRaisesRegex(PuzzleError, patterns[case["errorKind"]]),
             ):
                 parse_puzzle(case["rows"])
 
@@ -167,20 +170,21 @@ class SokomindTests(unittest.TestCase):
         self.assertEqual(1, info.currsize)
 
     def test_reachability_reconstructs_paths_only_when_requested(self):
-        state = parse_puzzle([
-            "OOOOOOO",
-            "O  R  O",
-            "O     O",
-            "O  X SO",
-            "OOOOOOO",
-        ])
+        state = parse_puzzle(
+            [
+                "OOOOOOO",
+                "O  R  O",
+                "O     O",
+                "O  X SO",
+                "OOOOOOO",
+            ]
+        )
         parents = _reachable_parents(state)
         self.assertEqual(["Down", "Left", "Down"], _reconstruct_walk(parents, (3, 2)))
         self.assertIsNone(parents[state.robot_pos])
-        self.assertTrue(all(
-            record is None or isinstance(record, tuple)
-            for record in parents.values()
-        ))
+        self.assertTrue(
+            all(record is None or isinstance(record, tuple) for record in parents.values())
+        )
 
     def test_ragged_missing_cells_are_walls(self):
         state = parse_puzzle(["OOOOO", "OR  O", "OOOO", "OaA O", "OOOOO"])
@@ -200,85 +204,118 @@ class SokomindTests(unittest.TestCase):
     def test_rejects_lowercase_goals_for_reserved_symbols(self):
         for reserved_goal in "orsx":
             puzzle = ["OOOOO", f"OR {reserved_goal}O", "OOOOO"]
-            with self.subTest(goal=reserved_goal), self.assertRaisesRegex(
-                PuzzleError, "Unsupported symbol"
+            with (
+                self.subTest(goal=reserved_goal),
+                self.assertRaisesRegex(PuzzleError, "Unsupported symbol"),
             ):
                 parse_puzzle(puzzle)
 
     def test_static_dead_square_push_is_pruned(self):
-        state = parse_puzzle([
-            "OOOOOO",
-            "O    O",
-            "O RX O",
-            "O  S O",
-            "OOOOOO",
-        ])
+        state = parse_puzzle(
+            [
+                "OOOOOO",
+                "O    O",
+                "O RX O",
+                "O  S O",
+                "OOOOOO",
+            ]
+        )
         # Pushing right strands the box against the right wall, away from its goal.
         moves = [move for _, move in get_neighbors(state)]
         self.assertNotIn("Right", moves)
 
     def test_player_can_make_legal_push_into_dead_square(self):
-        state = parse_puzzle([
-            "OOOOOO",
-            "O    O",
-            "O RX O",
-            "O  S O",
-            "OOOOOO",
-        ])
+        state = parse_puzzle(
+            [
+                "OOOOOO",
+                "O    O",
+                "O RX O",
+                "O  S O",
+                "OOOOOO",
+            ]
+        )
         pushed = apply_move(state, "Right")
         self.assertIn(("X", (2, 4)), pushed.boxes)
 
     def test_static_2x2_box_deadlock_push_is_pruned(self):
-        state = parse_puzzle([
-            "OOOOOO",
-            "O    O",
-            "O  XXO",
-            "ORX OO",
-            "O SSSO",
-            "OOOOOO",
-        ])
+        state = parse_puzzle(
+            [
+                "OOOOOO",
+                "O    O",
+                "O  XXO",
+                "ORX OO",
+                "O SSSO",
+                "OOOOOO",
+            ]
+        )
         moves = [move for _, move in get_neighbors(state)]
         self.assertNotIn("Right", moves)
 
     def test_frozen_components_reject_only_immovable_unfinished_groups(self):
         frozen = parse_puzzle(["OOOOOOOOO", "ORXXXSSSO", "OOOOOOOOO"])
-        self.assertTrue(creates_frozen_component_deadlock(
-            frozen.boxes, frozen.board, (1, 3),
-        ))
+        self.assertTrue(
+            creates_frozen_component_deadlock(
+                frozen.boxes,
+                frozen.board,
+                (1, 3),
+            )
+        )
 
-        movable = parse_puzzle([
-            "OOOOOOOOO", "O       O", "O XXXSSSO", "OR      O", "OOOOOOOOO",
-        ])
-        self.assertFalse(creates_frozen_component_deadlock(
-            movable.boxes, movable.board, (2, 3),
-        ))
+        movable = parse_puzzle(
+            [
+                "OOOOOOOOO",
+                "O       O",
+                "O XXXSSSO",
+                "OR      O",
+                "OOOOOOOOO",
+            ]
+        )
+        self.assertFalse(
+            creates_frozen_component_deadlock(
+                movable.boxes,
+                movable.board,
+                (2, 3),
+            )
+        )
 
     def test_closed_diagonal_requires_wall_ends_multiple_boxes_and_no_goal_escape(self):
-        state = parse_puzzle([
-            "OOOOOOOO",
-            "O O    O",
-            "O X O  O",
-            "O  O X O",
-            "O    O O",
-            "O RSS  O",
-            "OOOOOOOO",
-        ])
-        self.assertTrue(creates_closed_diagonal_deadlock(
-            state.boxes, state.board, (2, 2),
-        ))
+        state = parse_puzzle(
+            [
+                "OOOOOOOO",
+                "O O    O",
+                "O X O  O",
+                "O  O X O",
+                "O    O O",
+                "O RSS  O",
+                "OOOOOOOO",
+            ]
+        )
+        self.assertTrue(
+            creates_closed_diagonal_deadlock(
+                state.boxes,
+                state.board,
+                (2, 2),
+            )
+        )
 
-        escaped = parse_puzzle([
-            "OOOOOOOO",
-            "O O    O",
-            "O XS O O",
-            "O  O X O",
-            "O    O O",
-            "O R S  O",
-            "OOOOOOOO",
-        ])
-        self.assertFalse(creates_closed_diagonal_deadlock(
-            escaped.boxes, escaped.board, (2, 2),
-        ))
+        escaped = parse_puzzle(
+            [
+                "OOOOOOOO",
+                "O O    O",
+                "O XS O O",
+                "O  O X O",
+                "O    O O",
+                "O R S  O",
+                "OOOOOOOO",
+            ]
+        )
+        self.assertFalse(
+            creates_closed_diagonal_deadlock(
+                escaped.boxes,
+                escaped.board,
+                (2, 2),
+            )
+        )
 
     def test_frozen_component_pruning_preserves_exhaustively_solvable_tiny_pushes(self):
         interior = [(y, x) for y in (1, 2) for x in (1, 2, 3)]
@@ -286,8 +323,7 @@ class SokomindTests(unittest.TestCase):
         checked_pushes = 0
         checked_adjacent_groups = 0
         for goal_indexes in combinations(range(len(interior)), 2):
-            remaining = [index for index in range(len(interior))
-                         if index not in goal_indexes]
+            remaining = [index for index in range(len(interior)) if index not in goal_indexes]
             for box_indexes in combinations(remaining, 2):
                 robot_indexes = [index for index in remaining if index not in box_indexes]
                 for robot_index in robot_indexes:
@@ -310,9 +346,13 @@ class SokomindTests(unittest.TestCase):
                     queue = deque([initial])
                     while queue:
                         parent = queue.popleft()
-                        children = [child for child, _move in get_neighbors(
-                            parent, prune_deadlocks=False,
-                        )]
+                        children = [
+                            child
+                            for child, _move in get_neighbors(
+                                parent,
+                                prune_deadlocks=False,
+                            )
+                        ]
                         edges[parent] = children
                         for child in children:
                             reverse.setdefault(child, set()).add(parent)
@@ -336,26 +376,30 @@ class SokomindTests(unittest.TestCase):
 
                     for parent in solvable:
                         retained = {
-                            (child.robot_pos, child.boxes)
-                            for child, _move in get_neighbors(parent)
+                            (child.robot_pos, child.boxes) for child, _move in get_neighbors(parent)
                         }
                         for child in edges.get(parent, []):
                             if child not in solvable or child.boxes == parent.boxes:
                                 continue
                             moved = next(
-                                pos for label, pos in child.boxes
+                                pos
+                                for label, pos in child.boxes
                                 if (label, pos) not in parent.boxes
                             )
                             checked_pushes += 1
                             if any(
-                                pos != moved and
-                                abs(pos[0] - moved[0]) + abs(pos[1] - moved[1]) == 1
+                                pos != moved
+                                and abs(pos[0] - moved[0]) + abs(pos[1] - moved[1]) == 1
                                 for _label, pos in child.boxes
                             ):
                                 checked_adjacent_groups += 1
-                            self.assertFalse(creates_frozen_component_deadlock(
-                                child.boxes, child.board, moved,
-                            ))
+                            self.assertFalse(
+                                creates_frozen_component_deadlock(
+                                    child.boxes,
+                                    child.board,
+                                    moved,
+                                )
+                            )
                             self.assertIn((child.robot_pos, child.boxes), retained)
 
         self.assertGreater(solvable_layouts, 0)
@@ -393,13 +437,15 @@ class SokomindTests(unittest.TestCase):
         self.assertEqual(SearchStatus.CANCELLED, result.status)
 
     def test_push_neighbors_include_walk_to_push(self):
-        state = parse_puzzle([
-            "OOOOOOO",
-            "O  R  O",
-            "O     O",
-            "O  X SO",
-            "OOOOOOO",
-        ])
+        state = parse_puzzle(
+            [
+                "OOOOOOO",
+                "O  R  O",
+                "O     O",
+                "O  X SO",
+                "OOOOOOO",
+            ]
+        )
         segments = [segment for _next_state, segment in get_push_neighbors(state)]
         self.assertIn(["Down", "Left", "Down", "Right"], segments)
 
@@ -423,11 +469,20 @@ class SokomindTests(unittest.TestCase):
         self.assertEqual(["Right", "Right", "Right"], [move for move, _ in path])
         self.assertLessEqual(visited, 2)
 
-        branching = parse_puzzle([
-            "OOOOOOO", "O SS  O", "O     O", "O XXR O", "O     O", "OOOOOOO",
-        ])
+        branching = parse_puzzle(
+            [
+                "OOOOOOO",
+                "O SS  O",
+                "O     O",
+                "O XXR O",
+                "O     O",
+                "OOOOOOO",
+            ]
+        )
         path, final, _elapsed, visited = push_beam_search(
-            branching, beam_width=4, max_visited=1,
+            branching,
+            beam_width=4,
+            max_visited=1,
         )
         self.assertIsNone(path)
         self.assertIsNone(final)
@@ -456,34 +511,42 @@ class SokomindTests(unittest.TestCase):
     def test_solution_validation_rejects_corrupt_public_result(self):
         initial = parse_puzzle(["OOOOO", "O R O", "O X O", "O S O", "OOOOO"])
         from Searches.Sokomind import _validated_solution_result
+
         result = _validated_solution_result(
-            initial, [("Left", (1, 1))], 0.0, 0,
+            initial,
+            [("Left", (1, 1))],
+            0.0,
+            0,
         )
         self.assertEqual(SearchStatus.FAILED, result.status)
         self.assertEqual("incomplete-solution-path", result.reason)
 
     def test_push_astar_returns_replayable_step_path(self):
-        state = parse_puzzle([
-            "OOOOOOO",
-            "O  R  O",
-            "O     O",
-            "O  X SO",
-            "OOOOOOO",
-        ])
+        state = parse_puzzle(
+            [
+                "OOOOOOO",
+                "O  R  O",
+                "O     O",
+                "O  X SO",
+                "OOOOOOO",
+            ]
+        )
         path, final, _, _ = push_a_star_search(state)
         self.assertEqual(["Down", "Left", "Down", "Right", "Right"], [move for move, _ in path])
         self.assertTrue(final.is_goal())
 
     def test_push_astar_optimizes_pushes_when_robot_positions_are_canonicalized(self):
-        state = parse_puzzle([
-            "OOOOOOO",
-            "O     O",
-            "O  X  O",
-            "O   R O",
-            "OO    O",
-            "O OO SO",
-            "OOOOOOO",
-        ])
+        state = parse_puzzle(
+            [
+                "OOOOOOO",
+                "O     O",
+                "O  X  O",
+                "O   R O",
+                "OO    O",
+                "O OO SO",
+                "OOOOOOO",
+            ]
+        )
         path, final, _, _ = push_a_star_search(state)
 
         replay = state
@@ -501,11 +564,16 @@ class SokomindTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "missing" / "solution.txt"
             with self.assertLogs(level="ERROR") as logs, redirect_stdout(io.StringIO()):
-                result = main([
-                    "--puzzle", "ultra-tiny",
-                    "--algorithm", "astar",
-                    "--output", str(output),
-                ])
+                result = main(
+                    [
+                        "--puzzle",
+                        "ultra-tiny",
+                        "--algorithm",
+                        "astar",
+                        "--output",
+                        str(output),
+                    ]
+                )
         self.assertEqual(2, result)
         self.assertIn("Could not write solution", logs.output[0])
         self.assertFalse(output.exists())

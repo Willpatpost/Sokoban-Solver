@@ -46,10 +46,22 @@ test("isolated benchmark cases report heap and process lifecycle telemetry", asy
   assert.ok(result.performance.heapUsedBytes > 0);
   assert.ok(result.performance.heapPeakBytes >= result.performance.heapUsedBytes);
   assert.ok(result.performance.heapSamples >= 2);
+  assert.deepEqual(result.performance.memory, {
+    supported: true,
+    source: "injected-runtime",
+    usedBytes: result.performance.heapUsedBytes,
+    peakBytes: result.performance.heapPeakBytes,
+    deltaBytes: result.performance.heapDeltaBytes,
+    samples: result.performance.heapSamples,
+    gcControlled: false,
+  });
   assert.ok(result.runnerLifecycle.workerLoadMs >= 0);
   assert.ok(result.runnerLifecycle.searchMs >= 0);
   assert.ok(result.runnerLifecycle.totalMs >= result.runnerLifecycle.searchMs);
   assert.equal(typeof result.runnerLifecycle.explicitGcAvailable, "boolean");
+  assert.equal(result.runnerLifecycle.memory.supported, true);
+  assert.equal(result.runnerLifecycle.memory.source, "node-process");
+  assert.equal(result.runnerLifecycle.memory.gcControlled, false);
   assert.ok(result.processLifecycle.spawnToFirstOutputMs >= 0);
   assert.ok(result.processLifecycle.spawnToResultMs >= 0);
   assert.ok(result.processLifecycle.shutdownMs >= 0);

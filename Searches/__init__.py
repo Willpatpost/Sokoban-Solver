@@ -1,2 +1,1 @@
 """Sokomind solver package."""
-

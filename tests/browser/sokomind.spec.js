@@ -1,9 +1,11 @@
 "use strict";
 
 const {test, expect} = require("@playwright/test");
+const {build: EXPECTED_BUILD} = require("../../docs/build.json");
 
 async function enterGame(page) {
   await page.goto("/");
+  await expect(page.locator("#solver-build")).toHaveText(EXPECTED_BUILD);
   await page.getByRole("button", {name: /Play Sokomind/}).click();
   await expect(page.locator("#home-screen")).toHaveClass(/hidden/);
 }
@@ -142,7 +144,7 @@ function installScriptedWorker(page, mode) {
 
 test("page load, selection, keyboard completion, stored bounds, and build display", async ({page}) => {
   await enterGame(page);
-  await expect(page.locator("#solver-build")).toHaveText("2026-07-23.26");
+  await expect(page.locator("#solver-build")).toHaveText(EXPECTED_BUILD);
   await page.getByRole("button", {name: /Tiny/}).nth(1).click();
   await expect(page.locator("#level-title")).toHaveText("Tiny");
   await page.getByRole("button", {name: /Ultra Tiny/}).click();
@@ -218,4 +220,7 @@ test("Ultimate consumes an evacuation checkpoint and exercises compatible and in
   ).length)).toBeGreaterThanOrEqual(2);
   await expect(page.locator("#search-log-text")).toHaveValue(/Candidate landmark bridges queued/);
   await expect(page.locator("#search-log-text")).toHaveValue(/reason=target-incompatible/);
+  await expect(page.locator("#search-log-text")).toHaveValue(/worker released/);
+  await expect(page.locator("#search-log-text")).toHaveValue(/firstMessageMs=/);
+  await expect(page.locator("#search-log-text")).toHaveValue(/terminateCallMs=/);
 });
