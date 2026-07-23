@@ -32,6 +32,14 @@ function stateFromRows(rows) {
   return {rows, robot, boxes};
 }
 
+function rotateClockwiseRows(rows) {
+  const width = Math.max(...rows.map(row => row.length));
+  const grid = rows.map(row => [...row.padEnd(width, "O")]);
+  return Array.from({length: width}, (_, y) =>
+    Array.from({length: rows.length}, (_, x) =>
+      grid[rows.length - 1 - x][y]).join(""));
+}
+
 test("local proof limits match reviewed deterministic cost gates", () => {
   const worker = loadWorker();
   const {schemaVersion, reviewed, build, ...limits} = localReasoningBaseline;
@@ -1622,6 +1630,61 @@ test("plan macro beam solves by chaining bounded single-box objectives", () => {
   assert.equal(result.strategy, "Plan Macro Beam");
   assert.equal(result.performance.supportDependencyCalls, 0);
   assert.equal(result.performance.commitmentCalls, 0);
+  assert.equal(result.performance.roomPatternBuilds, 0);
+});
+
+test("plan canonicalization removes reflection and rotation ordering bias", () => {
+  const worker = loadWorker();
+  const variants = [
+    ["base", HUGE_ROWS],
+    ["mirrored", mirrorRows(HUGE_ROWS)],
+    ["rotated", rotateRows(HUGE_ROWS)],
+    ["clockwise", rotateClockwiseRows(HUGE_ROWS)],
+    ["counter-clockwise", rotateClockwiseRows(rotateRows(HUGE_ROWS))],
+  ];
+  const canonical = variants.map(([name, rows]) => {
+    const transformed = worker.canonicalPlanTransform(stateFromRows(rows));
+    return {
+      name,
+      orientation: transformed.transform.id,
+      rows: transformed.rows,
+      robot: transformed.robot,
+      boxes: transformed.boxes,
+    };
+  });
+
+  assert.equal(canonical[0].orientation, "identity");
+  assert.equal(canonical[1].orientation, "mirror-horizontal");
+  assert.equal(canonical[2].orientation, "rotate-180");
+  for (const transformed of canonical.slice(1)) {
+    assert.equal(JSON.stringify(transformed.rows), JSON.stringify(canonical[0].rows));
+    assert.equal(JSON.stringify(transformed.robot), JSON.stringify(canonical[0].robot));
+    assert.equal(JSON.stringify(transformed.boxes), JSON.stringify(canonical[0].boxes));
+  }
+
+  const simple = [
+    "OOOOOOOO",
+    "O R    O",
+    "O XX   O",
+    "O   SS O",
+    "OOOOOOOO",
+  ];
+  for (const rows of [
+    mirrorRows(simple),
+    rotateRows(simple),
+    rotateClockwiseRows(simple),
+  ]) {
+    const result = worker.search({
+      algorithm: "plan-macro-beam",
+      state: stateFromRows(rows),
+      maxVisited: 1000,
+      planBeamWidth: 40,
+      maxPlanSegments: 40,
+    });
+    assert.equal(result.status, "solved");
+    assert.ok(result.path.length > 0);
+    assert.notEqual(result.planOrientation, "identity");
+  }
 });
 
 test("bounded beams return replayable checkpoints for worker handoff", () => {

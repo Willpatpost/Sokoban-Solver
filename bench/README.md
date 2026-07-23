@@ -66,6 +66,9 @@ peaks, transposition evictions, and isolated-process heap peaks. Deterministic
 counters use narrow reviewed tolerances. Heap has a separate wider tolerance,
 and elapsed time is reported but never gated. The Huge suite runs only in the
 scheduled or manually dispatched `Huge Performance` workflow.
+That suite runs the released structural planner against base, mirrored, and
+rotated Huge under a 256 MB V8 heap ceiling. Every returned solution is replayed
+against its own orientation.
 
 The procedural families are separate from the built-in levels. Their private
 seeds never enter solver payloads, and an independent exact push-state search in

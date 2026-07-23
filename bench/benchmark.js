@@ -1,9 +1,24 @@
 const {spawn} = require("node:child_process");
 const path = require("node:path");
 const {performance} = require("node:perf_hooks");
-const {GENERATED_CASES} = require("./generated-cases.js");
+const {LEVELS} = require("../docs/levels.js");
+const {GENERATED_CASES, mirrorRows, rotateRows} = require("./generated-cases.js");
 
 const CASE_RUNNER = path.join(__dirname, "case-runner.js");
+const HUGE_STRUCTURAL_PAYLOAD = {
+  maxDepth: 460,
+  maxVisited: 6000,
+  transpositionLimit: 60000,
+  planBeamWidth: 40,
+  planBoxBranches: 6,
+  maxPlanSegments: 160,
+  planSlack: 240,
+  sequenceMacroLimit: 24,
+  sequenceMacroExplored: 48,
+  sequenceMacroResults: 4,
+  targetedMacroExplored: 96,
+  progressIntervalMs: 5000,
+};
 
 const SUITES = {
   smoke: [
@@ -97,21 +112,28 @@ const SUITES = {
   validation: GENERATED_CASES,
   huge: [
     {
-      name: "huge long guided beam",
+      name: "huge structural plan",
       level: "huge",
-      algorithm: "push-beam",
+      algorithm: "plan-macro-beam",
       timeoutMs: 300000,
       weight: 64,
-      payload: {
-        maxVisited: 50000,
-        beamWidth: 500,
-        maxDepth: 300,
-        progressInterval: 5000,
-        sequenceMacros: true,
-        checkpointLimit: 24,
-        continuationVisited: 25000,
-        endgameVisited: 25000,
-      },
+      payload: HUGE_STRUCTURAL_PAYLOAD,
+    },
+    {
+      name: "huge mirrored structural plan",
+      rows: mirrorRows(LEVELS.huge),
+      algorithm: "plan-macro-beam",
+      timeoutMs: 300000,
+      weight: 64,
+      payload: HUGE_STRUCTURAL_PAYLOAD,
+    },
+    {
+      name: "huge rotated structural plan",
+      rows: rotateRows(LEVELS.huge),
+      algorithm: "plan-macro-beam",
+      timeoutMs: 300000,
+      weight: 64,
+      payload: HUGE_STRUCTURAL_PAYLOAD,
     },
   ],
 };

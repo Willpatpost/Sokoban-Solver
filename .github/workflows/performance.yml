@@ -19,6 +19,8 @@ jobs:
           node-version: "22"
       - name: Run Huge performance suite
         run: node bench/benchmark.js --suite huge --jsonl > huge-performance.jsonl
+        env:
+          NODE_OPTIONS: --max-old-space-size=256
       - uses: actions/upload-artifact@v4
         if: always()
         with:

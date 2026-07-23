@@ -298,16 +298,23 @@ diversity prevents every worker from starting at a nearly identical packing layo
 Its first worker constructs board-derived assignment, doorway-flow, staging,
 packing-order, and goal-access objectives, then chains bounded single-box macros
 while retaining both heuristic and structural elites.
+Rotations and reflections enter this bounded lane in one canonical orientation,
+with replayable paths mapped back to the displayed board. Discovery uses the
+inexpensive assignment bound; proof searches retain the stronger interaction
+tables.
 On capable browsers, cost-aware guided beams search from the best distinct
 checkpoints while one persistent exact worker continues the admissible contour.
 Packing checkpoints retire active bridge work and extreme puzzles run only the two
 best local exact handoffs, allowing the anytime workers to begin earlier. No stored
 solution path or puzzle-specific coordinate is used.
 
-Build `2026-07-23.32` replay-validated a fresh Huge solution with the released
-limits in 138.2 seconds after 3,752 structural states and 19,689 generated
-candidates on the development machine. This is a regression datum, not a universal
-time guarantee; exact search remains the completeness fallback.
+Build `2026-07-23.33` replay-validated a fresh Huge solution with the released
+limits in 85.4 seconds after 3,752 structural states and 19,689 generated
+candidates on the development machine. The same solve passed a 256 MB V8 heap
+ceiling in 86.8 seconds. Base, mirrored, and rotated Huge variants all produced
+replay-valid 330-push solutions in the transformation campaign. These are
+regression data, not universal time guarantees; exact search remains the
+completeness fallback.
 
 Guided beam and bounded DFS workers publish progress on both state-count and
 elapsed-time intervals, so expensive states cannot make a productive worker appear

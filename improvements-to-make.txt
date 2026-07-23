@@ -686,7 +686,7 @@ Once dependencies and relevance are explicit, safely remove equivalent work and
 preserve strategically different work.
 
 22. Introduce true feature-space search queues.
-    Current status: Strong browser foundation in build 2026-07-23.32.
+    Current status: Strong browser foundation in build 2026-07-23.33.
     Existing foundation:
     - Bounded browser beams reserve joint feature cells for room, gate, evacuation,
       commitment, doorway, dependency, local guidance, and mobility diversity.
@@ -698,9 +698,13 @@ preserve strategically different work.
       goal, or block access needed by an unsolved goal. These are bounded
       discovery-lane decisions, not hard pruning in the complete exact kernel.
     - With the shipped Ultimate limits, a clean Huge run solved and replay
-      validated in 138.2 seconds after 3,752 structural states and 19,689
-      generated candidates (1,306 player moves). No saved route, level name, or
-      board coordinate was available to the search.
+      validated in 85.4 seconds after 3,752 structural states and 19,689
+      generated candidates (330 pushes and 1,306 player moves). The same solve
+      passed under a 256 MB V8 heap ceiling in 86.8 seconds. No saved route,
+      level name, or board coordinate was available to the search.
+    - Discovery assignment scoring no longer constructs proof-only room,
+      pair-conflict, or capacity tables. On Huge, heuristic time fell from about
+      54 seconds to 2.8 seconds without changing the path or search counters.
    Finish gate:
    - Preserve productive elites across depths/restarts, adapt cell boundaries and
      quotas from measured yield, and track individual strategic identities.
@@ -716,7 +720,16 @@ preserve strategically different work.
      and exhaustively validate small multi-box cases.
 
 25. Add symmetry reduction.
-    Current status: Backlog.
+    Current status: Partial in build 2026-07-23.33.
+   Existing foundation:
+   - The structural discovery lane canonicalizes all eight rotations/reflections,
+     including rectangular boards, and restores solution moves and checkpoint
+     states to the supplied orientation.
+   - Base, horizontally mirrored, and 180-degree rotated Huge each solved with
+     identical deterministic work: 3,752 states, 19,689 generated candidates,
+     and a replay-valid 330-push solution. Fast tests cover 90-degree rectangular
+     path restoration, and the weekly suite runs all three Huge orientations
+     under a 256 MB heap ceiling.
    Finish gate:
    - Detect valid wall/goal/label symmetries and interchangeable boxes.
    - Canonicalize states without merging typed semantics or robot-access classes.
@@ -878,7 +891,7 @@ Sprint 16 supplies deterministic resource gates.
      reporting zero useful strategic samples. Worker replacement must use
      marginal solution evidence, not the fact that a profile continues emitting
      progress events.
-   Resolution in build 2026-07-23.32:
+   Resolution in builds 2026-07-23.32 through 2026-07-23.33:
    - Ultimate now schedules one structural plan lane before the redundant guided
      opening work. The released limits solved Huge in 138.2 seconds with 3,752
      visited structural states, versus the .31 run's unsolved 30-minute campaign
@@ -887,6 +900,13 @@ Sprint 16 supplies deterministic resource gates.
      first-solution signals for this board. Doorway phase completion, packing
      feasibility, and continued goal access now provide the decisive discovery
      evidence; exact contours remain the proof fallback.
+   - Build .33 removed orientation-sensitive bounded-search variance. Before
+     canonicalization, mirrored Huge exhausted after 3,063 states and rotated
+     Huge exhausted after 5,792 states; afterward both solved with the canonical
+     3,752-state trace and their paths replayed in the original orientation.
+   - Separating discovery assignment distance from proof-only interaction tables
+     reduced the canonical solve from 130.8 to 85.4 seconds while retaining the
+     same 330-push solution. A 256 MB heap-capped run completed in 86.8 seconds.
 
 44. Prevent superseded opening work from delaying handoffs and exact search.
     Current status: Strong, bounded in build 2026-07-22.23.

@@ -750,7 +750,9 @@ function hydratePreparedBoard(data, seed, metrics) {
     goalPushTables: seed.goalPushTables,
     dense: seed.dense,
     heuristicMemo: new Map(),
+    discoveryHeuristicMemo: new Map(),
     assignmentMemo: new WeakMap(),
+    discoveryAssignmentMemo: new WeakMap(),
     assignmentParentMemo: new WeakMap(),
     playerPushDistances: new Map(seed.playerPushDistances || []),
     deadlockMemo: new Map(),
@@ -853,7 +855,8 @@ function parse(data) {
   metrics.parseMs += now() - parseStarted;
   return {
     rows: data.rows, floor, walls, goals, goalsByLabel, pushDistances, goalPressure,
-    topology, heuristicMemo: new Map(), assignmentMemo: new WeakMap(),
+    topology, heuristicMemo: new Map(), discoveryHeuristicMemo: new Map(),
+    assignmentMemo: new WeakMap(), discoveryAssignmentMemo: new WeakMap(),
     assignmentParentMemo: new WeakMap(), playerPushDistances: new Map(),
     deadlockMemo: new Map(), commitmentMemo: new Map(), stateCommitmentMemo: new Map(),
     patternDeadlockMemo: new Map(),
@@ -1236,8 +1239,10 @@ function boxesByLabelWithIndices(boxes) {
   return byLabel;
 }
 
-function cacheFullAssignmentDetail(boxes, board) {
-  if (board.assignmentMemo.has(boxes)) return board.assignmentMemo.get(boxes);
+function cacheAssignmentDetail(boxes, board, includeInteractions) {
+  const memo = includeInteractions
+    ? board.assignmentMemo : board.discoveryAssignmentMemo;
+  if (memo.has(boxes)) return memo.get(boxes);
   const labels = new Map();
   const assignedTargets = new Map();
   let total = 0;
@@ -1254,36 +1259,50 @@ function cacheFullAssignmentDetail(boxes, board) {
     }
     total += assignment.cost;
   }
-  total += interactionHeuristicBoost(
-    boxes,
-    board,
-    new Map([...labels].map(([label, detail]) => [label, detail.assignment.cost])),
-  );
+  if (includeInteractions) {
+    total += interactionHeuristicBoost(
+      boxes,
+      board,
+      new Map([...labels].map(([label, detail]) => [label, detail.assignment.cost])),
+    );
+  }
   const detail = {labels, assignedTargets, cost: total};
-  board.assignmentMemo.set(boxes, detail);
+  memo.set(boxes, detail);
   return detail;
 }
 
-function heuristic(boxes, board) {
+function cacheFullAssignmentDetail(boxes, board) {
+  return cacheAssignmentDetail(boxes, board, true);
+}
+
+function cacheDiscoveryAssignmentDetail(boxes, board) {
+  return cacheAssignmentDetail(boxes, board, false);
+}
+
+function heuristicWithInteractions(boxes, board, includeInteractions) {
   const metrics = board.metrics;
   metrics.heuristicCalls++;
   const signature = boxSignature(boxes, board);
-  if (board.heuristicMemo.has(signature)) {
+  const heuristicMemo = includeInteractions
+    ? board.heuristicMemo : board.discoveryHeuristicMemo;
+  const assignmentDetail = includeInteractions
+    ? cacheFullAssignmentDetail : cacheDiscoveryAssignmentDetail;
+  if (heuristicMemo.has(signature)) {
     metrics.heuristicCacheHits++;
-    return board.heuristicMemo.get(signature);
+    return heuristicMemo.get(signature);
   }
   const started = now();
   const parentHint = board.assignmentParentMemo.get(boxes);
   if (!parentHint) {
-    const detail = cacheFullAssignmentDetail(boxes, board);
+    const detail = assignmentDetail(boxes, board);
     metrics.heuristicMs += now() - started;
-    return memoizeBounded(board.heuristicMemo, signature, detail.cost);
+    return memoizeBounded(heuristicMemo, signature, detail.cost);
   }
   const grouped = boxesByLabelWithIndices(boxes);
   const changedEntries = [...grouped.values()].find(entries =>
     entries.some(entry => entry.index === parentHint.changedIndex));
   const parentDetail = changedEntries?.length >= INCREMENTAL_ASSIGNMENT_CROSSOVER
-    ? cacheFullAssignmentDetail(parentHint.parentBoxes, board)
+    ? assignmentDetail(parentHint.parentBoxes, board)
     : null;
   let total = 0;
   const assignmentCosts = new Map();
@@ -1317,9 +1336,19 @@ function heuristic(boxes, board) {
     total += assignment.cost;
     assignmentCosts.set(label, assignment.cost);
   }
-  total += interactionHeuristicBoost(boxes, board, assignmentCosts);
+  if (includeInteractions) {
+    total += interactionHeuristicBoost(boxes, board, assignmentCosts);
+  }
   metrics.heuristicMs += now() - started;
-  return memoizeBounded(board.heuristicMemo, signature, total);
+  return memoizeBounded(heuristicMemo, signature, total);
+}
+
+function heuristic(boxes, board) {
+  return heuristicWithInteractions(boxes, board, true);
+}
+
+function discoveryHeuristic(boxes, board) {
+  return heuristicWithInteractions(boxes, board, false);
 }
 
 function topologyPenalty(boxes, board) {
@@ -1392,8 +1421,10 @@ function roomEvacuationPenalty(boxes, board) {
   return penalty;
 }
 
-function assignmentDoorwayPlan(boxes, board) {
-  const assignment = cacheFullAssignmentDetail(boxes, board);
+function assignmentDoorwayPlan(boxes, board, discovery = false) {
+  const assignment = discovery
+    ? cacheDiscoveryAssignmentDetail(boxes, board)
+    : cacheFullAssignmentDetail(boxes, board);
   if (assignment.doorwayPlan) return assignment.doorwayPlan;
   const occupied = new Set(boxes.map(([y, x]) => pkey(y, x)));
   const tasks = [];

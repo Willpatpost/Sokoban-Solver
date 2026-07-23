@@ -53,6 +53,194 @@ function serializeSearchCheckpoint(candidate, board) {
   };
 }
 
+const PLAN_BOARD_TRANSFORMS = [
+  {
+    id: "identity",
+    dimensions: (height, width) => [height, width],
+    forward: (_height, _width, y, x) => [y, x],
+    inverse: (_height, _width, y, x) => [y, x],
+  },
+  {
+    id: "mirror-horizontal",
+    dimensions: (height, width) => [height, width],
+    forward: (_height, width, y, x) => [y, width - 1 - x],
+    inverse: (_height, width, y, x) => [y, width - 1 - x],
+  },
+  {
+    id: "mirror-vertical",
+    dimensions: (height, width) => [height, width],
+    forward: (height, _width, y, x) => [height - 1 - y, x],
+    inverse: (height, _width, y, x) => [height - 1 - y, x],
+  },
+  {
+    id: "rotate-180",
+    dimensions: (height, width) => [height, width],
+    forward: (height, width, y, x) => [height - 1 - y, width - 1 - x],
+    inverse: (height, width, y, x) => [height - 1 - y, width - 1 - x],
+  },
+  {
+    id: "rotate-90",
+    dimensions: (height, width) => [width, height],
+    forward: (height, _width, y, x) => [x, height - 1 - y],
+    inverse: (height, _width, y, x) => [height - 1 - x, y],
+  },
+  {
+    id: "rotate-270",
+    dimensions: (height, width) => [width, height],
+    forward: (_height, width, y, x) => [width - 1 - x, y],
+    inverse: (_height, width, y, x) => [x, width - 1 - y],
+  },
+  {
+    id: "transpose",
+    dimensions: (height, width) => [width, height],
+    forward: (_height, _width, y, x) => [x, y],
+    inverse: (_height, _width, y, x) => [x, y],
+  },
+  {
+    id: "transpose-anti",
+    dimensions: (height, width) => [width, height],
+    forward: (height, width, y, x) => [width - 1 - x, height - 1 - y],
+    inverse: (height, width, y, x) => [height - 1 - x, width - 1 - y],
+  },
+];
+
+function transformPlanMove(move, transform, height, width, inverse = false) {
+  const [dy, dx] = DIRS[move];
+  const map = inverse ? transform.inverse : transform.forward;
+  const [originY, originX] = map(height, width, 1, 1);
+  const [nextY, nextX] = map(height, width, 1 + dy, 1 + dx);
+  const transformedDy = nextY - originY, transformedDx = nextX - originX;
+  return DIRECTION_ENTRIES.find(([, delta]) =>
+    delta[0] === transformedDy && delta[1] === transformedDx)?.[0];
+}
+
+function canonicalPlanTransform(state) {
+  const height = state.rows.length;
+  const width = Math.max(...state.rows.map(row => row.length));
+  const grid = state.rows.map(row => [...row.padEnd(width, "O")]);
+  let staticRobot = null;
+  grid.forEach((row, y) => row.forEach((cell, x) => {
+    if (cell === "R") staticRobot = [y, x];
+  }));
+  staticRobot ||= state.robot;
+  const candidates = PLAN_BOARD_TRANSFORMS.map(transform => {
+    const [nextHeight, nextWidth] = transform.dimensions(height, width);
+    const nextGrid = Array.from(
+      {length: nextHeight},
+      () => Array(nextWidth).fill("O"),
+    );
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const [nextY, nextX] = transform.forward(height, width, y, x);
+        nextGrid[nextY][nextX] = grid[y][x];
+      }
+    }
+    const rows = nextGrid.map(row => row.join(""));
+    const robot = transform.forward(height, width, state.robot[0], state.robot[1]);
+    const boxes = state.boxes.map(([position, label]) => {
+      const [y, x] = position.split(",").map(Number);
+      const [nextY, nextX] = transform.forward(height, width, y, x);
+      return {position: pkey(nextY, nextX), label, y: nextY, x: nextX};
+    })
+      .sort((left, right) =>
+        left.y - right.y || left.x - right.x || left.label.localeCompare(right.label))
+      .map(({position, label}) => [position, label]);
+    const anchor = transform.forward(height, width, staticRobot[0], staticRobot[1]);
+    const stateKey = `${rows.join("\n")}|${pkey(robot[0], robot[1])}|` +
+      boxes.map(([position, label]) => `${position},${label}`).sort().join(";");
+    return {
+      transform,
+      height,
+      width,
+      rows,
+      robot,
+      boxes,
+      anchorY: anchor[0],
+      anchorHeight: nextHeight,
+      stateKey,
+    };
+  });
+  candidates.sort((left, right) => {
+    const leftDepth = left.anchorY * Math.max(1, right.anchorHeight - 1);
+    const rightDepth = right.anchorY * Math.max(1, left.anchorHeight - 1);
+    return rightDepth - leftDepth ||
+      left.stateKey.localeCompare(right.stateKey) ||
+      left.transform.id.localeCompare(right.transform.id);
+  });
+  return candidates[0];
+}
+
+function restorePlanCheckpoint(checkpoint, canonical, originalRows) {
+  if (!checkpoint) return checkpoint;
+  const restorePosition = position => {
+    const [y, x] = position.split(",").map(Number);
+    return pkey(...canonical.transform.inverse(
+      canonical.height,
+      canonical.width,
+      y,
+      x,
+    ));
+  };
+  return {
+    ...checkpoint,
+    state: checkpoint.state && {
+      ...checkpoint.state,
+      rows: originalRows,
+      robot: canonical.transform.inverse(
+        canonical.height,
+        canonical.width,
+        checkpoint.state.robot[0],
+        checkpoint.state.robot[1],
+      ),
+      boxes: checkpoint.state.boxes.map(([position, label]) => [
+        restorePosition(position),
+        label,
+      ]),
+    },
+    path: checkpoint.path?.map(move => transformPlanMove(
+      move,
+      canonical.transform,
+      canonical.height,
+      canonical.width,
+      true,
+    )),
+  };
+}
+
+function canonicalPlanMacroBeamSearch(payload) {
+  if (payload.planCanonicalOrientation === false) return planMacroBeamSearch(payload);
+  const canonical = canonicalPlanTransform(payload.state);
+  if (canonical.transform.id === "identity") {
+    return {...planMacroBeamSearch(payload), planOrientation: "identity"};
+  }
+  const result = planMacroBeamSearch({
+    ...payload,
+    preparedBoard: undefined,
+    trackedSignatures: undefined,
+    state: {
+      ...payload.state,
+      rows: canonical.rows,
+      robot: canonical.robot,
+      boxes: canonical.boxes,
+    },
+  });
+  const restorePath = path => path?.map(move => transformPlanMove(
+    move,
+    canonical.transform,
+    canonical.height,
+    canonical.width,
+    true,
+  ));
+  return {
+    ...result,
+    path: restorePath(result.path),
+    checkpoint: restorePlanCheckpoint(result.checkpoint, canonical, payload.state.rows),
+    checkpoints: result.checkpoints?.map(checkpoint =>
+      restorePlanCheckpoint(checkpoint, canonical, payload.state.rows)),
+    planOrientation: canonical.transform.id,
+  };
+}
+
 function takeDiverse(candidates, count, selected, scoreKey, groupKey = "pushClass") {
   const groups = new Map();
   for (const candidate of candidates) {
@@ -272,7 +460,7 @@ function planMacroBeamSearch(payload) {
   const seenExact = new BoundedDepthMap(payload.transpositionLimit || 60000);
   let beam = [initial], visited = 0, generated = 0, peakFrontier = 1;
   let trackedThrough = payload.trackedSignatures ? 0 : undefined;
-  let bestEstimate = heuristic(initial.boxes, board), bestPushes = 0;
+  let bestEstimate = discoveryHeuristic(initial.boxes, board), bestPushes = 0;
   const planBound = Math.min(
     Number.isFinite(payload.upperBound) ? payload.upperBound : Infinity,
     bestEstimate + (payload.planSlack ?? 192),
@@ -280,7 +468,7 @@ function planMacroBeamSearch(payload) {
   let bestCheckpoint = null, bestCheckpointRank = Infinity;
   let bestHeuristicCheckpoint = null;
   const rootDoorwayTasks = payload.planDoorwaySchedule === false
-    ? [] : assignmentDoorwayPlan(initial.boxes, board).tasks;
+    ? [] : assignmentDoorwayPlan(initial.boxes, board, true).tasks;
   const hasEvacuationPlan = rootDoorwayTasks.some(task => task.direction === "export");
   const evaluateDoorwaySchedule = boxes =>
     doorwayScheduleState(boxes, board, rootDoorwayTasks);
@@ -328,7 +516,7 @@ function planMacroBeamSearch(payload) {
     return blockers;
   };
   const scoreCandidate = child => {
-    child.estimate = heuristic(child.boxes, board);
+    child.estimate = discoveryHeuristic(child.boxes, board);
     child.goalAccess = goalAccessAnalysis(child.boxes, board);
     child.evacuation = roomEvacuationPenalty(child.boxes, board);
     child.doorwaySchedule = evaluateDoorwaySchedule(child.boxes);
@@ -372,7 +560,7 @@ function planMacroBeamSearch(payload) {
       const accessBlockers = importAccessBlockers(current, reachable);
       const firstPushes = pushNeighbors(current, board, reachable);
       const rankedFirst = firstPushes.map(next => {
-        const estimate = heuristic(next.boxes, board);
+        const estimate = discoveryHeuristic(next.boxes, board);
         const accessDelta = goalAccessDelta(current.goalAccess, current, next, board);
         const evacuation = roomEvacuationPenalty(next.boxes, board);
         const schedule = evaluateDoorwaySchedule(next.boxes);
@@ -420,7 +608,10 @@ function planMacroBeamSearch(payload) {
           current.doorwaySchedule.stagingBlockers > 0 &&
           doorwayRoom.exteriorStaging.has(currentPosition);
         const assignedTarget = doorwayTask?.target ||
-          cacheFullAssignmentDetail(current.boxes, board).assignedTargets.get(movedIndex);
+          cacheDiscoveryAssignmentDetail(
+            current.boxes,
+            board,
+          ).assignedTargets.get(movedIndex);
         const objective = clearingStaging
           ? {direction: "clear", roomIndex: doorwayTask.roomIndex}
           : doorwayTask && !crossingComplete
@@ -2078,7 +2269,7 @@ function searchCore(payload) {
     return {path: null, visited: 0, analysis: analyzePuzzleForSearch(payload.state)};
   }
   if (payload.algorithm === "bridge-astar") return bridgeAStarSearch(payload);
-  if (payload.algorithm === "plan-macro-beam") return planMacroBeamSearch(payload);
+  if (payload.algorithm === "plan-macro-beam") return canonicalPlanMacroBeamSearch(payload);
   if (payload.algorithm === "push-beam") return beamSearch(payload);
   if (payload.algorithm === "push-beam-restarts") return beamRestartSearch(payload);
   if (payload.algorithm === "bounded-push-dfs") return boundedPushDepthFirstSearch(payload);

@@ -38,6 +38,10 @@ conflicts, packing dependencies, and access that unsolved goals still require.
 Bounded single-box macros pursue those objectives while preserving separate
 heuristic and structural elites. These constraints guide an incomplete discovery
 lane; they do not prune the complete exact fallback.
+The lane canonicalizes all rotations and reflections before bounded search and
+maps paths and checkpoints back to the supplied orientation. Its discovery score
+uses assignment distance without constructing proof-only interaction tables;
+complete searches retain the stronger admissible interaction bound.
 
 Browser files remain classic scripts so the dependency-free GitHub Pages build and
 Web Workers need no bundler. The HTML load order supplies pure modules and policies
